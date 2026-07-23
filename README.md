@@ -33,9 +33,23 @@ LunchTime은 회사에서 반복되는 점심 모집과 배달 주문 협의를 
 
 ### Product Definition
 
-- [00. 초기 아이디어](docs/product-definition/00_initial_idea.md)
+| 순서 | 문서 | 역할 |
+|------|------|------|
+| 00 | [초기 아이디어](docs/product-definition/00_initial_idea.md) | 문제의식과 지금까지의 논의 기록 |
+| 01 | [제품 방향](docs/product-definition/01_product_direction.md) | 목적, 대상, 가치, 제약과 비목표 |
+| 02 | [현재 점심 주문 여정](docs/product-definition/02_current_lunch_journey.md) | Slack과 배민을 이용하는 현재 방식 |
+| 03 | [문제와 유지할 강점](docs/product-definition/03_pains_and_existing_strengths.md) | 개선할 문제와 잃지 말아야 할 장점 |
+| 04 | [가설과 검증 계획](docs/product-definition/04_assumptions_and_validation.md) | 제품·기술 가설과 검증 순서 |
+| 05 | [어떻게 하면 질문](docs/product-definition/05_how_might_we.md) | 구체적인 해결 질문과 가설적 답 |
+| 06 | [기능 후보 목록](docs/product-definition/06_feature_inventory.md) | 우선순위 없는 F-ID 작업 원장 |
+| 07 | [경험 및 정보 구조](docs/product-definition/07_experience_structure.md) | 기능을 macOS Surface에 배치한 제안 |
+| 08 | [목표 사용자 여정](docs/product-definition/08_target_lunch_journey.md) | LunchTime에서 기대하는 전체 흐름 |
+| 09 | [범위 제안](docs/product-definition/09_scope_proposal.md) | MVP 후보, 검증 게이트와 후속 범위 |
+| 10 | [결정 및 미결정 목록](docs/product-definition/10_decision_backlog.md) | 확정 방향, 제안과 PRD 전 결정 과제 |
 
 제품 정의 과정은 [da-in/vibe-sprint](https://github.com/da-in/vibe-sprint)의 단계형 사고 모델에서 인사이트를 얻되, 정해진 STEP·순서·산출물에 종속되지 않고 LunchTime에 필요한 방식으로 진행합니다.
+
+현재 Product Definition 문서는 제공된 아이디어와 피드백을 구조화한 초안입니다. 사용자 조사나 기술 검증을 마친 정본이 아니며, 검증과 제품 책임자 리뷰를 거쳐 채택된 내용만 PRD와 Policies로 옮깁니다.
 
 ### PRD
 
@@ -43,4 +57,4 @@ LunchTime은 회사에서 반복되는 점심 모집과 배달 주문 협의를 
 
 ### Policies
 
-아직 확정된 Policy 문서가 없습니다.
+아직 확정된 Policies 문서가 없습니다.
