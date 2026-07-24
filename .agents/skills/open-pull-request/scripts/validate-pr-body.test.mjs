@@ -16,6 +16,8 @@ const template = await readFile(
   resolve(repositoryRoot, ".github/PULL_REQUEST_TEMPLATE.md"),
   "utf8",
 );
+const independentReviewRow =
+  "| 독립 리뷰 | 원본 요구사항·raw diff·테스트 결과를 분리된 reviewer가 확인 | 통과 | reviewer 1명, P0~P2 발견 없음, review pass 1 |";
 
 function readyBody() {
   return `<!-- lunchtime-pr:v1 -->
@@ -57,6 +59,7 @@ Closes #17
 <!-- pr:verification:start -->
 | 대상 | 명령·확인 | 결과 | 증거 |
 | --- | --- | --- | --- |
+${independentReviewRow}
 | 상태 전이 | \`swift test --filter MenuAckTests\` | 통과 | 8개 테스트 통과 |
 | 문서 계약 | \`node validate-product-docs.mjs\` | 통과 | 5개 검사 통과 |
 <!-- pr:verification:end -->
@@ -247,6 +250,104 @@ test("Ready의 placeholder와 미실행 검증을 거부한다", () => {
   );
 });
 
+test("검증 표는 대상 cell이 정확히 독립 리뷰인 행을 하나 요구한다", () => {
+  const missing = readyBody().replace(`${independentReviewRow}\n`, "");
+  assert.match(
+    joined(validate({ body: missing })),
+    /대상 cell이 정확히 `독립 리뷰`.*현재 0개/,
+  );
+
+  const duplicate = readyBody().replace(
+    independentReviewRow,
+    `${independentReviewRow}\n${independentReviewRow}`,
+  );
+  assert.match(
+    joined(validate({ body: duplicate })),
+    /대상 cell이 정확히 `독립 리뷰`.*현재 2개/,
+  );
+
+  const renamed = readyBody().replace("| 독립 리뷰 |", "| 독립 리뷰 결과 |");
+  assert.match(
+    joined(validate({ body: renamed })),
+    /대상 cell이 정확히 `독립 리뷰`.*현재 0개/,
+  );
+
+  const standalone = missing.replace(
+    "<!-- pr:verification:end -->",
+    [
+      "검증 표 밖의 메모",
+      "",
+      independentReviewRow,
+      "<!-- pr:verification:end -->",
+    ].join("\n"),
+  );
+  assert.match(
+    joined(validate({ body: standalone })),
+    /대상 cell이 정확히 `독립 리뷰`.*현재 0개/,
+  );
+});
+
+test("독립 리뷰 target row도 검증 표의 네 열을 모두 가져야 한다", () => {
+  const malformed = readyBody().replace(
+    independentReviewRow,
+    "| 독립 리뷰 | 통과 | 증거 |",
+  );
+  assert.match(
+    joined(validate({ body: malformed })),
+    /`독립 리뷰` 행은 네 열/,
+  );
+});
+
+test("Draft의 독립 리뷰는 실패와 미실행을 사실대로 남길 수 있다", () => {
+  for (const result of ["실패", "미실행"]) {
+    const evidence =
+      result === "실패"
+        ? "P1 계약 누락 발견, 수정 대기"
+        : "reviewer 배정 대기, review pass 0";
+    const body = readyBody().replace(
+      independentReviewRow,
+      independentReviewRow.replace(
+        "| 통과 | reviewer 1명, P0~P2 발견 없음, review pass 1 |",
+        `| ${result} | ${evidence} |`,
+      ),
+    );
+    assert.deepEqual(validate({ body, draft: true }), []);
+  }
+});
+
+test("Ready의 독립 리뷰 실패와 미실행은 구체적으로 거부한다", () => {
+  for (const result of ["실패", "미실행"]) {
+    const evidence =
+      result === "실패"
+        ? "P1 계약 누락 발견, 수정 대기"
+        : "reviewer 배정 대기, review pass 0";
+    const body = readyBody().replace(
+      independentReviewRow,
+      independentReviewRow.replace(
+        "| 통과 | reviewer 1명, P0~P2 발견 없음, review pass 1 |",
+        `| ${result} | ${evidence} |`,
+      ),
+    );
+    assert.match(
+      joined(validate({ body })),
+      /Ready PR의 `독립 리뷰` 결과는 `통과`여야 합니다/,
+    );
+  }
+});
+
+test("Ready의 독립 리뷰에는 non-placeholder 증거가 필요하다", () => {
+  for (const evidence of ["<독립 리뷰 증거>", "TODO", ""]) {
+    const body = readyBody().replace(
+      "reviewer 1명, P0~P2 발견 없음, review pass 1",
+      evidence,
+    );
+    assert.match(
+      joined(validate({ body })),
+      /Ready PR의 `독립 리뷰`에는 placeholder가 아닌 증거가 필요합니다/,
+    );
+  }
+});
+
 test("Draft는 실패·미실행과 결정 필요를 허용한다", () => {
   const body = readyBody()
     .replace("| 통과 | 8개", "| 미실행 | 담당자가 실행 예정")
@@ -372,8 +473,8 @@ test("구두점 뒤 로컬 절대 경로를 차단하고 URL 경로는 허용한
 
 test("검증 표 구분선 누락을 거부한다", () => {
   const invalid = readyBody().replace(
-    "| --- | --- | --- | --- |\n| 상태 전이",
-    "| 상태 전이",
+    "| --- | --- | --- | --- |\n",
+    "",
   );
   assert.match(joined(validate({ body: invalid })), /Markdown 구분선/);
 });

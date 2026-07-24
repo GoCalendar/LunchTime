@@ -20,6 +20,22 @@ const architectureFiles = [
   "docs/architecture/05_storage_and_security.md",
 ];
 const architectureDetailFiles = architectureFiles.slice(1);
+const developmentFiles = [
+  "docs/development/01_harness_guide.md",
+  "docs/development/02_testing_standard.md",
+];
+const skillDirectories = [
+  ".agents/skills/update-product-docs",
+  ".agents/skills/run-github-work-item",
+  ".agents/skills/commit-work-item",
+  ".agents/skills/open-pull-request",
+];
+const harnessFields = [
+  "목적",
+  "핵심 입력",
+  "완료 조건",
+  "대표 실패·중단 조건",
+];
 
 function write(root, relativePath, content) {
   const target = path.join(root, relativePath);
@@ -52,6 +68,8 @@ function createFixture() {
       "docs/policies/README.md",
       "docs/policies/100_future.md",
       "[시스템 아키텍처](docs/architecture/README.md)",
+      "[개발 하네스 가이드](docs/development/01_harness_guide.md)",
+      "[테스트 표준](docs/development/02_testing_standard.md)",
       "AGENTS.md",
       "CONTRIBUTING.md",
       ".agents/skills/update-product-docs/SKILL.md",
@@ -130,6 +148,81 @@ function createFixture() {
         "- 입력이 결과로 이동한다.",
         "- 결과는 화면에 표시된다.",
         "- 구현 기술은 아직 확정하지 않는다.",
+        "",
+      ].join("\n"),
+    );
+  }
+
+  const developmentOverview = [
+    "## 한눈에 보기",
+    "",
+    "```mermaid",
+    "flowchart LR",
+    "    A[입력] --> B[검증] --> C[완료]",
+    "```",
+    "",
+    "- 입력 정본을 먼저 확인한다.",
+    "- 검증 증거를 실행 결과로 남긴다.",
+    "- 실패 조건에서는 다음 단계로 진행하지 않는다.",
+    "",
+  ];
+  write(
+    root,
+    developmentFiles[0],
+    [
+      "# 개발 하네스 가이드",
+      "",
+      ...developmentOverview,
+      ...Array.from({ length: 11 }, (_, index) => {
+        const number = String(index + 1).padStart(2, "0");
+        return [
+          `## STEP ${number}. 작업 단계`,
+          "",
+          `- **목적:** ${number}단계의 목적을 확인한다.`,
+          `- **핵심 입력:** ${number}단계 입력 계약`,
+          `- **완료 조건:** ${number}단계 증거가 남는다.`,
+          `- **대표 실패·중단 조건:** ${number}단계 입력이나 증거가 없다.`,
+          "",
+        ].join("\n");
+      }),
+    ].join("\n"),
+  );
+  write(
+    root,
+    developmentFiles[1],
+    [
+      "# 테스트 표준",
+      "",
+      ...developmentOverview,
+      "## 테스트 계층",
+      "",
+      "요구사항에 맞는 가장 낮은 비용의 테스트 계층을 선택한다.",
+      "",
+    ].join("\n"),
+  );
+
+  for (const [index, skillDirectory] of skillDirectories.entries()) {
+    write(
+      root,
+      `${skillDirectory}/SKILL.md`,
+      [
+        "---",
+        `name: ${path.basename(skillDirectory)}`,
+        `description: 검증 fixture에서 사용하는 Skill ${index + 1}`,
+        "---",
+        "",
+        `# 검증용 Skill ${index + 1}`,
+        "",
+      ].join("\n"),
+    );
+    write(
+      root,
+      `${skillDirectory}/agents/openai.yaml`,
+      [
+        "interface:",
+        `  display_name: "검증 Skill ${index + 1}"`,
+        '  short_description: "검증 fixture에서 사용하는 Skill"',
+        '  default_prompt: "이 Skill의 검증 계약을 실행해 주세요."',
         "",
       ].join("\n"),
     );
@@ -282,6 +375,547 @@ test("세 자리 문서·계약 ID를 허용한다", () => {
     const result = runValidator(root);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /제품 문서 검증 통과/);
+  });
+});
+
+test("필수 개발 표준 문서 두 개와 지정된 디렉터리 구성을 요구한다", () => {
+  for (const file of developmentFiles) {
+    withFixture((root) => {
+      fs.unlinkSync(path.join(root, file));
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.ok(
+        result.stderr.includes(`필수 개발 표준 문서가 없습니다: ${file}`),
+        result.stderr,
+      );
+    });
+  }
+
+  withFixture((root) => {
+    write(root, "docs/development/README.md", "# 불필요한 인덱스\n");
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /지정된 두 문서만.*docs\/development\/README\.md/,
+    );
+  });
+});
+
+test("개발 표준 문서는 첫 H2의 첫 자료로 Mermaid flowchart를 요구한다", () => {
+  const cases = [
+    {
+      replace: "## 한눈에 보기",
+      replacement: "## 문서 목적",
+      message: /개발 표준 문서의 첫 H2는 '## 한눈에 보기'/,
+    },
+    {
+      replace: "## 한눈에 보기\n\n```mermaid",
+      replacement:
+        "## 한눈에 보기\n\n설명부터 시작한다.\n\n```mermaid",
+      message: /첫 자료는 Mermaid fenced block/,
+    },
+    {
+      replace: [
+        "flowchart LR",
+        "    A[입력] --> B[검증] --> C[완료]",
+      ].join("\n"),
+      replacement: [
+        "sequenceDiagram",
+        "    A->>B: 검증 요청",
+      ].join("\n"),
+      message: /유효한 방향을 가진 flowchart/,
+    },
+    {
+      replace: "flowchart LR",
+      replacement: "flowchart LRjunk",
+      message: /유효한 방향을 가진 flowchart/,
+    },
+    {
+      replace: "flowchart LR",
+      replacement: "flowchart ZZ",
+      message: /유효한 방향을 가진 flowchart/,
+    },
+  ];
+
+  for (const { replace, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[1]);
+      fs.writeFileSync(
+        target,
+        fs.readFileSync(target, "utf8").replace(replace, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("개발 표준 Mermaid 직후에는 direct bullet 요약 3~5개가 필요하다", () => {
+  const originalBullets = [
+    "- 입력 정본을 먼저 확인한다.",
+    "- 검증 증거를 실행 결과로 남긴다.",
+    "- 실패 조건에서는 다음 단계로 진행하지 않는다.",
+  ].join("\n");
+  const replacements = [
+    [
+      "- 입력 정본을 먼저 확인한다.",
+      "- 검증 증거를 실행 결과로 남긴다.",
+    ].join("\n"),
+    Array.from({ length: 6 }, (_, index) => `- 개발 요약 ${index + 1}`).join(
+      "\n",
+    ),
+  ];
+
+  for (const replacement of replacements) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[1]);
+      fs.writeFileSync(
+        target,
+        fs
+          .readFileSync(target, "utf8")
+          .replace(originalBullets, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /top-level bullet 요약이 3~5개/);
+    });
+  }
+});
+
+test("하네스 가이드는 STEP 01~11을 각각 한 번 정확한 순서로 요구한다", () => {
+  const cases = [
+    {
+      mutate: (content) =>
+        content.replace("## STEP 05. 작업 단계", "## 다섯 번째 작업 단계"),
+      messages: [/'## STEP 05\.' 섹션이 정확히 하나.*현재 0개/],
+    },
+    {
+      mutate: (content) =>
+        content.replace("## STEP 05. 작업 단계", "## STEP 04. 중복 단계"),
+      messages: [
+        /'## STEP 04\.' 섹션이 정확히 하나.*현재 2개/,
+        /'## STEP 05\.' 섹션이 정확히 하나.*현재 0개/,
+      ],
+    },
+    {
+      mutate: (content) =>
+        content
+          .replace("## STEP 04. 작업 단계", "## STEP XX. 임시 단계")
+          .replace("## STEP 05. 작업 단계", "## STEP 04. 작업 단계")
+          .replace("## STEP XX. 임시 단계", "## STEP 05. 작업 단계"),
+      messages: [/정확한 순서와 형식/],
+    },
+  ];
+
+  for (const { mutate, messages } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      fs.writeFileSync(target, mutate(fs.readFileSync(target, "utf8")));
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      for (const message of messages) {
+        assert.match(result.stderr, message);
+      }
+    });
+  }
+});
+
+test("각 STEP은 네 direct 필드를 하나씩 비어 있지 않게 요구한다", () => {
+  const field = "- **목적:** 01단계의 목적을 확인한다.";
+  const cases = [
+    {
+      replacement: "목적은 01단계를 확인하는 것이다.",
+      message: /현재 0개/,
+    },
+    {
+      replacement: `${field}\n${field}`,
+      message: /현재 2개/,
+    },
+    {
+      replacement: "- **목적:**",
+      message: /현재 1개/,
+    },
+    {
+      replacement: [
+        "- 상위 항목",
+        "  - **목적:** nested item은 direct item이 아니다.",
+      ].join("\n"),
+      message: /현재 0개/,
+    },
+  ];
+
+  for (const { replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      fs.writeFileSync(
+        target,
+        fs.readFileSync(target, "utf8").replace(field, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /STEP 01.*'- \*\*목적:\*\*'/);
+      assert.match(result.stderr, message);
+    });
+  }
+
+  for (const fieldName of harnessFields) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      const content = fs
+        .readFileSync(target, "utf8")
+        .replace(
+          new RegExp(
+            `^- \\*\\*${fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\*\\*.*$`,
+            "m",
+          ),
+          `- ${fieldName}: 형식이 다르다.`,
+        );
+      fs.writeFileSync(target, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes(`- **${fieldName}:**`), result.stderr);
+    });
+  }
+});
+
+test("STEP에는 지정된 네 direct item 외의 자료를 둘 수 없다", () => {
+  const field = "- **목적:** 01단계의 목적을 확인한다.";
+  for (const replacement of [
+    `${field}\n- **주의:** 별도 direct item`,
+    `${field}\n\n별도 visible prose`,
+    `${field}\n\n\`\`\`text\n별도 fenced 자료\n\`\`\``,
+  ]) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      fs.writeFileSync(
+        target,
+        fs.readFileSync(target, "utf8").replace(field, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /지정된 네 direct item 외의 visible material/);
+    });
+  }
+});
+
+test("parent list가 없는 1~3칸 들여쓰기 STEP bullet은 top-level로 허용한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, developmentFiles[0]);
+    const content = fs.readFileSync(target, "utf8").replace(
+      /(## STEP 01\.[^\n]*\n)([\s\S]*?)(?=## STEP 02\.)/,
+      (_, heading, section) =>
+        `${heading}${section.replace(/^- /gm, "  - ")}`,
+    );
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("README는 두 개발 표준 문서를 visible link로 연결해야 한다", () => {
+  for (const file of developmentFiles) {
+    withFixture((root) => {
+      const target = path.join(root, "README.md");
+      const content = fs
+        .readFileSync(target, "utf8")
+        .replace(
+          new RegExp(`\\[[^\\]]+\\]\\(${file.replaceAll("/", "\\/")}\\)`),
+          file,
+        );
+      fs.writeFileSync(target, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.ok(
+        result.stderr.includes(
+          `README.md: ${file}를 가리키는 visible Markdown link가 필요합니다.`,
+        ),
+        result.stderr,
+      );
+    });
+  }
+});
+
+test("네 운영 Skill의 SKILL.md와 완전한 interface YAML을 요구한다", () => {
+  for (const skillDirectory of skillDirectories) {
+    for (const file of ["SKILL.md", "agents/openai.yaml"]) {
+      withFixture((root) => {
+        fs.unlinkSync(path.join(root, `${skillDirectory}/${file}`));
+        const result = runValidator(root);
+        assert.equal(result.status, 1);
+        assert.ok(
+          result.stderr.includes(
+            `필수 Skill 파일이 없습니다: ${skillDirectory}/${file}`,
+          ),
+          result.stderr,
+        );
+      });
+    }
+  }
+
+  const invalidInterfaces = [
+    {
+      replace: '  display_name: "검증 Skill 1"',
+      replacement: "display_name: 잘못된 top-level 값",
+      message: /interface\.display_name/,
+    },
+    {
+      replace: '  short_description: "검증 fixture에서 사용하는 Skill"',
+      replacement: '  short_description: ""',
+      message: /interface\.short_description/,
+    },
+    {
+      replace:
+        '  default_prompt: "이 Skill의 검증 계약을 실행해 주세요."',
+      replacement: "  default_prompt:",
+      message: /interface\.default_prompt/,
+    },
+    {
+      replace: [
+        '  display_name: "검증 Skill 1"',
+        '  short_description: "검증 fixture에서 사용하는 Skill"',
+        '  default_prompt: "이 Skill의 검증 계약을 실행해 주세요."',
+      ].join("\n"),
+      replacement: [
+        "  nested:",
+        '    display_name: "잘못된 nested 이름"',
+        '    short_description: "잘못된 nested 설명"',
+        '    default_prompt: "잘못된 nested prompt"',
+      ].join("\n"),
+      message: /interface\.display_name/,
+    },
+    {
+      replace: '  display_name: "검증 Skill 1"',
+      replacement: "  display_name: foo: bar",
+      message: /YAML block-mapping/,
+    },
+    {
+      replace: '  display_name: "검증 Skill 1"',
+      replacement: "  display_name: - x",
+      message: /YAML block-mapping/,
+    },
+    {
+      replace: '  display_name: "검증 Skill 1"',
+      replacement: "  display_name: *missing",
+      message: /YAML block-mapping/,
+    },
+    {
+      replace: '  display_name: "검증 Skill 1"',
+      replacement: "  display_name: 검증 Skill 1",
+      message: /interface\.display_name/,
+    },
+    {
+      replace: '  display_name: "검증 Skill 1"',
+      replacement: "  display_name: false",
+      message: /interface\.display_name/,
+    },
+    {
+      replace: '  display_name: "검증 Skill 1"',
+      replacement: "  display_name: 123",
+      message: /interface\.display_name/,
+    },
+    {
+      replace: '  display_name: "검증 Skill 1"',
+      replacement: [
+        '  display_name: "검증 Skill 1"',
+        "    orphan: 잘못된 scalar child",
+      ].join("\n"),
+      message: /YAML block-mapping/,
+    },
+    {
+      replace:
+        '  default_prompt: "이 Skill의 검증 계약을 실행해 주세요."',
+      replacement: [
+        '  default_prompt: "이 Skill의 검증 계약을 실행해 주세요."',
+        "not yaml [",
+      ].join("\n"),
+      message: /YAML block-mapping/,
+    },
+    {
+      replace: "interface:",
+      replacement: "interface:\n---",
+      message: /단일-document YAML block-mapping/,
+    },
+  ];
+
+  for (const { replace, replacement, message } of invalidInterfaces) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        `${skillDirectories[0]}/agents/openai.yaml`,
+      );
+      fs.writeFileSync(
+        target,
+        fs.readFileSync(target, "utf8").replace(replace, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("Skill frontmatter는 파일 맨 앞의 단일 block과 정확한 name·description을 요구한다", () => {
+  const skillDirectory = skillDirectories[0];
+  const expectedName = path.basename(skillDirectory);
+  const body = "\n# 검증용 Skill\n";
+  const frontmatter = (lines) => ["---", ...lines, "---", body].join("\n");
+  const cases = [
+    {
+      content: "# frontmatter 없는 Skill\n",
+      message: /파일 맨 앞.*YAML frontmatter/,
+    },
+    {
+      content: ["---", `name: ${expectedName}`, "description: 설명", body].join(
+        "\n",
+      ),
+      message: /frontmatter 종료 구분자/,
+    },
+    {
+      content: [
+        frontmatter([`name: ${expectedName}`, "description: 첫 설명"]),
+        frontmatter([`name: ${expectedName}`, "description: 중복 설명"]),
+      ].join("\n"),
+      message: /frontmatter block은.*정확히 하나/,
+    },
+    {
+      content: frontmatter(["description: 설명"]),
+      message: /frontmatter 'name'.*정확히 하나/,
+    },
+    {
+      content: frontmatter([
+        `name: ${expectedName}`,
+        `name: ${expectedName}`,
+        "description: 설명",
+      ]),
+      message: /frontmatter 'name'.*정확히 하나/,
+    },
+    {
+      content: frontmatter(["name:", "description: 설명"]),
+      message: /frontmatter 'name'.*정확히 하나/,
+    },
+    {
+      content: frontmatter(["name: 다른-skill", "description: 설명"]),
+      message: /Skill 디렉터리 이름.*일치/,
+    },
+    {
+      content: frontmatter([`name: ${expectedName}`]),
+      message: /frontmatter 'description'.*정확히 하나/,
+    },
+    {
+      content: frontmatter([
+        `name: ${expectedName}`,
+        "description: 설명",
+        "description: 중복 설명",
+      ]),
+      message: /frontmatter 'description'.*정확히 하나/,
+    },
+    {
+      content: frontmatter([`name: ${expectedName}`, 'description: ""']),
+      message: /frontmatter 'description'.*정확히 하나/,
+    },
+  ];
+
+  for (const { content, message } of cases) {
+    withFixture((root) => {
+      write(root, `${skillDirectory}/SKILL.md`, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("Skill frontmatter는 malformed·non-string scalar 우회를 거부한다", () => {
+  const skillDirectory = skillDirectories[0];
+  const expectedName = path.basename(skillDirectory);
+  const cases = [
+    "false",
+    "123",
+    "null",
+    "[설명]",
+    "{ value: 설명 }",
+    "*description",
+    "|",
+    '"끝나지 않은 설명',
+    "설명: nested mapping",
+  ];
+
+  for (const description of cases) {
+    withFixture((root) => {
+      write(
+        root,
+        `${skillDirectory}/SKILL.md`,
+        [
+          "---",
+          `name: ${expectedName}`,
+          `description: ${description}`,
+          "---",
+          "",
+          "# 검증용 Skill",
+          "",
+        ].join("\n"),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /안전한 단일-line string scalar/);
+      assert.match(
+        result.stderr,
+        /frontmatter 'description'.*정확히 하나/,
+      );
+    });
+  }
+});
+
+test("Skill frontmatter는 합법적인 quoted·unquoted description을 허용한다", () => {
+  const skillDirectory = skillDirectories[0];
+  const expectedName = path.basename(skillDirectory);
+  const descriptions = [
+    "검증 fixture에서 사용하는 unquoted Skill # 설명 comment",
+    '"검증 fixture: quoted description"',
+    "'검증 fixture의 ''quoted'' description'",
+  ];
+
+  for (const description of descriptions) {
+    withFixture((root) => {
+      write(
+        root,
+        `${skillDirectory}/SKILL.md`,
+        [
+          "---",
+          `name: "${expectedName}"`,
+          `description: ${description}`,
+          "---",
+          "",
+          "# 검증용 Skill",
+          "",
+        ].join("\n"),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 0, result.stderr);
+    });
+  }
+});
+
+test("Skill interface의 CRLF와 quoted scalar 뒤 YAML comment를 허용한다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      `${skillDirectories[0]}/agents/openai.yaml`,
+    );
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace("interface:", "---\ninterface:")
+      .replace('"검증 Skill 1"', '"검증 Skill 1" # 사용자 표시 이름')
+      .replace(
+        '"검증 fixture에서 사용하는 Skill"',
+        '"검증 fixture에서 사용하는 Skill" # 짧은 설명',
+      )
+      .replaceAll("\n", "\r\n");
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
   });
 });
 

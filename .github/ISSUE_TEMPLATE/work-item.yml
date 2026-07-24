@@ -52,7 +52,28 @@ body:
     id: acceptance
     attributes:
       label: 완료 조건
-      description: 항목별로 독립적으로 확인 가능한 조건을 작성합니다.
+      description: 이 구역을 행동 시나리오의 정본으로 사용합니다. 관찰 가능한 Given/When/Then 또는 조건/행동/결과로 happy·error·recovery path를 다루고, 각 시나리오에 추적 ID와 검증 계획을 연결합니다.
+      placeholder: |
+        Happy path
+        - 조건(Given):
+        - 행동(When):
+        - 결과(Then):
+        - 추적 ID:
+        - 검증 계획:
+
+        Error path
+        - 조건(Given):
+        - 행동(When):
+        - 결과(Then):
+        - 추적 ID:
+        - 검증 계획:
+
+        Recovery path
+        - 조건(Given):
+        - 행동(When):
+        - 결과(Then):
+        - 추적 ID:
+        - 검증 계획:
     validations:
       required: true
 
@@ -68,7 +89,7 @@ body:
     id: traceability
     attributes:
       label: 추적성
-      description: PRD-NN-FR-NN, PRD-NN-AC-NN, PRD-NN-SP-NN 또는 POL-NN-R-NN을 연결하고 관련 결정 ID를 보조로 적습니다.
+      description: 완료 조건의 각 행동 시나리오에 PRD-NN-FR-NN, PRD-NN-AC-NN, PRD-NN-SP-NN 또는 POL-NN-R-NN을 연결하고 관련 결정 ID를 보조로 적습니다.
     validations:
       required: true
 
@@ -92,7 +113,7 @@ body:
     id: verification
     attributes:
       label: 검증
-      description: 실행할 명령과 남겨야 할 증거를 작성합니다.
+      description: 완료 조건의 happy·error·recovery 시나리오별 명령·관찰 방법과 증거, 위험도에 맞는 독립 리뷰 인원·관점을 계획합니다.
     validations:
       required: true
 

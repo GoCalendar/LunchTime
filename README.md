@@ -89,6 +89,13 @@ PRD-01은 첫 번째 제품 약속입니다. 앞으로 독립적인 사용자 �
 Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 질문별로 찾을 수
 있습니다.
 
+### 개발 표준
+
+- [개발 하네스 가이드](docs/development/01_harness_guide.md)는 이슈 확인부터
+  병합 뒤 완료까지의 11단계와 독립 리뷰 계약을 연결합니다.
+- [BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)은 제품 정본을
+  행동 시나리오, 결정적 테스트와 회귀 증거로 전환하는 기준을 설명합니다.
+
 ## 제품 문서 갱신 절차
 
 구현을 마치고 PR을 만들기 전에는 [`update-product-docs` 스킬(Skill)](.agents/skills/update-product-docs/SKILL.md)로 변경사항이 PRD·정책 문서에 미치는 영향을 확인합니다. 제품 동작이나 보장 범위가 달라졌다면 코드와 정본 문서를 같은 변경에서 갱신합니다.
