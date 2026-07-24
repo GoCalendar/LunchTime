@@ -315,6 +315,242 @@ function maskInvisibleMarkdown(text) {
   return maskHtmlComments(maskRanges(text, scanFencedBlockRanges(text)));
 }
 
+function scanInlineCodeRanges(text) {
+  const ranges = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    if (text[cursor] !== "`") {
+      cursor += 1;
+      continue;
+    }
+
+    let openingEnd = cursor + 1;
+    while (text[openingEnd] === "`") openingEnd += 1;
+    const markerLength = openingEnd - cursor;
+    let closingStart = openingEnd;
+    let foundClosing = false;
+
+    while (closingStart < text.length) {
+      closingStart = text.indexOf("`", closingStart);
+      if (closingStart < 0) break;
+
+      let closingEnd = closingStart + 1;
+      while (text[closingEnd] === "`") closingEnd += 1;
+      if (closingEnd - closingStart === markerLength) {
+        ranges.push({ start: cursor, end: closingEnd });
+        cursor = closingEnd;
+        foundClosing = true;
+        break;
+      }
+      closingStart = closingEnd;
+    }
+
+    if (!foundClosing) cursor = openingEnd;
+  }
+
+  return ranges;
+}
+
+function maskMarkdownForLinkScan(text) {
+  const withoutInvisibleBlocks = maskInvisibleMarkdown(text);
+  return maskRanges(
+    withoutInvisibleBlocks,
+    scanInlineCodeRanges(withoutInvisibleBlocks),
+  );
+}
+
+function parseMarkdownLinkTarget(rawTarget) {
+  const trimmed = rawTarget.trim();
+  if (trimmed.startsWith("<")) {
+    const closing = trimmed.indexOf(">");
+    return closing < 0 ? trimmed : trimmed.slice(1, closing);
+  }
+  return trimmed.split(/\s+/, 1)[0];
+}
+
+function normalizeReferenceLabel(label) {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function findVisibleMarkdownResources(text) {
+  const visibleMarkdown = maskMarkdownForLinkScan(text);
+  const resources = [
+    ...visibleMarkdown.matchAll(/(!?)\[([^\]\n]*)]\(([^)\n]+)\)/g),
+  ].map((match) => ({
+    isImage: match[1] === "!",
+    label: match[2],
+    target: parseMarkdownLinkTarget(match[3]),
+  }));
+  const referenceDefinitions = new Map();
+
+  for (const match of visibleMarkdown.matchAll(
+    /^ {0,3}\[([^\]\n]+)\]:[ \t]*(\S.*)$/gm,
+  )) {
+    const label = normalizeReferenceLabel(match[1]);
+    const target = parseMarkdownLinkTarget(match[2]);
+    if (label && target && !referenceDefinitions.has(label)) {
+      referenceDefinitions.set(label, target);
+    }
+  }
+
+  for (const match of visibleMarkdown.matchAll(
+    /(!?)\[([^\]\n]*)]\[([^\]\n]+)]/g,
+  )) {
+    const target = referenceDefinitions.get(
+      normalizeReferenceLabel(match[3]),
+    );
+    if (!target) continue;
+    resources.push({
+      isImage: match[1] === "!",
+      label: match[2],
+      target,
+    });
+  }
+
+  return resources;
+}
+
+function findVisibleMarkdownLinks(text) {
+  return findVisibleMarkdownResources(text)
+    .filter((resource) => !resource.isImage && resource.label.trim())
+    .map((resource) => resource.target);
+}
+
+function inspectLocalMarkdownTarget(file, target) {
+  if (!target || target.startsWith("#")) return null;
+  const pathTarget = target.split("#", 1)[0];
+  if (!pathTarget) return null;
+  const isAbsoluteTarget =
+    path.isAbsolute(pathTarget) || path.win32.isAbsolute(pathTarget);
+  if (
+    !isAbsoluteTarget &&
+    /^[A-Za-z][A-Za-z0-9+.-]*:/.test(pathTarget)
+  ) {
+    return null;
+  }
+
+  const resolved = path.resolve(root, path.dirname(file), pathTarget);
+  const relativeToRoot = path.relative(root, resolved);
+  const isInsideRoot =
+    !isAbsoluteTarget &&
+    relativeToRoot !== ".." &&
+    !relativeToRoot.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativeToRoot);
+
+  return { pathTarget, resolved, isInsideRoot };
+}
+
+function resolveLocalMarkdownTarget(file, target) {
+  const inspected = inspectLocalMarkdownTarget(file, target);
+  return inspected?.isInsideRoot ? inspected.resolved : null;
+}
+
+function isCommonMarkThematicBreak(line) {
+  return /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(
+    line,
+  );
+}
+
+function matchTopLevelBullet(line) {
+  if (isCommonMarkThematicBreak(line)) return null;
+  return line.match(/^( {0,3})[-+*][ \t]+\S/);
+}
+
+function findFirstNonBlankLine(text, start) {
+  let cursor = start;
+  while (cursor <= text.length) {
+    const newline = text.indexOf("\n", cursor);
+    const lineEnd = newline < 0 ? text.length : newline;
+    const line = text.slice(cursor, lineEnd);
+    if (line.trim()) {
+      return {
+        line,
+        start: cursor,
+        end: newline < 0 ? text.length : newline + 1,
+      };
+    }
+    if (newline < 0) break;
+    cursor = newline + 1;
+  }
+  return null;
+}
+
+function readLeadingTopLevelBulletSummary(text) {
+  const lines = text.split("\n");
+  const firstMaterialIndex = lines.findIndex((line) => line.trim());
+  if (firstMaterialIndex < 0) {
+    return { startsWithList: false, directItemCount: 0 };
+  }
+
+  const firstBullet = matchTopLevelBullet(lines[firstMaterialIndex]);
+  if (!firstBullet) {
+    return { startsWithList: false, directItemCount: 0 };
+  }
+
+  const directIndent = firstBullet[1].length;
+  let directItemCount = 0;
+
+  for (let index = firstMaterialIndex; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) break;
+
+    const bullet = matchTopLevelBullet(line);
+    if (bullet && bullet[1].length === directIndent) {
+      directItemCount += 1;
+      continue;
+    }
+
+    const indentation = line.match(/^ */)[0].length;
+    if (indentation > directIndent) continue;
+    break;
+  }
+
+  return { startsWithList: true, directItemCount };
+}
+
+function findClosingFence(text, start, character, minimumLength) {
+  let cursor = start;
+  while (cursor <= text.length) {
+    const newline = text.indexOf("\n", cursor);
+    const lineEnd = newline < 0 ? text.length : newline;
+    const line = text.slice(cursor, lineEnd);
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+    if (
+      fence &&
+      fence[1][0] === character &&
+      fence[1].length >= minimumLength
+    ) {
+      return {
+        start: cursor,
+        end: newline < 0 ? text.length : newline + 1,
+      };
+    }
+    if (newline < 0) break;
+    cursor = newline + 1;
+  }
+  return null;
+}
+
+function readH2Section(content, heading) {
+  const visibleStructure = maskInvisibleMarkdown(content);
+  const headingPattern = /^## (?!#)(.+?)[ \t]*$/gm;
+  let match;
+
+  while ((match = headingPattern.exec(visibleStructure))) {
+    if (match[1] !== heading) continue;
+    const sectionStart = match.index + match[0].length;
+    headingPattern.lastIndex = sectionStart;
+    const nextHeading = headingPattern.exec(visibleStructure);
+    return content.slice(
+      sectionStart,
+      nextHeading ? nextHeading.index : content.length,
+    );
+  }
+
+  return null;
+}
+
 function sameCells(actual, expected) {
   return (
     actual?.length === expected.length &&
@@ -389,6 +625,223 @@ const markdownFiles = [
   ...walk("docs").filter((file) => file.endsWith(".md")),
 ].sort();
 
+const architectureFiles = [
+  "docs/architecture/README.md",
+  "docs/architecture/01_system_context.md",
+  "docs/architecture/02_peer_network_and_transport.md",
+  "docs/architecture/03_communication_protocol.md",
+  "docs/architecture/04_replication_consistency_and_recovery.md",
+  "docs/architecture/05_storage_and_security.md",
+];
+const architectureDetailFiles = architectureFiles.slice(1);
+const architectureIndexFile = architectureFiles[0];
+const architectureIndexSections = [
+  "빠른 선택",
+  "추천 읽기 순서",
+  "정본과의 경계",
+  "입력 계약",
+  "기술 검증 대기 지도",
+];
+const architectureQuickSelectionHeaders = [
+  "궁금한 질문",
+  "읽을 문서",
+  "확정 계약",
+  "논리 모델",
+  "미결정 기술의 위치",
+];
+
+for (const file of architectureFiles) {
+  if (!fs.existsSync(path.join(root, file))) {
+    errors.push(`필수 아키텍처 문서가 없습니다: ${file}`);
+  }
+}
+
+const architectureIndexPath = path.join(root, architectureIndexFile);
+if (fs.existsSync(architectureIndexPath)) {
+  const indexContent = fs.readFileSync(architectureIndexPath, "utf8");
+  const sections = new Map();
+
+  for (const heading of architectureIndexSections) {
+    const section = readH2Section(indexContent, heading);
+    if (section === null) {
+      errors.push(
+        `${architectureIndexFile}: 필수 H2 섹션이 없습니다: ${heading}`,
+      );
+    } else {
+      sections.set(heading, section);
+    }
+  }
+
+  const quickSelection = sections.get("빠른 선택");
+  if (quickSelection !== undefined) {
+    const rows = readTraceTableRows(quickSelection, {
+      file: architectureIndexFile,
+      label: "빠른 선택",
+      headers: [architectureQuickSelectionHeaders],
+    });
+    if (rows.length !== architectureDetailFiles.length) {
+      errors.push(
+        `${architectureIndexFile}: 빠른 선택 표에는 상세 아키텍처 문서 행이 정확히 ${architectureDetailFiles.length}개 필요합니다.`,
+      );
+    }
+
+    const expectedDetailTargets = new Set(
+      architectureDetailFiles.map((detailFile) =>
+        path.join(root, detailFile),
+      ),
+    );
+    const linkedDetailFiles = [];
+    for (const [rowIndex, cells] of rows.entries()) {
+      const documentLinks = findVisibleMarkdownLinks(cells[1] ?? "");
+      const resolvedLinks = documentLinks.map((target) =>
+        resolveLocalMarkdownTarget(architectureIndexFile, target),
+      );
+      if (
+        documentLinks.length !== 1 ||
+        resolvedLinks[0] === null ||
+        !expectedDetailTargets.has(resolvedLinks[0])
+      ) {
+        errors.push(
+          `${architectureIndexFile}: 빠른 선택 표 ${rowIndex + 1}번째 행의 '읽을 문서'에는 허용된 상세 아키텍처 문서 링크가 정확히 하나 필요합니다.`,
+        );
+      }
+      for (const resolved of resolvedLinks) {
+        if (resolved !== null) linkedDetailFiles.push(resolved);
+      }
+    }
+    for (const detailFile of architectureDetailFiles) {
+      const expectedTarget = path.join(root, detailFile);
+      const count = linkedDetailFiles.filter(
+        (target) => target === expectedTarget,
+      ).length;
+      if (count !== 1) {
+        errors.push(
+          `${architectureIndexFile}: 빠른 선택 표의 문서 열은 ${detailFile} 링크를 정확히 한 번 포함해야 합니다.`,
+        );
+      }
+    }
+  }
+
+  const recommendedOrder = sections.get("추천 읽기 순서");
+  if (recommendedOrder !== undefined) {
+    const recommendedLinks = findVisibleMarkdownLinks(recommendedOrder);
+    if (recommendedLinks.length !== architectureDetailFiles.length) {
+      errors.push(
+        `${architectureIndexFile}: 추천 읽기 순서에는 visible Markdown link가 정확히 ${architectureDetailFiles.length}개 필요합니다.`,
+      );
+    }
+    const linkedFiles = recommendedLinks
+      .map((target) =>
+        resolveLocalMarkdownTarget(architectureIndexFile, target),
+      )
+      .filter((target) => target !== null);
+    const expectedLinkedFiles = architectureDetailFiles.map((detailFile) =>
+      path.join(root, detailFile),
+    );
+    if (
+      linkedFiles.length !== expectedLinkedFiles.length ||
+      linkedFiles.some(
+        (linkedFile, index) => linkedFile !== expectedLinkedFiles[index],
+      )
+    ) {
+      errors.push(
+        `${architectureIndexFile}: 추천 읽기 순서는 상세 아키텍처 문서를 지정된 순서대로 연결해야 합니다.`,
+      );
+    }
+    for (const detailFile of architectureDetailFiles) {
+      const expectedTarget = path.join(root, detailFile);
+      const count = linkedFiles.filter(
+        (target) => target === expectedTarget,
+      ).length;
+      if (count !== 1) {
+        errors.push(
+          `${architectureIndexFile}: 추천 읽기 순서는 ${detailFile} 링크를 정확히 한 번 포함해야 합니다.`,
+        );
+      }
+    }
+  }
+}
+
+for (const file of architectureDetailFiles) {
+  const absolutePath = path.join(root, file);
+  if (!fs.existsSync(absolutePath)) continue;
+
+  const content = fs.readFileSync(absolutePath, "utf8");
+  const withoutComments = maskHtmlComments(content);
+  const visibleStructure = maskRanges(
+    withoutComments,
+    scanFencedBlockRanges(withoutComments),
+  );
+  const firstH2 = visibleStructure.match(/^## (?!#)(.+?)[ \t]*$/m);
+
+  if (!firstH2 || firstH2[1] !== "한눈에 보기") {
+    errors.push(
+      `${file}: 상세 아키텍처 문서의 첫 H2는 '## 한눈에 보기'여야 합니다.`,
+    );
+    continue;
+  }
+
+  const firstMaterial = findFirstNonBlankLine(
+    withoutComments,
+    firstH2.index + firstH2[0].length,
+  );
+  const openingFence = firstMaterial?.line.match(
+    /^ {0,3}(`{3,}|~{3,})mermaid\s*$/i,
+  );
+  if (!openingFence) {
+    errors.push(
+      `${file}: '## 한눈에 보기'의 첫 자료는 Mermaid fenced block이어야 합니다.`,
+    );
+    continue;
+  }
+
+  const marker = openingFence[1];
+  const closingFence = findClosingFence(
+    withoutComments,
+    firstMaterial.end,
+    marker[0],
+    marker.length,
+  );
+  if (!closingFence) {
+    errors.push(
+      `${file}: '## 한눈에 보기'의 Mermaid fenced block이 종결되지 않았습니다.`,
+    );
+    continue;
+  }
+
+  const chartBody = withoutComments.slice(
+    firstMaterial.end,
+    closingFence.start,
+  );
+  if (!chartBody.trim()) {
+    errors.push(
+      `${file}: '## 한눈에 보기'의 Mermaid chart body가 비어 있습니다.`,
+    );
+  }
+
+  const afterClosingFence = withoutComments.slice(closingFence.end);
+  const summaryStructure = maskRanges(
+    afterClosingFence,
+    scanFencedBlockRanges(afterClosingFence),
+  );
+  const nextH2 = summaryStructure.match(/^## (?!#).+?[ \t]*$/m);
+  const summarySection = afterClosingFence.slice(
+    0,
+    nextH2 ? nextH2.index : afterClosingFence.length,
+  );
+  const { startsWithList, directItemCount } =
+    readLeadingTopLevelBulletSummary(summarySection);
+  if (
+    !startsWithList ||
+    directItemCount < 3 ||
+    directItemCount > 5
+  ) {
+    errors.push(
+      `${file}: 한눈에 보기 Mermaid 직후 첫 visible material은 연속된 top-level bullet list여야 하며, visible top-level bullet 요약이 3~5개 필요합니다. (현재 ${directItemCount}개)`,
+    );
+  }
+}
+
 for (const file of markdownFiles) {
   const content = fs.readFileSync(path.join(root, file), "utf8");
 
@@ -402,14 +855,15 @@ for (const file of markdownFiles) {
     }
   });
 
-  for (const match of content.matchAll(/\[[^\]]*]\(([^)]+)\)/g)) {
-    let target = match[1].trim().replace(/^<|>$/g, "");
-    if (/^(https?:|mailto:|#)/.test(target)) continue;
-    target = target.split("#")[0];
-    if (!target) continue;
-    const resolved = path.resolve(root, path.dirname(file), target);
-    if (!fs.existsSync(resolved)) {
-      errors.push(`${file}: 깨진 링크 -> ${target}`);
+  for (const { target } of findVisibleMarkdownResources(content)) {
+    const inspected = inspectLocalMarkdownTarget(file, target);
+    if (inspected === null) continue;
+    if (!inspected.isInsideRoot) {
+      errors.push(
+        `${file}: 저장소 루트 내부의 상대 링크만 허용됩니다 -> ${inspected.pathTarget}`,
+      );
+    } else if (!fs.existsSync(inspected.resolved)) {
+      errors.push(`${file}: 깨진 링크 -> ${inspected.pathTarget}`);
     }
   }
 
@@ -430,6 +884,8 @@ const prdIds = new Map();
 const policyIds = new Map();
 const requirementIds = new Map();
 const policyRuleIds = new Map();
+const featureIds = new Set();
+const decisionIds = new Set();
 const approvedFiles = new Set();
 const prdTraceEdges = new Set();
 const policyTraceEdges = new Set();
@@ -788,10 +1244,11 @@ const inventoryPath = path.join(
 
 if (fs.existsSync(inventoryPath)) {
   const inventory = fs.readFileSync(inventoryPath, "utf8");
+  const visibleInventory = maskInvisibleMarkdown(inventory);
   const definitions = [
-    ...inventory.matchAll(/^\| (F-\d{2,}) \|/gm),
+    ...visibleInventory.matchAll(/^\| (F-\d{2,}) \|/gm),
   ].map((match) => match[1]);
-  const definitionSet = new Set(definitions);
+  for (const id of definitions) featureIds.add(id);
 
   reportDuplicateIds(definitions, "기능 ID");
 
@@ -800,7 +1257,7 @@ if (fs.existsSync(inventoryPath)) {
     const visibleContent = maskInvisibleMarkdown(content);
     for (const match of visibleContent.matchAll(/\bF-(\d{2,})\b/g)) {
       const id = `F-${match[1]}`;
-      if (!definitionSet.has(id)) {
+      if (!featureIds.has(id)) {
         errors.push(`${file}: 정의되지 않은 기능 ID ${id}`);
       }
     }
@@ -826,7 +1283,7 @@ if (fs.existsSync(inventoryPath)) {
       if (!classified.includes(id)) errors.push(`범위 분류 누락: ${id}`);
     }
     for (const id of classified) {
-      if (!definitionSet.has(id)) errors.push(`범위 분류의 미정의 ID: ${id}`);
+      if (!featureIds.has(id)) errors.push(`범위 분류의 미정의 ID: ${id}`);
     }
   }
 
@@ -856,19 +1313,74 @@ const backlogPath = path.join(
 );
 if (fs.existsSync(backlogPath)) {
   const backlog = fs.readFileSync(backlogPath, "utf8");
+  const visibleBacklog = maskInvisibleMarkdown(backlog);
   const decisions = [
-    ...backlog.matchAll(/^\| (D-\d{2,}) \|/gm),
+    ...visibleBacklog.matchAll(/^\| (D-\d{2,}) \|/gm),
   ].map((match) => match[1]);
-  const decisionSet = new Set(decisions);
+  for (const id of decisions) decisionIds.add(id);
   reportDuplicateIds(decisions, "결정 ID");
 
   for (const file of canonicalFiles) {
     const content = fs.readFileSync(path.join(root, file), "utf8");
     const visibleContent = maskInvisibleMarkdown(content);
     for (const id of expandIds(visibleContent, "D")) {
-      if (!decisionSet.has(id)) {
+      if (!decisionIds.has(id)) {
         errors.push(`${file}: 정의되지 않은 결정 ID ${id}`);
       }
+    }
+  }
+}
+
+for (const file of architectureFiles) {
+  const absolutePath = path.join(root, file);
+  if (!fs.existsSync(absolutePath)) continue;
+  const visibleContent = maskInvisibleMarkdown(
+    fs.readFileSync(absolutePath, "utf8"),
+  );
+
+  for (const match of visibleContent.matchAll(
+    /(?:^|[^A-Za-z0-9-])((?:FR|AC|SP|R)-\d{2,})\b/g,
+  )) {
+    errors.push(`${file}: 네임스페이스 없는 아키텍처 계약 ID ${match[1]}`);
+  }
+
+  for (const match of visibleContent.matchAll(
+    /\bPRD-\d{2,}-(?:FR|AC|SP)-\d{2,}\b/g,
+  )) {
+    if (!requirementIds.has(match[0])) {
+      errors.push(`${file}: 정의되지 않은 PRD 계약 ID ${match[0]}`);
+    }
+  }
+
+  for (const match of visibleContent.matchAll(
+    /\bPOL-\d{2,}-R-\d{2,}\b/g,
+  )) {
+    if (!policyRuleIds.has(match[0])) {
+      errors.push(`${file}: 정의되지 않은 정책 규칙 ID ${match[0]}`);
+    }
+  }
+
+  for (const match of visibleContent.matchAll(/\bPRD-\d{2,}\b/g)) {
+    if (!prdIds.has(match[0])) {
+      errors.push(`${file}: 정의되지 않은 PRD ID ${match[0]}`);
+    }
+  }
+
+  for (const match of visibleContent.matchAll(/\bPOL-\d{2,}\b/g)) {
+    if (!policyIds.has(match[0])) {
+      errors.push(`${file}: 정의되지 않은 정책 ID ${match[0]}`);
+    }
+  }
+
+  for (const match of visibleContent.matchAll(/\bD-\d{2,}\b/g)) {
+    if (!decisionIds.has(match[0])) {
+      errors.push(`${file}: 정의되지 않은 결정 ID ${match[0]}`);
+    }
+  }
+
+  for (const match of visibleContent.matchAll(/\bF-\d{2,}\b/g)) {
+    if (!featureIds.has(match[0])) {
+      errors.push(`${file}: 정의되지 않은 기능 ID ${match[0]}`);
     }
   }
 }
@@ -877,6 +1389,17 @@ const readmePath = path.join(root, "README.md");
 const readme = fs.existsSync(readmePath)
   ? fs.readFileSync(readmePath, "utf8")
   : "";
+
+const architectureIndexTarget = path.join(root, architectureIndexFile);
+const hasArchitectureIndexLink = findVisibleMarkdownLinks(readme).some(
+  (target) =>
+    resolveLocalMarkdownTarget("README.md", target) === architectureIndexTarget,
+);
+if (!hasArchitectureIndexLink) {
+  errors.push(
+    `README.md: ${architectureIndexFile}를 가리키는 visible Markdown link가 필요합니다.`,
+  );
+}
 
 for (const directory of ["docs/prd", "docs/policies"]) {
   for (const file of walk(directory).filter((entry) => entry.endsWith(".md"))) {
