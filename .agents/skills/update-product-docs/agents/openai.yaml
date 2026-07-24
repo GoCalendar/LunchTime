@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update Product Docs"
+  short_description: "PR 전 PRD·Policies 영향도를 검사하고 정본을 갱신합니다"
+  default_prompt: "Use $update-product-docs to review the implementation diff and update affected PRD or Policies before opening a PR."
