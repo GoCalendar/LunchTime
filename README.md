@@ -87,3 +87,36 @@ PRD-01은 첫 번째 제품 약속입니다. 앞으로 독립적인 사용자 �
 구현을 마치고 PR을 만들기 전에는 [`update-product-docs` 스킬(Skill)](.agents/skills/update-product-docs/SKILL.md)로 변경사항이 PRD·정책 문서에 미치는 영향을 확인합니다. 제품 동작이나 보장 범위가 달라졌다면 코드와 정본 문서를 같은 변경에서 갱신합니다.
 
 스킬의 단일 원본은 `.agents/skills/`에 두며, Claude에서도 같은 스킬을 사용하도록 `.claude/skills`를 해당 디렉터리의 심볼릭 링크로 연결합니다.
+
+## AI 작업 하네스
+
+- [공용 AI 작업 협약](AGENTS.md)은 Codex와 Claude Code가 함께 따르는
+  정본입니다. `CLAUDE.md`는 이 파일을 가리킵니다.
+- [개발 협약](CONTRIBUTING.md)은 Trunk-Based Development, 브랜치,
+  작업 템플릿, 커밋, 풀 리퀘스트와 병합 규칙을 연결하는 사람용 정본입니다.
+- [`update-product-docs` 스킬](.agents/skills/update-product-docs/SKILL.md)은
+  PRD·정책 생성, 추적성, 가독성과 구현 변경의 문서 영향을 검사합니다.
+- [`run-github-work-item` 스킬](.agents/skills/run-github-work-item/SKILL.md)은
+  이슈 준비 확인, 작업 선점, 병합 뒤 완료와 후행 작업 해제를 관리합니다.
+- [`commit-work-item` 스킬](.agents/skills/commit-work-item/SKILL.md)은
+  이슈 범위, 검증, 문서 영향과 작성자 정보를 확인하고 원자적 커밋을 만듭니다.
+- [`open-pull-request` 스킬](.agents/skills/open-pull-request/SKILL.md)은
+  변경 요약, 추적성, 검증 근거와 문서 영향 판정을 구조화해 PR을 생성합니다.
+- [MVP 작업 목록](.github/mvp-work-items.json)은 40개 작업의 순서,
+  우선순위, 경로 소유권과 GitHub 기본 의존성 DAG의 정본입니다.
+- [MVP 프로젝트](https://github.com/orgs/GoCalendar/projects/1)와
+  [MVP 보드](https://github.com/orgs/GoCalendar/projects/1/views/2)는
+  `Todo / In Progress / Done` 실행 상태를 보여줍니다.
+- [작업 관리 설정](.github/work-management.json)과
+  [일괄 등록 절차](.agents/skills/run-github-work-item/references/bulk-registration.md)는
+  작업 목록을 이슈·마일스톤·프로젝트 필드와 안전하게 맞추는 방법을 정의합니다.
+- [MVP 작업 이슈 양식](.github/ISSUE_TEMPLATE/work-item.yml)은 모든 작업이
+  같은 맥락·완료 조건·의존성·경로 소유권·검증 정보를 갖게 합니다.
+- [PR 템플릿](.github/PULL_REQUEST_TEMPLATE.md)은 다음 AI가 대화 이력 없이
+  맥락과 핵심 검토 지점을 복원할 수 있는 고정 본문 구조를 제공합니다.
+- [하네스 검증 워크플로](.github/workflows/validate-harness.yml)는 PR과
+  `main` 변경에서 문서·스킬 스크립트·패치 형식을 검사합니다.
+
+실제 작업 순서와 예외는 [개발 협약](CONTRIBUTING.md)을 기준으로 판단합니다.
+준비된 이슈를 선점한 뒤 독립 작업 트리에서 구현하고, 제품 문서 영향 확인,
+원자적 커밋, 검증된 PR, squash merge와 완료 전이를 순서대로 수행합니다.

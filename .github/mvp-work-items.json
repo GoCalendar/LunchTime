@@ -1,0 +1,3245 @@
+{
+  "schemaVersion": 1,
+  "repository": "GoCalendar/LunchTime",
+  "project": {
+    "owner": "GoCalendar",
+    "number": 1
+  },
+  "milestone": "MVP",
+  "items": [
+    {
+      "key": "LT-001",
+      "title": "macOS 앱 골격과 결정적 CI 게이트 구성",
+      "type": "type:chore",
+      "areas": [
+        "area:app-shell",
+        "area:quality"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 1,
+      "dependsOn": [],
+      "overview": "후속 작업이 공용 빌드 파일을 동시에 수정하지 않아도 되도록 LunchTime macOS 앱, 테스트 대상, 폴더 동기화 구조와 CI 기본 게이트를 한 번에 마련한다.",
+      "context": "현재 저장소에는 제품 문서만 있고 실행 가능한 앱과 테스트 기준선이 없다. 두 AI 작업자가 병렬 worktree에서 기능 폴더만 추가할 수 있도록 프로젝트 파일과 build manifest의 단일 소유 작업이 먼저 필요하다.",
+      "goal": "깨끗한 checkout에서 macOS 앱과 테스트가 동일한 명령으로 빌드되고, 후속 소스 파일 추가가 프로젝트 manifest 편집 없이 인식된다.",
+      "scope": {
+        "include": [
+          "macOS 앱, 단위 테스트와 UI 테스트 target의 최소 골격",
+          "폴더 기반 소스 인식과 공통 테스트 fixture 위치",
+          "빌드·테스트·제품 문서 검증을 실행하는 CI"
+        ],
+        "exclude": [
+          "Room, 동기화 또는 보안 제품 동작 구현",
+          "최소 macOS 버전 외 배포·서명 정책 확정"
+        ]
+      },
+      "acceptance": [
+        "깨끗한 checkout에서 앱 scheme을 build하고 빈 기준 테스트 suite를 실행하면 모두 성공한다.",
+        "샘플 소스 파일을 동기화 대상 폴더에 추가한 검증에서 project manifest를 수정하지 않아도 compile 대상에 포함된다.",
+        "CI가 앱 테스트, 제품 문서 validator와 git diff whitespace 검사를 각각 실패 가능한 게이트로 실행한다.",
+        "최소 macOS 버전과 로컬·CI 실행 명령이 저장소 문서에 기록된다."
+      ],
+      "traceability": [
+        "PRD-01-FR-01",
+        "POL-04-R-01",
+        "D-01",
+        "D-22",
+        "F-01"
+      ],
+      "allowedPaths": [
+        "LunchTime.xcodeproj/**",
+        "LunchTime/App/**",
+        "LunchTimeTests/Support/**",
+        "LunchTimeUITests/Support/**",
+        ".github/workflows/app-ci.yml",
+        "README.md"
+      ],
+      "forbiddenPaths": [
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild build -scheme LunchTime -destination 'platform=macOS'",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS'",
+        "node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs",
+        "CI 실행 URL과 통과한 job 목록을 PR에 첨부한다."
+      ],
+      "documentImpact": [
+        "README.md에 지원 macOS 기준과 실행 명령을 기록한다.",
+        "사용자 동작을 추가하지 않으므로 docs/prd/01_lunchtime_mvp.md와 Policies는 변경하지 않고 영향 검토 결과만 PR에 남긴다."
+      ]
+    },
+    {
+      "key": "LT-002",
+      "title": "지원 네트워크 Peer 발견 가능성 스파이크",
+      "type": "type:spike",
+      "areas": [
+        "area:p2p"
+      ],
+      "priority": "P0",
+      "phase": "Discovery",
+      "order": 2,
+      "dependsOn": [],
+      "overview": "지원 대상 네트워크 조합에서 LunchTime Peer를 발견하고 직접 연결할 수 있는 범위와 실패 시 사용자 계약을 실기기 증거로 확정한다.",
+      "context": "동일 내부망이어도 네트워크 구간 사이에서 discovery traffic이 전달된다고 가정할 수 없다. 제품은 발견 범위를 추측해 확장하지 않고 지원 여부를 판정할 수 없는 경우 교환을 막아야 한다.",
+      "goal": "지원 네트워크의 같은 구간과 교차 구간별 발견·연결 결과, 판별 신호와 실패 제약이 재현 가능한 보고서로 승인된다.",
+      "scope": {
+        "include": [
+          "지원 네트워크 조합별 Peer 발견과 양방향 직접 연결 실험",
+          "discovery 경계가 막힐 때 가능한 대체 접근의 비교",
+          "지원 네트워크 판별 실패 시 fail-closed 사용자 결과"
+        ],
+        "exclude": [
+          "운영용 discovery 모듈 구현",
+          "실제 네트워크 식별자 또는 사내 구성값의 저장소 기록"
+        ]
+      },
+      "acceptance": [
+        "모든 지원 조합에 대해 양방향 발견 시간, 성공 여부와 직접 연결 여부를 반복 측정한 익명 결과가 있다.",
+        "발견에 필요한 권한과 OS 제약, 경계를 넘지 못하는 조건이 재현 절차와 함께 기록된다.",
+        "지원 여부를 확인할 수 없는 환경에서는 운영 데이터를 교환하지 않고 확인 필요를 표시한다는 계약이 보고서에 명시된다.",
+        "선택한 접근과 보류한 대안의 근거를 Product Owner가 검토할 수 있다."
+      ],
+      "traceability": [
+        "PRD-01-SP-01",
+        "PRD-01-FR-09",
+        "PRD-01-FR-12",
+        "PRD-01-AC-03",
+        "PRD-01-AC-08",
+        "POL-02-R-02",
+        "POL-03-R-01",
+        "D-15",
+        "D-35",
+        "F-13",
+        "F-49"
+      ],
+      "allowedPaths": [
+        "Experiments/SP01PeerDiscovery/**",
+        "docs/technical/spikes/PRD-01-SP-01-peer-discovery.md"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        "LunchTime/Core/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "보고서에 실행 환경을 익명화한 시험 행렬, 반복 횟수와 원시 결과 요약을 첨부한다.",
+        "동일 조건을 다시 실행할 명령 또는 Xcode scheme과 예상 판정을 기록한다.",
+        "node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs"
+      ],
+      "documentImpact": [
+        "스파이크 결론이 지원 범위나 실패 동작을 바꾸면 docs/prd/01_lunchtime_mvp.md, docs/policies/02_replication_consistency_retention.md와 docs/policies/03_security_and_trust.md를 함께 갱신한다.",
+        "결론이 기존 계약을 확인하면 변경 불필요 근거와 Product Owner 승인만 기록한다."
+      ]
+    },
+    {
+      "key": "LT-003",
+      "title": "복제·ACK·충돌 수렴 모델 스파이크",
+      "type": "type:spike",
+      "areas": [
+        "area:p2p",
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Discovery",
+      "order": 3,
+      "dependsOn": [],
+      "overview": "중앙 정본 없이 이벤트, ACK, 늦은 전파와 충돌을 결정적으로 수렴시키면서 메뉴 누락을 성공으로 숨기지 않는 복제 모델을 검증한다.",
+      "context": "참여·메뉴 리비전의 누락은 실제 주문 누락으로 이어진다. 단순 마지막 쓰기 우선이나 전송 성공만으로 완료를 판정하면 분리·재연결 상황에서 서로 다른 주문 요약이 생길 수 있다.",
+      "goal": "동일 이벤트 집합이 같은 projection으로 수렴하고 미확인·충돌 데이터를 주문 가능 상태로 오인하지 않는 프로토콜 계약과 시험 증거가 승인된다.",
+      "scope": {
+        "include": [
+          "이벤트 식별, 리비전, ACK와 version summary 계약",
+          "늦은 참여 승인, 메뉴 분기, 중복 참여와 주문 상태 경쟁 시뮬레이션",
+          "결정적 보조 순서와 사용자가 해결해야 하는 충돌의 경계"
+        ],
+        "exclude": [
+          "운영 네트워크 transport 구현",
+          "충돌을 조용히 자동 선택하는 규칙"
+        ]
+      },
+      "acceptance": [
+        "순서와 중복이 다른 동일 이벤트 입력을 여러 Peer에 적용해 최종 projection이 일치한다.",
+        "전송 성공과 정확한 리비전 저장 ACK가 구분되고 ACK 없는 참여·메뉴는 성공으로 판정되지 않는다.",
+        "같은 사용자의 분기 메뉴와 다중 Room 참여는 자동 승자를 고르지 않고 확인 필요로 남는다.",
+        "마감 전 승인됐으나 늦게 도착한 참여와 마감까지 ACK가 없던 참여가 서로 다른 결과로 검증된다.",
+        "모델 한계와 구현에 필요한 불변식이 기술 보고서에 명시된다."
+      ],
+      "traceability": [
+        "PRD-01-SP-02",
+        "PRD-01-FR-02",
+        "PRD-01-FR-06",
+        "PRD-01-FR-09",
+        "PRD-01-AC-02",
+        "PRD-01-AC-09",
+        "PRD-01-AC-11",
+        "POL-02-R-01",
+        "POL-02-R-04",
+        "POL-02-R-05",
+        "D-03",
+        "D-17",
+        "D-29",
+        "D-40",
+        "F-50",
+        "F-55",
+        "F-66",
+        "F-67"
+      ],
+      "allowedPaths": [
+        "Experiments/SP02ReplicationModel/**",
+        "docs/technical/spikes/PRD-01-SP-02-replication-conflicts.md"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "결정적 replay, 중복, 순서 뒤섞기, 네트워크 분리와 재결합 fixture의 실행 명령과 결과를 보고서에 첨부한다.",
+        "모든 fixture를 두 번 이상 서로 다른 입력 순서로 실행해 projection hash가 일치하는 증거를 남긴다.",
+        "node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs"
+      ],
+      "documentImpact": [
+        "결론이 충돌·ACK 사용자 계약을 바꾸면 PRD-01과 POL-02를 먼저 갱신하고 새 결정 ID를 연결한다.",
+        "구현 방식만 확정하면 기술 보고서를 정본으로 두고 제품 문서 변경 불필요 근거를 남긴다."
+      ]
+    },
+    {
+      "key": "LT-004",
+      "title": "복귀·시계 경계·bounded sync 스파이크",
+      "type": "type:spike",
+      "areas": [
+        "area:p2p",
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Discovery",
+      "order": 4,
+      "dependsOn": [],
+      "overview": "잠자기·foreground·네트워크 복귀, 30초 주기, 세션 최대 3회·30초, 120초 finalization과 시계 차이 차단을 실기기에서 검증한다.",
+      "context": "앱은 놓친 데이터를 복구해야 하지만 실패 대상을 무한 재시도해서는 안 된다. 또한 신뢰할 수 없는 시각으로 마감이나 주문 상태를 승인하면 늦은 이벤트의 유효성을 잘못 판단할 수 있다.",
+      "goal": "자동 트리거와 시간 경계가 정해진 상한 안에서 종료되고, 허용 시계 차이와 fail-closed 복구 절차가 측정 증거로 승인된다.",
+      "scope": {
+        "include": [
+          "잠자기·foreground·네트워크 변화별 트리거 관찰",
+          "최대 3회·30초 세션, 30초 anti-entropy와 120초 finalization 비용 측정",
+          "시계 차이 허용치, 검증 방식과 차단·복구 사용자 결과"
+        ],
+        "exclude": [
+          "무한 polling 또는 실패 후 타이머 기반 자동 재시작",
+          "제품 문서보다 느슨한 임시 우회"
+        ]
+      },
+      "acceptance": [
+        "각 자동 트리거가 중복 폭주 없이 하나의 bounded session으로 합쳐지거나 순차 처리되는 관찰 결과가 있다.",
+        "세션은 3회 또는 30초 중 먼저 도달한 한도에서 끝나고 새 의미 있는 트리거 전에는 자동 재시작하지 않는다.",
+        "활성 데이터와 정상 응답 Peer가 있을 때 성공 대조 사이 간격이 30초 이내인지 측정하고 전력·네트워크 비용을 기록한다.",
+        "14:30 경계에 깨어 있는 기기와 잠든 기기 모두 쓰기를 다시 열지 않고 각자의 최대 120초 finalization으로 종료된다.",
+        "확정 허용치를 넘는 시계 차이에서 시간 의존 쓰기가 막히고 재대조 뒤에만 복구된다."
+      ],
+      "traceability": [
+        "PRD-01-SP-03",
+        "PRD-01-FR-01",
+        "PRD-01-FR-09",
+        "PRD-01-FR-10",
+        "PRD-01-AC-03",
+        "PRD-01-AC-05",
+        "PRD-01-AC-09",
+        "POL-01-R-01",
+        "POL-01-R-04",
+        "POL-02-R-02",
+        "POL-02-R-08",
+        "D-14",
+        "D-16",
+        "D-27",
+        "D-31",
+        "D-38",
+        "F-54",
+        "F-63",
+        "F-64",
+        "F-65"
+      ],
+      "allowedPaths": [
+        "Experiments/SP03WakeAndTime/**",
+        "docs/technical/spikes/PRD-01-SP-03-wake-time-boundaries.md"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        "LunchTime/Core/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "잠자기·복귀, 네트워크 전환, 인위적 응답 지연과 시계 차이 시험 행렬 및 타임라인을 익명화해 첨부한다.",
+        "각 한도에서 시작·중단 횟수와 경과 시간이 드러나는 계측 결과를 남긴다.",
+        "node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs"
+      ],
+      "documentImpact": [
+        "허용 시계 차이와 검증 방식은 docs/policies/02_replication_consistency_retention.md의 POL-02-R-08에 반영해야 한다.",
+        "측정 결과가 지원 동작이나 사용자 상태를 바꾸면 PRD-01과 POL-01도 함께 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-005",
+      "title": "자동 신뢰·암호화 위협 모델 스파이크",
+      "type": "type:spike",
+      "areas": [
+        "area:security",
+        "area:p2p"
+      ],
+      "priority": "P0",
+      "phase": "Discovery",
+      "order": 5,
+      "dependsOn": [],
+      "overview": "지원 네트워크 자동 신뢰를 유지하면서 기기 키, 상호 인증, 전송·저장 암호화와 내부 공격자 경계를 검증한다.",
+      "context": "지원 네트워크는 강한 사용자 인증이 아니다. 패킷 도청과 로컬 파일 탈취는 줄여야 하지만 자동 신뢰된 악성 Peer가 정당한 읽기 범위에서 평문을 보는 위험까지 막는다고 표현해서는 안 된다.",
+      "goal": "키 수명과 인증 채널, 저장 암호화, 네트워크 밖 차단 및 수용하는 위협이 재현 가능한 시험과 보안 검토로 승인된다.",
+      "scope": {
+        "include": [
+          "기기 키 생성·저장·교환·회전과 재설치 처리 비교",
+          "인증된 암호화 채널과 로컬 저장 암호화 검증",
+          "지원 네트워크 밖 Peer, 위조·재전송·중간자와 내부 Peer 위협 시험"
+        ],
+        "exclude": [
+          "사내 계정 또는 개인 신원 인증",
+          "자동 신뢰된 내부 악성 Peer의 허용 읽기 자체를 차단하는 기능"
+        ]
+      },
+      "acceptance": [
+        "선택 후보별 키 수명, Keychain 경계, 회전·재설치 실패 모드가 비교되고 권고안이 있다.",
+        "패킷 캡처에서 응용 데이터 평문이 보이지 않고 위·변조 또는 재전송된 메시지가 적용되지 않는 실험 증거가 있다.",
+        "암호화 데이터 파일만 복사해서 구조화 데이터 원문을 읽을 수 없음을 검증한다.",
+        "지원 범위 밖 Peer는 운영 데이터를 받지 않으며 인증·복호화 실패가 동기화 성공으로 표시되지 않는다.",
+        "자동 신뢰가 방어하지 않는 내부 위협과 UI 표현 금지사항이 명시된다."
+      ],
+      "traceability": [
+        "PRD-01-SP-04",
+        "PRD-01-FR-12",
+        "PRD-01-AC-08",
+        "POL-03-R-01",
+        "POL-03-R-02",
+        "POL-03-R-03",
+        "POL-03-R-04",
+        "POL-03-R-06",
+        "POL-03-R-07",
+        "D-20",
+        "D-35",
+        "F-57",
+        "F-71",
+        "F-72"
+      ],
+      "allowedPaths": [
+        "Experiments/SP04Security/**",
+        "docs/technical/spikes/PRD-01-SP-04-security-auto-trust.md"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        "LunchTime/Core/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "위협 모델, 선택지 비교와 독립 보안 검토 결과를 보고서에 첨부한다.",
+        "패킷 캡처, 파일 탈취, 위조·재전송과 네트워크 밖 Peer 시험의 민감하지 않은 판정 증거를 남긴다.",
+        "node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs"
+      ],
+      "documentImpact": [
+        "선택한 보안 보장과 한계가 기존 계약과 다르면 docs/prd/01_lunchtime_mvp.md와 docs/policies/03_security_and_trust.md를 먼저 갱신한다.",
+        "구현 선택만 확정하면 POL-03-R-07 게이트 충족 증거를 연결하고 제품 문서는 유지한다."
+      ]
+    },
+    {
+      "key": "LT-006",
+      "title": "보존·채팅 메모리·히스토리 경계 스파이크",
+      "type": "type:spike",
+      "areas": [
+        "area:data"
+      ],
+      "priority": "P0",
+      "phase": "Discovery",
+      "order": 6,
+      "dependsOn": [],
+      "overview": "14일 운영 데이터, tombstone·고아 데이터, 메모리 전용 채팅, 종료 스냅샷 재계산과 장기 최소 히스토리의 경계를 검증한다.",
+      "context": "중앙 삭제를 보장할 수 없는 P2P 환경에서는 만료 데이터가 다시 나타날 수 있다. 반면 채팅을 지속 저장하거나 불완전 Room을 성공 히스토리에 반영하면 승인된 제품 계약을 위반한다.",
+      "goal": "데이터 종류별 저장 위치·만료·재수집·재계산 규칙과 진단 시 평문 비노출 조건이 시험 가능한 계약으로 승인된다.",
+      "scope": {
+        "include": [
+          "14일 TTL, tombstone과 garbage collection 안전 조건",
+          "앱 종료·비정상 종료 뒤 채팅 메모리 경계",
+          "Recent Room 재계산과 최소 히스토리 병합·무효화"
+        ],
+        "exclude": [
+          "채팅 영구 보존 또는 완전 복구",
+          "모든 Peer 복제본의 즉시·영구 삭제 보장"
+        ]
+      },
+      "acceptance": [
+        "운영 이벤트와 tombstone이 최대 14일 창을 벗어나면 정리되고 오래된 Peer 입력이 활성 세션을 부활시키지 않는다.",
+        "정상·비정상 종료 뒤 앱 저장소와 로그에 채팅 본문이 남지 않는 검증 방법이 있다.",
+        "불완전 종료는 성공 히스토리를 만들지 않고 늦은 유효 이벤트에 따라 상세와 성공 레코드를 생성·무효화·복구할 수 있다.",
+        "가게 키의 원문 일치와 로컬 이용 횟수 비병합 규칙이 서로 다른 Peer fixture에서 검증된다.",
+        "OS 메모리 영역처럼 앱이 보장할 수 없는 삭제 한계가 보고서에 기록된다."
+      ],
+      "traceability": [
+        "PRD-01-SP-05",
+        "PRD-01-FR-04",
+        "PRD-01-FR-07",
+        "PRD-01-FR-08",
+        "PRD-01-FR-11",
+        "PRD-01-AC-04",
+        "PRD-01-AC-05",
+        "PRD-01-AC-06",
+        "PRD-01-AC-07",
+        "POL-02-R-06",
+        "POL-03-R-04",
+        "D-11",
+        "D-18",
+        "D-19",
+        "D-28",
+        "D-34",
+        "F-52",
+        "F-59",
+        "F-68",
+        "F-69",
+        "F-70"
+      ],
+      "allowedPaths": [
+        "Experiments/SP05DataBoundary/**",
+        "docs/technical/spikes/PRD-01-SP-05-data-boundary.md"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "시각 이동, 앱 종료, 늦은 Peer 재연결과 히스토리 병합 fixture의 실행 결과를 보고서에 첨부한다.",
+        "채팅 평문이 저장 파일과 진단 로그에 없음을 확인하는 검사 절차를 기록한다.",
+        "node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs"
+      ],
+      "documentImpact": [
+        "기술 한계가 사용자 보존·복구 계약을 바꾸면 PRD-01과 POL-02·POL-03을 함께 갱신한다.",
+        "기존 계약을 충족하면 POL-02-R-06과 POL-03-R-04의 검증 증거로 보고서를 연결한다."
+      ]
+    },
+    {
+      "key": "LT-007",
+      "title": "불변 운영 이벤트 envelope 계약 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:data",
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 7,
+      "dependsOn": [
+        "LT-001",
+        "LT-003"
+      ],
+      "overview": "모든 구조화 변경이 공유하는 불변 event envelope, 식별·리비전·논리 순서와 검증 실패 모델을 구현한다.",
+      "context": "복제, ACK와 projection이 서로 다른 이벤트 의미를 사용하면 병렬 구현이 수렴하지 않는다. 이 작업이 공용 이벤트 계약의 단일 소유자이며 후속 도메인은 이 계약을 확장하지 않고 payload만 정의한다.",
+      "goal": "이벤트를 encode/decode/replay해도 식별과 순서 정보가 보존되고 잘못된 envelope가 projection 전에 거부된다.",
+      "scope": {
+        "include": [
+          "event ID, 운영일·Room, 사용자·기기, 대상·리비전과 논리 순서 모델",
+          "불변 encode/decode 계약과 검증 오류",
+          "수정·삭제를 새 이벤트 또는 tombstone으로 표현하는 기반"
+        ],
+        "exclude": [
+          "도메인별 payload와 충돌 승자 규칙",
+          "transport 암호화와 로컬 persistence"
+        ]
+      },
+      "acceptance": [
+        "모든 필수 식별 필드가 없는 이벤트는 decode 또는 적용 전에 명시적 오류로 거부된다.",
+        "encode 후 decode한 이벤트의 ID, revision, author와 logical order가 정확히 보존된다.",
+        "같은 ID를 두 번 입력해도 event collection에는 한 번만 존재한다.",
+        "기존 이벤트 객체를 제자리에서 수정하는 공개 API가 없고 수정·삭제가 별도 이벤트로 표현된다.",
+        "고정 fixture의 직렬화 호환성과 결정적 정렬 결과를 단위 테스트로 증명한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-03",
+        "PRD-01-FR-09",
+        "PRD-01-FR-10",
+        "PRD-01-AC-02",
+        "PRD-01-AC-03",
+        "POL-02-R-01",
+        "POL-02-R-05",
+        "D-03",
+        "D-17",
+        "F-50",
+        "F-55"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Events/**",
+        "LunchTimeTests/Core/Events/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Projection/**",
+        "LunchTime/Core/Transport/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/CoreEventsTests",
+        "fixture round-trip, 중복 ID, 누락 필드와 결정적 정렬 테스트 이름 및 결과를 PR에 기록한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "승인된 이벤트 최소 식별 계약의 구현이므로 제품 문서 변경은 예상하지 않는다.",
+        "필드 또는 사용자 관찰 가능 충돌 의미가 달라지면 POL-02-R-01과 PRD-01을 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-008",
+      "title": "기기·사용자 식별과 Keychain 키 수명 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:security",
+        "area:data"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 8,
+      "dependsOn": [
+        "LT-001",
+        "LT-005"
+      ],
+      "overview": "설치·기기에 결합한 사용자 ID와 기기 ID, 비대칭 키와 로컬 암호화 키를 생성하고 Keychain에서 수명 주기대로 관리한다.",
+      "context": "닉네임은 중복 가능한 표시값이며 권한 주체가 될 수 없다. 개인키나 데이터 키가 설정 파일에 남거나 재설치 뒤 기존 소유권을 이어받으면 보안·권한 계약이 깨진다.",
+      "goal": "첫 실행에서 안정적인 불투명 식별자와 키가 생성·재사용되고, 닉네임 변경과 재설치 경계가 권한 계약대로 동작한다.",
+      "scope": {
+        "include": [
+          "기기 ID, 사용자 ID와 기기 키 연결",
+          "Keychain 기반 개인키·데이터 키 저장과 접근 오류",
+          "첫 닉네임 설정 전 네트워크·Room 쓰기 차단을 위한 readiness 계약"
+        ],
+        "exclude": [
+          "여러 Mac의 동일 사용자 계정 연결",
+          "Peer transport handshake와 설정 화면 UI"
+        ]
+      },
+      "acceptance": [
+        "첫 실행은 서로 다른 불투명 사용자 ID·기기 ID와 키를 만들고 재실행은 같은 값을 안전하게 재사용한다.",
+        "개인키와 데이터 키가 일반 설정, 소스, 로그 또는 암호화 데이터 파일에 평문으로 기록되지 않는다.",
+        "닉네임을 바꿔도 사용자 ID와 기존 소유권 식별자가 변하지 않는다.",
+        "식별 정보를 잃은 재설치 fixture는 기존 사용자를 추측해 복구하지 않고 새 사용자로 판정된다.",
+        "Keychain 접근 실패는 쓰기 가능 상태로 진행하지 않고 명시적 오류로 반환된다."
+      ],
+      "traceability": [
+        "PRD-01-FR-10",
+        "PRD-01-FR-12",
+        "PRD-01-AC-08",
+        "POL-03-R-02",
+        "POL-03-R-04",
+        "D-20",
+        "D-35",
+        "D-42",
+        "F-56",
+        "F-72"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Identity/**",
+        "LunchTime/Core/KeyManagement/**",
+        "LunchTimeTests/Core/Identity/**",
+        "LunchTimeTests/Core/KeyManagement/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/Transport/**",
+        "LunchTime/Features/Settings/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/IdentityTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/KeyManagementTests",
+        "테스트용 Keychain 격리 환경에서 생성·재실행·접근 실패·재설치 시나리오 증거를 남긴다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "POL-03-R-02와 POL-03-R-04를 구현하므로 제품 문서 변경은 예상하지 않는다.",
+        "키 손실 또는 재설치 시 사용자 결과가 달라지면 PRD-01과 POL-03을 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-009",
+      "title": "운영일·마감·14:30 lifecycle clock 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 9,
+      "dependsOn": [
+        "LT-001",
+        "LT-004",
+        "LT-007"
+      ],
+      "overview": "Asia/Seoul 운영일, Room 마감, 14:30 쓰기 종료와 시계 신뢰 차단을 테스트 가능한 clock 기반 파생 상태로 구현한다.",
+      "context": "시간 경계는 특정 Peer 이벤트가 아니라 각 기기가 계산해야 한다. 실제 시스템 시각에 직접 결합하면 11:00·마감·14:30 경계와 잠자기 복귀를 결정적으로 시험할 수 없다.",
+      "goal": "주입 가능한 시각과 신뢰 판정으로 대기·활성·최종 확정 중·종료 및 마감 상태가 모든 경계값에서 동일하게 계산된다.",
+      "scope": {
+        "include": [
+          "Asia/Seoul 운영일과 일일 상태 파생",
+          "마감 입력 유효성 및 도달 후 재개 금지",
+          "시계 불신 시 시간 의존 쓰기 차단 결과"
+        ],
+        "exclude": [
+          "finalization 데이터 대조 실행",
+          "MenuBar 또는 Room UI"
+        ]
+      },
+      "acceptance": [
+        "10:59:59, 11:00:00, 14:29:59와 14:30:00 fixture에서 허용 쓰기와 일일 상태가 정책 표와 일치한다.",
+        "마감은 현재보다 늦고 14:30보다 빠른 값만 승인하며 도달한 마감을 뒤로 미뤄 모집을 다시 열지 않는다.",
+        "14:30 이후 재실행·복귀 fixture에서도 사용자 쓰기를 다시 허용하지 않는다.",
+        "허용치를 벗어난 시계 판정은 참여 승인, 마감 수정과 주문 상태 변경 capability를 차단하지만 열람 요청은 허용한다.",
+        "14:30 종료 이벤트가 중복 호출돼도 한 번의 파생 전이로 관찰된다."
+      ],
+      "traceability": [
+        "PRD-01-FR-01",
+        "PRD-01-FR-02",
+        "PRD-01-AC-05",
+        "PRD-01-AC-09",
+        "POL-01-R-01",
+        "POL-01-R-03",
+        "POL-01-R-04",
+        "POL-02-R-08",
+        "D-08",
+        "D-10",
+        "D-14",
+        "D-31",
+        "D-38",
+        "D-39",
+        "F-11",
+        "F-17",
+        "F-40",
+        "F-64"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Clock/**",
+        "LunchTime/Domain/DailyLifecycle/**",
+        "LunchTimeTests/Core/Clock/**",
+        "LunchTimeTests/Domain/DailyLifecycle/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/Sync/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/DailyLifecycleTests",
+        "경계값, timezone, 복귀와 불신 시계 fixture의 판정 표를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "PRD-01-FR-01과 POL-01-R-01·POL-01-R-04, POL-02-R-08의 구현이며 제품 문서 변경은 예상하지 않는다.",
+        "PRD-01-SP-03 결과로 허용치가 확정됐다면 관련 Policy와 결정 문서가 함께 반영됐는지 확인한다."
+      ]
+    },
+    {
+      "key": "LT-010",
+      "title": "암호화 이벤트 저장소와 14일 정리 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:data",
+        "area:security"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 10,
+      "dependsOn": [
+        "LT-001",
+        "LT-005",
+        "LT-006",
+        "LT-007",
+        "LT-008"
+      ],
+      "overview": "구조화 이벤트와 tombstone을 앱 전용 키로 암호화해 저장하고 최대 14일 창의 정리와 오래된 데이터 부활 방지를 구현한다.",
+      "context": "앱 재시작과 Peer 복구를 위해 중요 데이터는 지속돼야 하지만 평문 파일은 허용되지 않는다. 각 Peer가 독립 삭제하므로 정리 후 오래된 입력이 활성 상태를 되살리지 않는 규칙도 필요하다.",
+      "goal": "저장 파일 탈취로 원문을 읽을 수 없고, 재시작·만료·오래된 Peer fixture에서 정책대로 이벤트 집합이 복구·정리된다.",
+      "scope": {
+        "include": [
+          "암호화 append-only 이벤트와 tombstone 저장·조회",
+          "현재 운영일과 직전 13개 운영일 기준 정리",
+          "손상·복호화 실패와 오래된 데이터 재유입 처리"
+        ],
+        "exclude": [
+          "채팅 본문 persistence",
+          "장기 최소 가게 히스토리와 Peer transport"
+        ]
+      },
+      "acceptance": [
+        "정상 재실행에서 저장한 이벤트 ID와 tombstone을 모두 복구하고 평문 필드가 저장 파일에 나타나지 않는다.",
+        "키 부재·복호화 실패·손상 레코드는 적용되지 않고 확인 가능한 오류로 보고된다.",
+        "14일 창 밖 이벤트와 tombstone이 정리되며 현재·직전 13개 운영일 fixture는 유지된다.",
+        "만료된 이전 이벤트를 다시 제시해도 종료 세션이나 삭제된 Room이 활성 상태로 부활하지 않는다.",
+        "정리 작업은 중단 후 다시 실행해도 데이터 손상 없이 같은 결과로 수렴한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-11",
+        "PRD-01-FR-12",
+        "PRD-01-AC-04",
+        "PRD-01-AC-05",
+        "PRD-01-AC-08",
+        "POL-02-R-06",
+        "POL-03-R-04",
+        "D-18",
+        "D-20",
+        "F-52",
+        "F-68",
+        "F-72"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Persistence/EventStore/**",
+        "LunchTimeTests/Core/Persistence/EventStore/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/KeyManagement/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Domain/History/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/EncryptedEventStoreTests",
+        "저장 파일 문자열 검사, 키 오류, 14일 경계, 중단 복구와 오래된 재유입 fixture 결과를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "POL-02-R-06과 POL-03-R-04의 구현이며 보존 또는 암호화 사용자 계약을 바꾸지 않는다.",
+        "PRD-01-SP-05 결론이 기존 TTL·GC 규칙을 바꾸면 제품 문서를 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-011",
+      "title": "지원 네트워크 gate와 Peer discovery 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:p2p",
+        "area:security"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 11,
+      "dependsOn": [
+        "LT-001",
+        "LT-002",
+        "LT-008"
+      ],
+      "overview": "지원 네트워크를 판별하고 최소 메타데이터만으로 LunchTime Peer를 발견하며 범위 밖 장치와의 데이터 교환을 fail-closed로 차단한다.",
+      "context": "Peer discovery는 데이터 열람 경계의 첫 관문이다. 네트워크 판별이 불확실한데도 연결을 진행하거나 발견 패킷에 사용자 데이터를 넣으면 자동 신뢰와 개인정보 정책을 위반한다.",
+      "goal": "지원 환경의 Peer만 안정적인 기기 ID로 발견되고, 비지원·불확실 환경에서는 운영 데이터 연결이 만들어지지 않는다.",
+      "scope": {
+        "include": [
+          "PRD-01-SP-01 결과에 따른 지원 네트워크 판별 abstraction",
+          "최소 discovery advertisement, browse와 Peer 생명주기",
+          "네트워크 변경 시 발견 결과 폐기·재평가"
+        ],
+        "exclude": [
+          "Room 데이터 교환과 암호화 transport payload",
+          "실제 네트워크 식별자를 소스에 하드코딩하는 방식"
+        ]
+      },
+      "acceptance": [
+        "지원 환경 fixture에서는 두 Peer가 서로의 안정적인 기기 ID와 연결 endpoint를 발견한다.",
+        "비지원 또는 판별 불가 환경에서는 Peer가 자동 신뢰되지 않고 운영 데이터 session을 시작할 수 없다.",
+        "discovery packet과 진단 로그에 닉네임, Room, 가게, 메뉴, 채팅 또는 링크가 포함되지 않는다.",
+        "네트워크가 바뀌면 기존 발견 결과를 그대로 신뢰하지 않고 새 bounded discovery를 시작한다.",
+        "중복 광고는 같은 기기 ID의 한 Peer 항목으로 합쳐진다."
+      ],
+      "traceability": [
+        "PRD-01-SP-01",
+        "PRD-01-FR-09",
+        "PRD-01-FR-12",
+        "PRD-01-AC-03",
+        "PRD-01-AC-08",
+        "POL-02-R-02",
+        "POL-03-R-01",
+        "POL-03-R-03",
+        "D-15",
+        "D-20",
+        "D-35",
+        "F-13",
+        "F-49",
+        "F-57",
+        "F-63"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/NetworkEnvironment/**",
+        "LunchTime/Core/Discovery/**",
+        "LunchTimeTests/Core/NetworkEnvironment/**",
+        "LunchTimeTests/Core/Discovery/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Identity/**",
+        "LunchTime/Core/Transport/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/PeerDiscoveryTests",
+        "지원·비지원·전환·중복 광고 fixture와 discovery payload 필드 검사 결과를 PR에 첨부한다.",
+        "실기기 smoke 결과는 실제 네트워크 식별자를 제거한 행렬로 남긴다."
+      ],
+      "documentImpact": [
+        "PRD-01-SP-01의 승인 결과를 구현하므로 제품 문서 변경은 예상하지 않는다.",
+        "지원 판별 또는 실패 UX가 정본과 달라지면 PRD-01, POL-02와 POL-03을 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-012",
+      "title": "상호 인증 암호화 Peer transport 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:p2p",
+        "area:security"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 12,
+      "dependsOn": [
+        "LT-005",
+        "LT-008",
+        "LT-011"
+      ],
+      "overview": "발견된 Peer 사이에 기기 키 보유를 확인하는 인증된 암호화 session을 수립하고 검증된 frame만 상위 복제 계층에 전달한다.",
+      "context": "평문 연결이나 상대 키 검증 없는 연결은 도청·위조 위험을 남긴다. 반대로 handshake 실패를 정상 응답으로 세면 동기화됨 상태와 주문 전 점검이 잘못 통과할 수 있다.",
+      "goal": "인증·기밀성·무결성·재전송 방지를 통과한 frame만 수신되고 실패 연결은 명시적으로 격리된다.",
+      "scope": {
+        "include": [
+          "PRD-01-SP-04가 승인한 기기 키 기반 session handshake",
+          "암호화 frame 송수신, 무결성·재전송 검증과 종료",
+          "상위 계층이 판별할 typed transport failure"
+        ],
+        "exclude": [
+          "사용자 신원 인증 또는 수동 trust UI",
+          "event delta와 retry scheduler"
+        ]
+      },
+      "acceptance": [
+        "서로 유효한 키를 가진 Peer는 인증된 session을 만들고 round-trip payload를 교환한다.",
+        "알 수 없는 키, 변조 frame, replay frame과 복호화 실패는 payload 적용 전에 거부된다.",
+        "packet capture에서 응용 payload가 평문으로 노출되지 않는다.",
+        "handshake·frame 실패가 정상 응답이나 동기화 성공으로 보고되지 않는다.",
+        "연결 종료와 취소가 정해진 시간 안에 자원을 해제하며 내부 무한 retry를 시작하지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-SP-04",
+        "PRD-01-FR-09",
+        "PRD-01-FR-12",
+        "PRD-01-AC-08",
+        "POL-03-R-02",
+        "POL-03-R-03",
+        "POL-03-R-07",
+        "D-20",
+        "F-71"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Transport/**",
+        "LunchTimeTests/Core/Transport/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Identity/**",
+        "LunchTime/Core/Discovery/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Core/Sync/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/AuthenticatedTransportTests",
+        "정상 handshake, 키 불일치, 변조, replay, 취소와 timeout fixture 결과를 PR에 첨부한다.",
+        "민감 payload를 사용하지 않은 packet-capture 판정 증거를 남긴다."
+      ],
+      "documentImpact": [
+        "POL-03-R-02·POL-03-R-03과 PRD-01-SP-04 결과의 구현이며 제품 보장 범위를 확장하지 않는다.",
+        "인증 또는 암호화 한계가 달라지면 POL-03과 PRD-01-FR-12를 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-013",
+      "title": "version summary·delta·tombstone 복제 엔진 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:p2p",
+        "area:data"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 13,
+      "dependsOn": [
+        "LT-003",
+        "LT-007",
+        "LT-010",
+        "LT-012"
+      ],
+      "overview": "Peer별 장부 요약을 비교해 누락 이벤트와 tombstone만 요청·검증·저장하는 leaderless delta 복제 엔진을 구현한다.",
+      "context": "전체 장부를 매번 덮어쓰거나 특정 생성자를 정본으로 삼으면 오프라인 복구와 생성자 이탈을 견디지 못한다. 삭제 표식을 빼면 오래된 Peer가 취소·철회 데이터를 부활시킬 수 있다.",
+      "goal": "서로 다른 이벤트 부분집합을 가진 두 Peer가 중복 없이 같은 검증 이벤트 집합으로 수렴한다.",
+      "scope": {
+        "include": [
+          "운영일·Room별 version summary와 missing-ID 계산",
+          "delta 요청·응답, tombstone 교환과 저장",
+          "invalid event 격리와 복제 session 결과"
+        ],
+        "exclude": [
+          "도메인 projection과 사용자 충돌 선택",
+          "주기·retry scheduling과 UI 상태"
+        ]
+      },
+      "acceptance": [
+        "서로 보완적인 이벤트 집합의 두 Peer가 양방향 대조 뒤 같은 event-ID·tombstone 집합을 가진다.",
+        "이미 보유한 event ID는 재저장·재적용되지 않고 필요한 delta만 요청된다.",
+        "tombstone이 있는 대상은 오래된 원본 이벤트를 다시 받아도 활성 데이터로 부활하지 않는다.",
+        "검증 실패 이벤트는 저장·재전파하지 않고 session 결과에 확인 필요 원인으로 남는다.",
+        "동일 fixture를 다른 전송 순서와 중복 횟수로 실행해도 최종 집합 hash가 같다."
+      ],
+      "traceability": [
+        "PRD-01-SP-02",
+        "PRD-01-FR-09",
+        "PRD-01-FR-10",
+        "PRD-01-FR-11",
+        "PRD-01-AC-03",
+        "PRD-01-AC-04",
+        "PRD-01-AC-05",
+        "POL-02-R-01",
+        "POL-02-R-05",
+        "POL-02-R-06",
+        "D-03",
+        "D-16",
+        "D-18",
+        "D-31",
+        "F-50",
+        "F-54",
+        "F-68"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Replication/**",
+        "LunchTimeTests/Core/Replication/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/Persistence/**",
+        "LunchTime/Core/Transport/**",
+        "LunchTime/Core/Projection/**",
+        "LunchTime/Core/Sync/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/ReplicationEngineTests",
+        "분리·재결합, delta-only, 중복, tombstone 부활 방지와 invalid event fixture 결과를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "POL-02-R-01·POL-02-R-05·POL-02-R-06과 PRD-01-SP-02 결과의 구현이며 제품 문서 변경은 예상하지 않는다.",
+        "복제 보장 또는 삭제 결과가 달라지면 PRD-01과 POL-02를 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-014",
+      "title": "리비전 ACK ledger와 동기화 상태 판정 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:p2p",
+        "area:data"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 14,
+      "dependsOn": [
+        "LT-003",
+        "LT-013"
+      ],
+      "overview": "정확한 리비전 저장 ACK와 현재 대조 범위를 기록해 네 가지 안정 상태와 별도 동기화 중 활동을 판정한다.",
+      "context": "네트워크 전송 성공은 Peer 저장 확인이 아니다. 과거 오프라인 Peer와 현재 정상 응답 Peer를 구분하지 않으면 ACK 없는 메뉴를 복제됨으로 보이거나 동기화됨을 영원히 막을 수 있다.",
+      "goal": "리비전별 증거와 현재 session 결과만으로 저장됨·복제됨·동기화됨·확인 필요가 결정적으로 계산된다.",
+      "scope": {
+        "include": [
+          "event revision별 Peer ACK ledger",
+          "정상 응답 범위와 대조 결과를 입력받는 상태 판정",
+          "동기화 중 activity와 안정 상태의 분리"
+        ],
+        "exclude": [
+          "Peer 발견·건강 판정 구현",
+          "주문 완료 정책과 화면 표현"
+        ]
+      },
+      "acceptance": [
+        "ACK가 없으면 로컬 저장됨, 한 다른 Peer의 정확한 revision ACK가 있으면 복제됨으로 판정한다.",
+        "현재 정상 응답 Peer와 summary 대조가 끝난 경우에만 동기화됨을 판정하고 과거 오프라인 Peer만으로 막지 않는다.",
+        "인증·복호화 실패, 서로 다른 최신 summary 또는 session 한도 소진은 확인 필요 원인을 보존한다.",
+        "동기화 중은 기존 안정 상태를 지우지 않는 독립 activity 값으로 노출된다.",
+        "다른 revision의 ACK는 최신 revision의 복제 증거로 재사용되지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-SP-02",
+        "PRD-01-FR-03",
+        "PRD-01-FR-06",
+        "PRD-01-FR-09",
+        "PRD-01-FR-10",
+        "PRD-01-AC-02",
+        "PRD-01-AC-03",
+        "PRD-01-AC-09",
+        "POL-02-R-03",
+        "POL-02-R-04",
+        "D-17",
+        "D-29",
+        "D-30",
+        "D-32",
+        "F-58",
+        "F-66",
+        "F-67"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Replication/Acknowledgements/**",
+        "LunchTime/Core/SyncStatus/**",
+        "LunchTimeTests/Core/Replication/Acknowledgements/**",
+        "LunchTimeTests/Core/SyncStatus/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/Replication/Engine/**",
+        "LunchTime/Core/Peers/**",
+        "LunchTime/Domain/Order/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/SyncStatusTests",
+        "revision 불일치, offline Peer, invalid response와 activity overlay 판정 표를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "PRD-01-FR-10과 POL-02-R-03·POL-02-R-04의 구현이며 상태 이름과 의미를 바꾸지 않는다.",
+        "상태 판정 계약 변경이 필요하면 PRD-01, POL-02와 D-32를 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-015",
+      "title": "bounded sync scheduler와 anti-entropy 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:p2p"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 15,
+      "dependsOn": [
+        "LT-004",
+        "LT-009",
+        "LT-011",
+        "LT-013",
+        "LT-014"
+      ],
+      "overview": "자동·수동 trigger와 즉시 전파, 조건부 30초 anti-entropy를 최대 3회·30초 session으로 조정하고 실패 후 무한 재시도를 막는다.",
+      "context": "복귀 데이터 누락을 줄이려면 여러 trigger가 필요하지만 단순 polling과 실패 timer는 배터리·네트워크 폭주를 만든다. 모든 경로가 같은 bounded session 계약을 사용해야 한다.",
+      "goal": "각 trigger가 관찰 가능한 제한 session을 시작하고 한도 또는 14:30에서 멈추며 새 의미 있는 trigger 전에는 실패 대상을 재시도하지 않는다.",
+      "scope": {
+        "include": [
+          "앱 실행·foreground·wake·network·새 Peer·수동 trigger 조정",
+          "로컬 중요 변경 즉시 전파와 조건부 주기 대조",
+          "시도·시간 budget, 취소와 실패 대상 cooldown 상태"
+        ],
+        "exclude": [
+          "event delta 알고리즘과 화면 UI",
+          "실패 session의 무한 timer 재시작"
+        ]
+      },
+      "acceptance": [
+        "각 trigger는 최대 3회와 30초 중 먼저 도달한 지점에서 종료되는 session을 만든다.",
+        "동시에 들어온 동등 trigger는 중복 네트워크 폭주 없이 합쳐지고 새 정보가 있는 trigger는 새 session을 시작할 수 있다.",
+        "활성 또는 미해결 데이터와 정상 응답 Peer가 모두 있을 때만 성공 대조 후 30초 안에 다음 anti-entropy를 시작한다.",
+        "실패 budget을 소진한 Peer는 주기 timer만으로 다시 호출되지 않고 의미 있는 변화나 수동 요청 뒤에만 재시도된다.",
+        "14:30에는 활성 anti-entropy를 멈추며 사용자 쓰기 session이 새로 생성되지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-SP-03",
+        "PRD-01-FR-01",
+        "PRD-01-FR-09",
+        "PRD-01-FR-10",
+        "PRD-01-AC-03",
+        "PRD-01-AC-05",
+        "POL-02-R-02",
+        "POL-02-R-08",
+        "D-16",
+        "D-27",
+        "D-31",
+        "D-32",
+        "F-54",
+        "F-63",
+        "F-64",
+        "F-65"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Sync/Scheduler/**",
+        "LunchTimeTests/Core/Sync/Scheduler/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Clock/**",
+        "LunchTime/Core/Discovery/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Core/Peers/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/BoundedSyncSchedulerTests",
+        "가상 시계로 3회, 30초, 30초 주기, trigger 병합, 실패 정지와 14:30 취소 fixture를 증명한다.",
+        "테스트 suite에 무한 대기 방지용 전체 timeout을 적용하고 결과를 PR에 기록한다."
+      ],
+      "documentImpact": [
+        "PRD-01-FR-09·PRD-01-FR-10과 POL-02-R-02의 구현이며 bounded 계약을 완화하지 않는다.",
+        "PRD-01-SP-03 결과로 수치나 trigger가 바뀌면 제품 문서와 D-16·D-27·D-32를 함께 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-016",
+      "title": "결정적 projection framework 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 16,
+      "dependsOn": [
+        "LT-003",
+        "LT-007",
+        "LT-009"
+      ],
+      "overview": "검증 이벤트 집합에서 직교 상태 축과 도메인 read model을 순서 독립적으로 계산하는 projection framework와 충돌 표현 계약을 구현한다.",
+      "context": "Room을 하나의 순차 상태로 축약하거나 입력 순서에 따라 결과가 달라지면 모집·주문·동기화 상태가 손실된다. 도메인별 reducer가 공유할 결정적 replay 경계가 필요하다.",
+      "goal": "같은 이벤트 집합은 순서와 중복에 관계없이 같은 projection과 명시적 unresolved conflict를 만든다.",
+      "scope": {
+        "include": [
+          "projection input 정규화와 결정적 replay",
+          "일일·모집·주문·동기화 축을 보존하는 read model 기반",
+          "late event와 unresolved conflict 결과 타입"
+        ],
+        "exclude": [
+          "Room·메뉴·주문별 세부 reducer",
+          "event envelope와 persistence 수정"
+        ]
+      },
+      "acceptance": [
+        "같은 이벤트 집합의 모든 시험 permutation이 동일한 canonical projection을 만든다.",
+        "중복 event ID는 한 번만 적용되고 늦은 유효 이벤트는 결정된 위치에서 재계산된다.",
+        "일일, 모집, 주문과 동기화 축이 독립 필드로 유지되며 단일 enum으로 정보가 손실되지 않는다.",
+        "자동 선택 금지 충돌은 값 하나로 덮지 않고 unresolved 항목과 차단 이유를 노출한다.",
+        "projection version과 fixture가 명시돼 후속 reducer 회귀를 재현할 수 있다."
+      ],
+      "traceability": [
+        "PRD-01-SP-02",
+        "PRD-01-FR-02",
+        "PRD-01-FR-05",
+        "PRD-01-FR-09",
+        "PRD-01-AC-10",
+        "PRD-01-AC-11",
+        "POL-01-R-03",
+        "POL-01-R-04",
+        "POL-02-R-05",
+        "D-31",
+        "D-33",
+        "D-40",
+        "F-18",
+        "F-55"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Projection/**",
+        "LunchTimeTests/Core/Projection/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Domain/Room/**",
+        "LunchTime/Domain/Participation/**",
+        "LunchTime/Domain/Menu/**",
+        "LunchTime/Domain/Order/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/ProjectionFrameworkTests",
+        "permutation, duplicate, late event, independent axes와 unresolved conflict fixture hash를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "POL-01-R-03과 POL-02-R-05의 구현이며 제품 상태 의미를 바꾸지 않는다.",
+        "projection이 새 자동 충돌 선택을 요구하면 구현을 중단하고 PRD-01·POL-02 결정을 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-017",
+      "title": "Peer directory와 동기화 관측 모델 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:p2p"
+      ],
+      "priority": "P0",
+      "phase": "Foundation",
+      "order": 17,
+      "dependsOn": [
+        "LT-011",
+        "LT-014",
+        "LT-015",
+        "LT-016"
+      ],
+      "overview": "발견 Peer의 닉네임·온라인 여부·마지막 확인·동기화 상태와 14일 offline retention을 제공하는 관측 read model을 구현한다.",
+      "context": "사용자는 통신 범위를 볼 수 있어야 하지만 trust나 Room별 ACK 상세를 노출할 필요는 없다. 닉네임 중복과 과거 offline Peer가 권한·완료 판정에 영향을 주어서도 안 된다.",
+      "goal": "Peer 목록이 정책상 허용된 필드만 안정적으로 표시하고 offline 보존·재발견·중복 닉네임을 결정적으로 처리한다.",
+      "scope": {
+        "include": [
+          "Peer online/offline, last-seen와 sync status projection",
+          "중복 닉네임의 안정적인 짧은 기기 접미사",
+          "offline 14일 만료와 동일 기기 재발견 갱신"
+        ],
+        "exclude": [
+          "Connection 화면과 수동 trust 관리",
+          "Room별 보유 데이터·ACK 상세 표시"
+        ]
+      },
+      "acceptance": [
+        "같은 닉네임의 Peer 둘은 안정적인 서로 다른 짧은 접미사로 구분되고 권한 ID는 닉네임과 분리된다.",
+        "마지막 확인 뒤 최대 14일은 offline으로 남고 경계를 지나면 목록에서 제거된다.",
+        "제거 전후 같은 안정 기기 ID가 다시 발견되면 중복 항목 대신 해당 Peer 상태를 갱신한다.",
+        "offline 항목은 동기화됨 또는 주문 완료 capability를 직접 차단하지 않는다.",
+        "read model에 trust flag, key 정보와 Room별 ACK 보유 정보가 포함되지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-10",
+        "PRD-01-FR-12",
+        "PRD-01-AC-03",
+        "PRD-01-AC-08",
+        "POL-02-R-03",
+        "POL-02-R-07",
+        "POL-03-R-02",
+        "POL-04-R-07",
+        "D-32",
+        "D-35",
+        "D-43",
+        "F-56",
+        "F-58",
+        "F-63"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/Peers/**",
+        "LunchTimeTests/Core/Peers/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Discovery/**",
+        "LunchTime/Core/SyncStatus/**",
+        "LunchTime/Features/Settings/**",
+        "LunchTime/Domain/Order/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/PeerDirectoryTests",
+        "중복 nickname, 14일 전·후, 재발견과 offline 비차단 fixture 결과를 PR에 첨부한다.",
+        "read-model snapshot에 금지 필드가 없음을 schema test로 검증한다."
+      ],
+      "documentImpact": [
+        "POL-02-R-07, POL-03-R-02와 POL-04-R-07의 구현이며 표시 범위를 확장하지 않는다.",
+        "Peer 보존이나 표시 정보 변경이 필요하면 PRD-01과 관련 Policies를 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-018",
+      "title": "Room lifecycle·생성자 권한·취소 도메인 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Domain",
+      "order": 18,
+      "dependsOn": [
+        "LT-009",
+        "LT-016"
+      ],
+      "overview": "단일 가게 Room 생성, 독립 상태 축, 생성자 메타데이터 권한과 철회·전체 취소·자동 취소 전이를 도메인 reducer로 구현한다.",
+      "context": "Room은 투표 후보가 아니라 하나의 주문 그룹이다. 생성자가 떠났다고 Room이 사라지거나 관리 권한이 다른 참여자에게 암묵 승계되면 확정 정책과 충돌한다.",
+      "goal": "Room 생성부터 마감·주문 상태·취소까지 모든 권한과 잠금이 이벤트 replay에서 정책대로 계산된다.",
+      "scope": {
+        "include": [
+          "가게명·raw 링크·마감 필수 Room 생성과 생성자 자동 참여",
+          "생성자 메타데이터 수정·전체 취소 capability",
+          "생성자 철회, 마지막 참여자 철회와 취소 tombstone 결과"
+        ],
+        "exclude": [
+          "참여 ACK와 메뉴·주문 누락 점검",
+          "Room Window UI"
+        ]
+      },
+      "acceptance": [
+        "가게명, 입력 링크 또는 유효 마감이 없으면 Room 생성이 거부되고 유효 생성자는 첫 참여자가 된다.",
+        "현재 참여 중인 생성자만 진행 중·기존 마감 전 메타데이터를 바꾸고 마감 뒤 세 값이 모두 잠긴다.",
+        "생성자 철회 뒤 다른 참여자가 남으면 Room은 유지되지만 관리자 권한은 영구 종료·비승계된다.",
+        "마지막 참여자 철회 또는 유효한 생성자 전체 취소는 모집 취소와 모든 참여·메뉴 무효화 결과를 만든다.",
+        "주문 완료 Room은 완료를 먼저 되돌리지 않으면 전체 취소 또는 마지막 참여 철회를 허용하지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-02",
+        "PRD-01-FR-05",
+        "PRD-01-AC-01",
+        "PRD-01-AC-05",
+        "PRD-01-AC-10",
+        "POL-01-R-02",
+        "POL-01-R-04",
+        "POL-01-R-05",
+        "D-08",
+        "D-10",
+        "D-21",
+        "D-26",
+        "D-33",
+        "D-41",
+        "F-09",
+        "F-11",
+        "F-12",
+        "F-14",
+        "F-17",
+        "F-18",
+        "F-22",
+        "F-38",
+        "F-40"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/Room/**",
+        "LunchTimeTests/Domain/Room/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/Projection/**",
+        "LunchTime/Domain/Participation/**",
+        "LunchTime/Domain/Menu/**",
+        "LunchTime/Domain/Order/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/RoomLifecycleTests",
+        "생성, 메타데이터 잠금, 생성자 철회·재참여, 마지막 철회와 완료 상태 취소 fixture를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "PRD-01-FR-02·PRD-01-FR-05와 POL-01-R-02·POL-01-R-04·POL-01-R-05의 구현이며 상태·권한을 바꾸지 않는다.",
+        "새 관리자 승계나 예외가 필요하면 구현하지 말고 Product Definition, PRD와 POL-01을 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-019",
+      "title": "참여 ACK·하루 한 Room·충돌 해소 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:domain",
+        "area:p2p"
+      ],
+      "priority": "P0",
+      "phase": "Domain",
+      "order": 19,
+      "dependsOn": [
+        "LT-014",
+        "LT-016",
+        "LT-018"
+      ],
+      "overview": "마감 전 승인 ACK가 필요한 참여 확정, 철회와 하루 한 Room 불변식 및 분리 후 중복 참여의 수동 해소를 구현한다.",
+      "context": "ACK 없는 참여를 확정하면 다른 Peer가 참여자를 보지 못해 메뉴가 주문에서 누락될 수 있다. 네트워크 분리로 두 Room 참여가 생긴 경우 자동 승자는 사용자의 의사를 훼손한다.",
+      "goal": "참여 요청이 ACK·마감·충돌 조건에 따라 확정 또는 실패하고, 중복 참여는 사용자 선택 뒤 모든 Peer가 같은 철회 결과로 수렴한다.",
+      "scope": {
+        "include": [
+          "참여 요청·승인 ACK·마감 실패와 늦은 전파",
+          "철회와 연결 메뉴 tombstone 계약",
+          "중복 참여 감지·차단·사용자 선택 이벤트"
+        ],
+        "exclude": [
+          "메뉴 내용과 주문 완료 preflight",
+          "충돌 Room 자동 선택"
+        ]
+      },
+      "acceptance": [
+        "요청 기기가 마감 전에 정확한 승인 ACK를 받으면 참여가 확정되고 그 이벤트는 늦게 전파돼도 유효하다.",
+        "마감까지 ACK가 없으면 참여 실패가 확정되며 뒤늦은 ACK로 소급 참여하지 않는다.",
+        "확정 참여 또는 승인된 never-shared 생성자 예외 전에는 메뉴 event를 만들 수 없다.",
+        "같은 사용자 ID의 두 Room 참여가 발견되면 양쪽 메뉴 쓰기와 주문 완료가 차단되고 자동 선택하지 않는다.",
+        "사용자 선택은 나머지 참여와 활성 메뉴 tombstone을 만들고 replay 순서와 무관하게 한 Room으로 수렴한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-02",
+        "PRD-01-FR-06",
+        "PRD-01-AC-02",
+        "PRD-01-AC-09",
+        "PRD-01-AC-11",
+        "POL-01-R-02",
+        "POL-01-R-05",
+        "POL-02-R-04",
+        "POL-02-R-05",
+        "D-17",
+        "D-26",
+        "D-29",
+        "D-40",
+        "F-14",
+        "F-15",
+        "F-17",
+        "F-55",
+        "F-66",
+        "F-67"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/Participation/**",
+        "LunchTimeTests/Domain/Participation/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/Projection/**",
+        "LunchTime/Core/SyncStatus/**",
+        "LunchTime/Domain/Room/**",
+        "LunchTime/Domain/Menu/**",
+        "LunchTime/Domain/Order/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/ParticipationTests",
+        "마감 직전 ACK, 늦은 전달, ACK 부재, 철회와 network partition 중복 참여 permutation 결과를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "PRD-01-AC-09·PRD-01-AC-11과 POL-02-R-04·POL-02-R-05의 구현이며 ACK 조건을 완화하지 않는다.",
+        "새 참여 예외나 자동 선택이 필요하면 PRD-01과 Policies의 선결정 없이는 구현하지 않는다."
+      ]
+    },
+    {
+      "key": "LT-020",
+      "title": "구조화 메뉴 리비전과 본인 소유권 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:domain",
+        "area:data"
+      ],
+      "priority": "P0",
+      "phase": "Domain",
+      "order": 20,
+      "dependsOn": [
+        "LT-014",
+        "LT-018",
+        "LT-019"
+      ],
+      "overview": "필수 메뉴명과 순서 있는 옵션으로 구성된 전체 메뉴 제출을 사용자 본인 소유의 원자적 리비전으로 구현한다.",
+      "context": "옵션 일부만 전파되거나 다른 사용자가 메뉴를 덮으면 실제 주문 내용이 달라질 수 있다. 수정은 전체 제출의 새 리비전이며 새 ACK 전까지 최신 주문 가능 메뉴가 아니다.",
+      "goal": "현재 참여자 본인만 유효한 구조화 메뉴 리비전을 만들고 모든 Peer가 완전한 revision 단위로 표시한다.",
+      "scope": {
+        "include": [
+          "하나 이상의 메뉴 항목과 순서 있는 옵션 value model",
+          "전체 제출 create·replace·delete revision 이벤트",
+          "사용자 ID 기반 소유권과 분기 revision 확인 필요 결과"
+        ],
+        "exclude": [
+          "가격 계산, 배민 데이터 검증과 자유 형식 본문",
+          "메뉴 화면과 주문 요약 복사"
+        ]
+      },
+      "acceptance": [
+        "메뉴명 없는 항목과 메뉴 항목이 하나도 없는 제출은 거부되고 옵션 0개 이상과 문자열 원문·순서가 보존된다.",
+        "현재 확정 참여자 본인만 자신의 메뉴 revision을 생성·교체·삭제할 수 있다.",
+        "수정은 전체 메뉴 제출 한 revision으로 적용돼 일부 옵션만 보이는 중간 projection이 없다.",
+        "새 revision은 해당 revision ACK 전까지 로컬 저장됨이며 이전 ACK를 재사용하지 않는다.",
+        "동일 사용자 분기 revision은 조용히 마지막 쓰기를 선택하지 않고 본인 재확정 전 확인 필요로 남는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-03",
+        "PRD-01-AC-02",
+        "POL-01-R-05",
+        "POL-01-R-06",
+        "POL-02-R-04",
+        "POL-02-R-05",
+        "D-07",
+        "D-17",
+        "F-34",
+        "F-35",
+        "F-36",
+        "F-66",
+        "F-67"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/Menu/**",
+        "LunchTimeTests/Domain/Menu/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Events/**",
+        "LunchTime/Core/Projection/**",
+        "LunchTime/Core/SyncStatus/**",
+        "LunchTime/Domain/Participation/**",
+        "LunchTime/Domain/Order/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/MenuRevisionTests",
+        "입력 유효성, 옵션 순서, atomic revision, 타인 쓰기 거부, ACK 갱신과 분기 fixture 결과를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "PRD-01-FR-03과 POL-01-R-06·POL-02-R-04의 구현이며 메뉴 템플릿을 바꾸지 않는다.",
+        "새 필드나 가격 해석이 필요하면 PRD와 Policy 결정 후 별도 Issue로 분리한다."
+      ]
+    },
+    {
+      "key": "LT-021",
+      "title": "주문 전 anti-entropy와 메뉴 누락 점검 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:domain",
+        "area:p2p"
+      ],
+      "priority": "P0",
+      "phase": "Domain",
+      "order": 21,
+      "dependsOn": [
+        "LT-014",
+        "LT-016",
+        "LT-019",
+        "LT-020"
+      ],
+      "overview": "주문 완료 직전 Room 범위 대조를 실행하고 현재 참여자·메뉴 최신 리비전·ACK·충돌을 점검해 안전한 주문 snapshot만 만든다.",
+      "context": "메뉴 누락은 MVP의 최악 실패다. 화면에 보이는 로컬 목록만 복사하거나 과거 Peer의 응답을 기다리면 누락을 통과시키거나 주문을 불필요하게 영구 차단할 수 있다.",
+      "goal": "주문 기기가 현재 참여자 전원의 최신 ACK 메뉴를 보유한 경우에만 immutable preflight snapshot과 복사 가능한 요약을 제공한다.",
+      "scope": {
+        "include": [
+          "Room 관련 정상 응답 Peer 대상 preflight anti-entropy 요청",
+          "참여·메뉴·ACK·충돌·마지막 대조 체크리스트",
+          "최신 revision에 고정된 주문 snapshot과 실패 이유"
+        ],
+        "exclude": [
+          "주문 완료 event와 UI",
+          "누락 경고를 무시하는 강제 진행"
+        ]
+      },
+      "acceptance": [
+        "preflight는 Room 데이터를 보유하거나 다른 summary를 광고한 현재 정상 응답 Peer와 bounded 대조를 먼저 실행한다.",
+        "현재 참여자 전원의 확정 참여, 하나 이상 메뉴와 최신 revision ACK가 주문 기기에 없으면 실패 대상별 이유를 반환한다.",
+        "과거 offline Peer 또는 Room 무관 Peer의 미응답만으로 preflight를 차단하지 않는다.",
+        "정상 응답 Peer가 더 최신·다른 summary를 알리면 대조가 끝날 때까지 snapshot과 복사를 제공하지 않는다.",
+        "성공 snapshot의 참여자·메뉴 revision과 생성된 주문 요약이 정확히 일치하고 이후 원본 변경에도 snapshot이 변하지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-03",
+        "PRD-01-FR-06",
+        "PRD-01-AC-02",
+        "POL-02-R-03",
+        "POL-02-R-04",
+        "D-17",
+        "D-30",
+        "F-36",
+        "F-37",
+        "F-67"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/OrderPreflight/**",
+        "LunchTimeTests/Domain/OrderPreflight/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Core/SyncStatus/**",
+        "LunchTime/Domain/Participation/**",
+        "LunchTime/Domain/Menu/**",
+        "LunchTime/Domain/Order/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/OrderPreflightTests",
+        "미제출, stale revision, offline Peer, 무관 Peer, divergent summary, conflict와 성공 snapshot fixture를 PR에 첨부한다.",
+        "메뉴 누락 fixture가 우회 없이 모두 차단되는 mutation 또는 table-driven test 결과를 남긴다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-02와 POL-02-R-04의 핵심 안전 계약을 구현하므로 문서 영향 검토를 필수로 수행한다.",
+        "차단 조건을 완화하거나 새 예외를 만들지 않으며 필요하면 제품 결정을 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-022",
+      "title": "주문 완료·되돌리기와 never-shared 단독 예외 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Domain",
+      "order": 22,
+      "dependsOn": [
+        "LT-016",
+        "LT-018",
+        "LT-021"
+      ],
+      "overview": "preflight snapshot을 참조하는 주문 완료·되돌리기 event와 엄격한 never-shared 단독 Room 예외를 구현한다.",
+      "context": "주문 완료는 Room 종료가 아니라 14:30 전 가역 상태다. 다인 Room 강제 완료나 한 번 공유된 Room의 ACK 없는 단독 완료는 메뉴 누락을 숨길 수 있다.",
+      "goal": "현재 참여자만 검증 snapshot으로 완료·되돌리기를 기록하고 새 유효 데이터가 snapshot을 깨면 안전 상태로 되돌아간다.",
+      "scope": {
+        "include": [
+          "주문 완료·되돌리기 event와 처리자·시각 projection",
+          "preflight snapshot 참조·staleness 처리",
+          "never-shared 생성자 단독 Room의 로컬 완료 예외"
+        ],
+        "exclude": [
+          "14:30 finalization과 주문 이후 배달 상태",
+          "다인 Room 강제 완료"
+        ]
+      },
+      "acceptance": [
+        "현재 참여자 누구나 성공 preflight snapshot으로 14:30 전 주문 완료를 만들고 다른 사용자는 거부된다.",
+        "참여자 누구나 14:30 전 완료를 되돌릴 수 있으며 모집 마감 상태는 원래 마감에서 다시 열리지 않는다.",
+        "완료 snapshot에 없던 유효 참여·메뉴가 도착하면 14:30 전에는 진행 중·확인 필요로 돌아가 재확인을 요구한다.",
+        "ACK 없는 완료는 생성자만 유일 참여자이고 원격 발견·공유·참여·ACK 이력이 전혀 없는 Room에만 허용된다.",
+        "한 번이라도 공유된 Room과 모든 다인 Room에는 강제 완료 또는 경고 무시 경로가 없다."
+      ],
+      "traceability": [
+        "PRD-01-FR-05",
+        "PRD-01-FR-06",
+        "PRD-01-AC-01",
+        "PRD-01-AC-02",
+        "PRD-01-AC-05",
+        "POL-01-R-04",
+        "POL-01-R-05",
+        "POL-02-R-04",
+        "POL-02-R-05",
+        "D-09",
+        "D-10",
+        "D-30",
+        "D-31",
+        "D-33",
+        "F-38",
+        "F-39",
+        "F-40",
+        "F-67",
+        "F-73"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/Order/**",
+        "LunchTimeTests/Domain/Order/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Projection/**",
+        "LunchTime/Domain/Room/**",
+        "LunchTime/Domain/Participation/**",
+        "LunchTime/Domain/Menu/**",
+        "LunchTime/Domain/OrderPreflight/**",
+        "LunchTime/Domain/Finalization/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/OrderStateTests",
+        "권한, 완료·되돌리기, stale snapshot, never-shared와 once-shared 단독 Room 및 다인 강제 완료 부재 fixture를 PR에 첨부한다.",
+        "git diff --check"
+      ],
+      "documentImpact": [
+        "PRD-01-AC-01·PRD-01-AC-02·PRD-01-AC-05와 POL-01-R-04·POL-02-R-04의 구현이며 완료 예외를 확장하지 않는다.",
+        "주문 상태나 예외 조건 변경은 PRD·Policy 선행 갱신 없이는 허용하지 않는다."
+      ]
+    },
+    {
+      "key": "LT-023",
+      "title": "raw 입력 링크 QR 생성 경계 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:ui"
+      ],
+      "priority": "P1",
+      "phase": "Domain",
+      "order": 23,
+      "dependsOn": [
+        "LT-001"
+      ],
+      "overview": "사용자가 입력한 링크 문자열을 검증·정규화하지 않고 외부 서비스 없이 로컬 QR 이미지로 생성하는 독립 경계를 구현한다.",
+      "context": "MVP의 공식 Mac→휴대폰 전달은 QR 하나다. URL 유효성이나 배민 공식 여부를 추론하면 승인되지 않은 보안 의미를 만들고 원문 일치 히스토리 계약과 달라진다.",
+      "goal": "지원 문자열은 byte-for-byte 원문이 QR payload로 encode되고 실패는 링크 평가 없이 렌더링 오류로만 보고된다.",
+      "scope": {
+        "include": [
+          "raw 문자열을 입력받는 로컬 QR encoder·renderer abstraction",
+          "생성 성공 이미지와 기술적 생성 실패 결과",
+          "원문 payload round-trip fixture"
+        ],
+        "exclude": [
+          "URL parsing·trim·domain·redirect 검증과 안전 라벨",
+          "AirDrop, 공유 시트, 외부 QR 웹 서비스와 스캔 뒤 앱 동작"
+        ]
+      },
+      "acceptance": [
+        "공백·대소문자·query를 포함한 입력 문자열이 변경 없이 QR payload에서 복원된다.",
+        "URL 형식이나 domain이 예상과 달라도 별도 경고 없이 encode를 시도한다.",
+        "QR 생성을 위해 입력 문자열을 네트워크로 보내지 않는다.",
+        "지원 한계를 넘긴 입력은 QR을 표시할 수 없다는 typed failure만 반환하고 안전성·공식 여부를 판정하지 않는다.",
+        "QR payload에 Room ID, 사용자 ID, 메뉴, 채팅 또는 키가 추가되지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-02",
+        "PRD-01-FR-12",
+        "PRD-01-AC-01",
+        "PRD-01-AC-08",
+        "POL-03-R-05",
+        "POL-04-R-03",
+        "D-06",
+        "D-36",
+        "F-23",
+        "F-25",
+        "F-28",
+        "F-61"
+      ],
+      "allowedPaths": [
+        "LunchTime/Core/QRCode/**",
+        "LunchTimeTests/Core/QRCode/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Domain/Room/**",
+        "LunchTime/Domain/History/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/RawQRCodeTests",
+        "원문 round-trip, 비URL 문자열, 공백·unicode, oversized input과 금지 metadata fixture를 PR에 첨부한다.",
+        "network 호출 없이 실행됐음을 test double 또는 네트워크 차단 환경으로 증명한다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-01과 POL-03-R-05·POL-04-R-03의 구현이며 링크 검증을 추가하지 않는다.",
+        "접근성 대체 전달 흐름이 필요하면 MVP 범위 결정을 먼저 갱신하고 별도 Issue로 만든다."
+      ]
+    },
+    {
+      "key": "LT-024",
+      "title": "Room·라운지 메모리 채팅과 best-effort 복구 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:p2p",
+        "area:data"
+      ],
+      "priority": "P1",
+      "phase": "Domain",
+      "order": 24,
+      "dependsOn": [
+        "LT-003",
+        "LT-012",
+        "LT-013",
+        "LT-016",
+        "LT-019"
+      ],
+      "overview": "Room과 라운지 채팅을 프로세스 메모리에서만 보유하고 메시지 ID 중복 제거·결정적 best-effort 순서·당일 Peer 재수집을 구현한다.",
+      "context": "채팅은 주문 협의를 돕지만 구조화 데이터의 무손실 정본이 아니다. 지속 저장하면 삭제 정책을 위반하고, 완전 복구를 약속하면 살아 있는 Peer가 없는 재시작에서 지킬 수 없다.",
+      "goal": "현재 실행 중 채팅이 권한·운영일 경계를 지키며 교환되고 앱 재시작 뒤 로컬 persistence 없이 가능한 당일 메시지만 복구된다.",
+      "scope": {
+        "include": [
+          "Room·라운지 namespace, 메시지 ID와 논리 순서 모델",
+          "메모리 cache, 중복 제거와 Peer snapshot 교환",
+          "Room read/write 권한과 14:30 read-only 경계"
+        ],
+        "exclude": [
+          "채팅 파일·DB·검색 index persistence",
+          "읽음 확인, 알림, 전역 순서와 완전 전달 보장"
+        ]
+      },
+      "acceptance": [
+        "같은 메시지 ID를 여러 Peer에서 받아도 한 번만 표시하고 동일 집합은 같은 결정적 순서가 된다.",
+        "Room 채팅은 인식 Peer가 읽고 현재 참여자만 쓰며 라운지는 자동 신뢰 Peer가 읽고 쓴다.",
+        "Room과 라운지 namespace의 메시지가 서로 섞이지 않는다.",
+        "14:30 이후 새 메시지는 거부되고 현재 메모리 메시지는 read-only로 유지된다.",
+        "앱 저장소와 로그에 채팅 본문이 기록되지 않으며 새 process는 살아 있는 Peer가 있을 때만 현재 운영일 메시지를 best-effort로 다시 받는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-04",
+        "PRD-01-FR-07",
+        "PRD-01-FR-11",
+        "PRD-01-AC-04",
+        "PRD-01-AC-06",
+        "POL-02-R-05",
+        "POL-02-R-06",
+        "POL-03-R-01",
+        "POL-03-R-04",
+        "POL-04-R-03",
+        "POL-04-R-04",
+        "D-04",
+        "D-05",
+        "D-19",
+        "D-37",
+        "F-19",
+        "F-20",
+        "F-45",
+        "F-46",
+        "F-47",
+        "F-51",
+        "F-62",
+        "F-69"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/Chat/**",
+        "LunchTime/Core/ChatSync/**",
+        "LunchTimeTests/Domain/Chat/**",
+        "LunchTimeTests/Core/ChatSync/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Persistence/**",
+        "LunchTime/Core/Transport/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Domain/Participation/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/ChatDomainTests",
+        "중복·순서 permutation, 권한, namespace, 14:30, process restart와 no-peer fixture 결과를 PR에 첨부한다.",
+        "앱 저장 디렉터리와 진단 로그의 채팅 marker 부재 검사를 자동화한다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-04·PRD-01-AC-06과 POL-02-R-06·POL-04-R-03·POL-04-R-04의 구현이며 복구 보장을 확대하지 않는다.",
+        "채팅 persistence 또는 알림을 추가하려면 MVP 후속 범위로 별도 결정한다."
+      ]
+    },
+    {
+      "key": "LT-025",
+      "title": "장기 최소 가게 히스토리와 병합 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:data",
+        "area:domain"
+      ],
+      "priority": "P1",
+      "phase": "Domain",
+      "order": 25,
+      "dependsOn": [
+        "LT-006",
+        "LT-010",
+        "LT-013"
+      ],
+      "overview": "성공 주문의 최소 가게 정보를 암호화해 장기 보존하고 정확한 가게 키의 공유 필드만 Peer와 병합한다.",
+      "context": "히스토리 목적은 반복 Room 생성이다. 참여자·메뉴·채팅을 보존하거나 URL을 정규화하면 개인정보 범위와 사용자가 입력한 링크 원문 계약을 벗어난다.",
+      "goal": "성공으로 승인된 가게 레코드가 재실행 뒤 유지되고 Peer 순서와 관계없이 최소 공유 필드만 정책대로 병합된다.",
+      "scope": {
+        "include": [
+          "trim 가게명과 raw 링크 완전 일치 key",
+          "최근 완료 시각·로컬 이용 횟수 저장과 shared projection",
+          "로컬 삭제와 14일 tombstone best-effort 전파"
+        ],
+        "exclude": [
+          "Room 상세, 참여자·메뉴·채팅과 완료 처리자",
+          "URL parsing·정규화와 전 Peer 영구 삭제 보장"
+        ]
+      },
+      "acceptance": [
+        "가게명 trim 결과와 raw 링크가 모두 같은 경우에만 하나의 레코드로 합쳐진다.",
+        "공유 병합은 더 늦은 완료 시각을 선택하고 Peer 이용 횟수를 더하거나 덮어쓰지 않는다.",
+        "저장 레코드는 암호화되고 앱 재실행과 14일 운영 이벤트 정리 뒤에도 유지된다.",
+        "참여자, 메뉴, 채팅, Room 시스템 event가 history schema 또는 전송 payload에 포함되지 않는다.",
+        "로컬 삭제 뒤 tombstone은 bounded 기간 전파되지만 오래된 Peer에서 고아 레코드가 돌아올 수 있음을 결과 모델이 허용한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-08",
+        "PRD-01-FR-11",
+        "PRD-01-AC-05",
+        "PRD-01-AC-07",
+        "POL-01-R-07",
+        "POL-02-R-06",
+        "D-11",
+        "D-18",
+        "D-34",
+        "D-36",
+        "F-41",
+        "F-42",
+        "F-43",
+        "F-44",
+        "F-52",
+        "F-59",
+        "F-70"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/History/**",
+        "LunchTime/Core/Persistence/HistoryStore/**",
+        "LunchTimeTests/Domain/History/**",
+        "LunchTimeTests/Core/Persistence/HistoryStore/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Persistence/EventStore/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Domain/Room/**",
+        "LunchTime/Domain/Finalization/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/HistoryStoreTests",
+        "raw-link key, trim, merge permutation, local-count 비병합, restart·TTL과 delete/orphan fixture를 PR에 첨부한다.",
+        "schema allowlist로 금지 필드 부재를 검증한다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-07과 POL-01-R-07·POL-02-R-06의 구현이며 히스토리 필드를 확대하지 않는다.",
+        "추가 저장 필드나 삭제 보장이 필요하면 PRD와 Policy를 선행 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-026",
+      "title": "14:30 bounded finalization과 종료 결과 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:domain",
+        "area:data",
+        "area:p2p"
+      ],
+      "priority": "P0",
+      "phase": "Domain",
+      "order": 26,
+      "dependsOn": [
+        "LT-004",
+        "LT-009",
+        "LT-015",
+        "LT-016",
+        "LT-022",
+        "LT-025"
+      ],
+      "overview": "14:30 사용자 쓰기 종료 뒤 최대 120초 동안 검증된 14:30 이전 이벤트를 대조해 완료 또는 동기화 불완전 종료 snapshot을 만든다.",
+      "context": "주문 완료 표식만으로 Room을 즉시 종료할 수 없고 14:30 뒤에도 무한 대조할 수 없다. 잠든 기기도 복귀 시 쓰기를 열지 않은 채 같은 bounded finalization을 수행해야 한다.",
+      "goal": "모든 경로가 120초 안에 종료 snapshot 또는 명시적 불완전 결과를 만들고 성공 히스토리를 안전 조건에서만 반영한다.",
+      "scope": {
+        "include": [
+          "14:30·wake-late finalization orchestration과 outer budget",
+          "14:30 이전 event 유효성·주문 snapshot 완전성 판정",
+          "성공 history 생성·보류와 종료 system result"
+        ],
+        "exclude": [
+          "14:30 이후 사용자 정정 기능",
+          "Recent Room UI와 후속 late-event 재계산"
+        ]
+      },
+      "acceptance": [
+        "14:30에는 모든 사용자 쓰기를 차단한 뒤 finalization을 한 번 시작하고 정상 시각에는 늦어도 14:32에 끝난다.",
+        "14:30에 잠든 fixture는 복귀 시 쓰기를 열지 않고 그 시점부터 최대 120초로 같은 절차를 수행한다.",
+        "내부 sync session은 3회·30초 한도를 지키며 의미 있는 진전 없이 같은 실패 대상을 반복하지 않는다.",
+        "필수 최신 revision을 확인하지 못하면 종료·동기화 불완전으로 끝나고 성공 history를 만들지 않는다.",
+        "검증된 14:30 이전 event만 반영하며 주문 완료로 완전히 확정된 Room만 성공 history를 갱신한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-01",
+        "PRD-01-FR-05",
+        "PRD-01-FR-08",
+        "PRD-01-FR-11",
+        "PRD-01-AC-01",
+        "PRD-01-AC-05",
+        "POL-01-R-01",
+        "POL-01-R-04",
+        "POL-01-R-07",
+        "POL-02-R-02",
+        "POL-02-R-05",
+        "POL-02-R-06",
+        "POL-02-R-08",
+        "D-10",
+        "D-31",
+        "D-34",
+        "F-40",
+        "F-64",
+        "F-65"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/Finalization/**",
+        "LunchTimeTests/Domain/Finalization/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Clock/**",
+        "LunchTime/Core/Sync/**",
+        "LunchTime/Core/Projection/**",
+        "LunchTime/Domain/Order/**",
+        "LunchTime/Domain/History/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/FinalizationTests",
+        "14:30 awake, wake-late, 120초 timeout, late valid·invalid event, 진행 중·완료와 history 반영 fixture를 PR에 첨부한다.",
+        "가상 시계 suite가 전체 제한 안에 결정적으로 종료됨을 증명한다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-05와 POL-01-R-04·POL-02-R-06의 핵심 종료 계약을 구현하므로 문서 영향 검토를 필수로 수행한다.",
+        "120초, history 조건 또는 late-event 의미 변경은 제품 문서 선행 갱신 없이는 허용하지 않는다."
+      ]
+    },
+    {
+      "key": "LT-027",
+      "title": "Recent Room snapshot 늦은 재계산 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:data",
+        "area:domain"
+      ],
+      "priority": "P1",
+      "phase": "Domain",
+      "order": 27,
+      "dependsOn": [
+        "LT-010",
+        "LT-013",
+        "LT-016",
+        "LT-022",
+        "LT-025",
+        "LT-026"
+      ],
+      "overview": "최대 14일의 취소되지 않은 종료 Room 상세를 재구성하고 늦은 유효 이벤트로 snapshot 완전성과 성공 history를 다시 계산한다.",
+      "context": "finalization이 불완전해도 확인 가능한 상세는 숨기지 않는다. 이후 Peer에서 더 오래된 유효 데이터를 받았을 때 Room을 다시 쓰기 가능하게 만들지 않으면서 결과를 정정해야 한다.",
+      "goal": "late event가 종료 read-only snapshot과 성공 history를 결정적으로 생성·무효화·복구하고 마지막 재계산 시각을 남긴다.",
+      "scope": {
+        "include": [
+          "종료 Room 상세 projection과 완전성 상태",
+          "14:30 이전 late event 기반 read-only 재계산",
+          "성공 history 생성·무효화·복구 및 recalculated-at"
+        ],
+        "exclude": [
+          "채팅 복원과 Room 재활성화",
+          "취소 Room 상세 표시"
+        ]
+      },
+      "acceptance": [
+        "완전·불완전 종료 모두 확인된 가게·상태·참여자·메뉴·system event 상세를 채팅 없이 재구성한다.",
+        "유효한 14:30 이전 late event는 snapshot을 재계산하지만 어떤 사용자 쓰기도 다시 열지 않는다.",
+        "새 정보가 완료 조건을 깨면 기존 성공 history를 무효화하고 재확정될 때만 복구한다.",
+        "취소 Room은 Recent Room과 성공 history에 나타나지 않는다.",
+        "14일 만료 뒤 상세을 제거하며 장기 최소 history 레코드는 별도 수명으로 유지한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-08",
+        "PRD-01-FR-11",
+        "PRD-01-AC-05",
+        "PRD-01-AC-07",
+        "POL-02-R-05",
+        "POL-02-R-06",
+        "POL-04-R-06",
+        "D-28",
+        "D-31",
+        "D-34",
+        "F-41",
+        "F-42",
+        "F-68"
+      ],
+      "allowedPaths": [
+        "LunchTime/Domain/RecentRooms/**",
+        "LunchTimeTests/Domain/RecentRooms/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/Replication/**",
+        "LunchTime/Core/Persistence/**",
+        "LunchTime/Core/Projection/**",
+        "LunchTime/Domain/Finalization/**",
+        "LunchTime/Domain/History/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/RecentRoomRecomputationTests",
+        "불완전→완전, 성공→무효→복구, 취소 제외, 채팅 제외와 14일 만료 fixture를 PR에 첨부한다.",
+        "event permutation별 snapshot hash와 history 결과가 같은지 검증한다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-05·PRD-01-AC-07과 POL-02-R-06·POL-04-R-06의 구현이며 read-only 경계를 유지한다.",
+        "재계산이 사용자 쓰기나 채팅 보존을 요구하면 구현을 중단하고 제품 결정을 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-028",
+      "title": "앱 최상위 탐색·오늘 Room·새 Room 화면 구성",
+      "type": "type:feat",
+      "areas": [
+        "area:app-shell",
+        "area:ui"
+      ],
+      "priority": "P1",
+      "phase": "Surface",
+      "order": 28,
+      "dependsOn": [
+        "LT-001",
+        "LT-018"
+      ],
+      "overview": "별도 앱 창의 최상위 탐색과 오늘 Room 목록, 새 Room 생성 흐름을 구성해 후속 화면이 충돌 없이 붙을 공용 shell을 제공한다.",
+      "context": "MenuBar는 요약 진입점이고 실제 기능은 별도 창에서 수행한다. 여러 UI 작업자가 공용 navigation과 window scene을 동시에 수정하지 않도록 이 Issue가 단일 소유한다.",
+      "goal": "사용자가 앱 창에서 오늘 Room, 새 Room, 라운지, 히스토리, Recent Room과 Connection 영역으로 이동하고 유효한 새 Room을 생성한다.",
+      "scope": {
+        "include": [
+          "window scene과 최상위 navigation destination 계약",
+          "오늘 Room·취소 Room 목록과 empty/loading/error 상태",
+          "가게명·raw 링크·마감 입력 새 Room form"
+        ],
+        "exclude": [
+          "각 상세 destination 내용과 MenuBar UI",
+          "투표·사용자 정의 Room 제목·메모"
+        ]
+      },
+      "acceptance": [
+        "앱 창에서 오늘 Room, 새 Room, 라운지, 히스토리, Recent Room, Connection destination을 안정적으로 선택할 수 있다.",
+        "가게명·입력 링크·현재보다 늦고 14:30 전 마감을 입력해야 생성이 활성화된다.",
+        "생성 성공 시 생성자가 첫 참여자인 새 Room 상세로 이동하고 중복 제출로 Room을 두 번 만들지 않는다.",
+        "취소 Room은 오늘 목록에서 14:30까지 read-only 상태로 구분되며 14:30 이후 당일 활성 목록에 남지 않는다.",
+        "공용 navigation route와 window ownership이 문서화돼 후속 feature가 app manifest를 수정하지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-01",
+        "PRD-01-FR-02",
+        "PRD-01-FR-07",
+        "PRD-01-FR-08",
+        "PRD-01-FR-10",
+        "PRD-01-FR-11",
+        "PRD-01-AC-01",
+        "POL-04-R-01",
+        "D-22",
+        "D-24",
+        "F-01",
+        "F-04",
+        "F-09",
+        "F-45"
+      ],
+      "allowedPaths": [
+        "LunchTime/App/Navigation/**",
+        "LunchTime/Features/TodayRooms/**",
+        "LunchTime/Features/NewRoom/**",
+        "LunchTimeTests/Features/TodayRooms/**",
+        "LunchTimeTests/Features/NewRoom/**",
+        "LunchTimeUITests/AppNavigation/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/App/LunchTimeApp.swift",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/MenuBar/**",
+        "LunchTime/Features/Room/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/TodayRoomsFeatureTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/AppNavigationTests",
+        "모든 destination, 입력 validation, double-submit와 14:30 목록 경계의 screenshot 또는 UI test 증거를 첨부한다."
+      ],
+      "documentImpact": [
+        "POL-04-R-01과 PRD-01 사용자 흐름의 구현이며 새 Surface를 추가하지 않는다.",
+        "navigation 구조가 MVP Surface를 바꾸면 PRD-01과 POL-04를 함께 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-029",
+      "title": "MenuBar 오늘 Room 요약과 상태 경고 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:ui",
+        "area:app-shell"
+      ],
+      "priority": "P1",
+      "phase": "Surface",
+      "order": 29,
+      "dependsOn": [
+        "LT-016",
+        "LT-017",
+        "LT-018",
+        "LT-022",
+        "LT-028"
+      ],
+      "overview": "MenuBar에 오늘의 취소되지 않은 Room, 참여자 수·마감·주문 상태와 확인 필요 경고를 표시하고 별도 창으로 연결한다.",
+      "context": "MenuBar는 빠른 진입점이지 상세 입력 Surface가 아니다. 직교 상태를 단일 아이콘으로 요약하더라도 동기화 경고를 주문 완료 아래 숨겨서는 안 된다.",
+      "goal": "11:00~14:30 사용자가 MenuBar만 열어 Room 현황을 파악하고 선택한 Room의 상세 창으로 이동한다.",
+      "scope": {
+        "include": [
+          "Room별 가게명·참여자 수·마감과 상태 icon",
+          "확인 필요 overlay, 마지막 동기화 요약과 Room 열기",
+          "취소 즉시·14:30 전체 제거"
+        ],
+        "exclude": [
+          "채팅·메뉴 편집과 라운지 바로가기·읽지 않음",
+          "finalization 뒤 Room을 MenuBar에 계속 표시"
+        ]
+      },
+      "acceptance": [
+        "활성 Room별 가게명, 참여자 수, 마감과 모집 중·마감·주문 완료 요약이 projection과 일치한다.",
+        "동기화 확인 필요는 다른 상태와 동시에 눈에 띄게 표시되고 숨겨지지 않는다.",
+        "Room 선택은 동일 Room의 별도 상세 창을 열며 팝오버에서 메뉴·채팅을 편집할 수 없다.",
+        "취소 Room은 즉시, 모든 당일 Room은 14:30에 MenuBar 목록에서 제거된다.",
+        "라운지 바로가기, unread badge와 알림 요소가 MVP UI에 없다."
+      ],
+      "traceability": [
+        "PRD-01-FR-01",
+        "PRD-01-FR-10",
+        "PRD-01-AC-01",
+        "PRD-01-AC-05",
+        "POL-04-R-02",
+        "D-22",
+        "D-39",
+        "F-01",
+        "F-02",
+        "F-03"
+      ],
+      "allowedPaths": [
+        "LunchTime/Features/MenuBar/**",
+        "LunchTimeTests/Features/MenuBar/**",
+        "LunchTimeUITests/MenuBar/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/App/Navigation/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/Room/**",
+        "LunchTime/Features/Lounge/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/MenuBarFeatureTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/MenuBarTests",
+        "상태 조합, 확인 필요 overlay, 취소와 14:30 제거 snapshot을 PR에 첨부한다."
+      ],
+      "documentImpact": [
+        "PRD-01 MenuBar 흐름과 POL-04-R-02의 구현이며 후속 unread 기능을 포함하지 않는다.",
+        "표시 정보나 제거 시각 변경이 필요하면 PRD-01과 POL-04를 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-030",
+      "title": "Room Window 참여·QR·시스템 상태 화면 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:ui",
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Surface",
+      "order": 30,
+      "dependsOn": [
+        "LT-017",
+        "LT-019",
+        "LT-023",
+        "LT-028"
+      ],
+      "overview": "Room Window의 가게·raw QR·마감·직교 상태, 참여·철회·충돌 해소, 참여자 목록과 시스템 이벤트 영역을 구현한다.",
+      "context": "사용자는 Room에 참여하기 전에도 내용을 읽을 수 있지만 쓰기는 권한에 따라 달라진다. 마감 직전 ACK 진행과 중복 참여 충돌은 성공으로 보이지 않게 명확히 표시해야 한다.",
+      "goal": "Room Window에서 참여 상태와 차단 이유를 이해하고 유효한 참여·철회·충돌 선택 및 QR 확인을 수행한다.",
+      "scope": {
+        "include": [
+          "Room header, raw QR, 마감·상태·sync summary",
+          "참여 요청·확인 중·실패·철회와 중복 참여 선택 UI",
+          "참여자 목록과 주요 system event feed"
+        ],
+        "exclude": [
+          "메뉴·주문 preflight UI와 채팅 message UI",
+          "가게 투표, 링크 검증과 AirDrop"
+        ]
+      },
+      "acceptance": [
+        "자동 신뢰 비참여 Peer도 Room 가게·참여자 상태를 읽지만 참여 전 메뉴·채팅·주문 쓰기 control은 사용할 수 없다.",
+        "참여 요청은 ACK 전 확인 중, 마감까지 ACK가 없으면 실패로 표시되고 늦은 확정 규칙을 따른다.",
+        "중복 참여 충돌은 두 Room과 선택지를 보이며 선택 전 관련 쓰기·주문 control을 차단한다.",
+        "QR은 입력 원문을 표시하고 형식·domain·안전 경고 또는 외부 앱 성공 표현을 하지 않는다.",
+        "참여·철회, 메타데이터 변경, 마감, 취소와 sync 경고 system event가 채팅 본문과 구분된다."
+      ],
+      "traceability": [
+        "PRD-01-FR-02",
+        "PRD-01-FR-04",
+        "PRD-01-FR-10",
+        "PRD-01-FR-12",
+        "PRD-01-AC-08",
+        "PRD-01-AC-09",
+        "PRD-01-AC-10",
+        "PRD-01-AC-11",
+        "POL-04-R-03",
+        "POL-04-R-07",
+        "D-06",
+        "D-29",
+        "D-32",
+        "D-35",
+        "F-14",
+        "F-19",
+        "F-23",
+        "F-24",
+        "F-28"
+      ],
+      "allowedPaths": [
+        "LunchTime/Features/Room/Overview/**",
+        "LunchTime/Features/Room/Participation/**",
+        "LunchTime/Features/Room/QRCode/**",
+        "LunchTimeTests/Features/Room/Overview/**",
+        "LunchTimeTests/Features/Room/Participation/**",
+        "LunchTimeUITests/RoomOverview/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/App/Navigation/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/Room/MenuOrder/**",
+        "LunchTime/Features/Room/Chat/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/RoomOverviewFeatureTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/RoomOverviewTests",
+        "비참여 읽기, ACK 상태, 충돌, raw QR, system event와 권한별 control snapshot을 PR에 첨부한다."
+      ],
+      "documentImpact": [
+        "POL-04-R-03·POL-04-R-07과 PRD-01 Room 흐름의 구현이며 투표·링크 검증을 추가하지 않는다.",
+        "새 권한이나 QR 보장 표현이 필요하면 PRD·Policy를 먼저 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-031",
+      "title": "개인 메뉴·주문 전 점검·주문 상태 화면 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:ui",
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Surface",
+      "order": 31,
+      "dependsOn": [
+        "LT-017",
+        "LT-020",
+        "LT-021",
+        "LT-022",
+        "LT-030"
+      ],
+      "overview": "Room Window에 구조화 개인 메뉴 편집, 참여자별 제출·동기화 상태, 주문 preflight·요약 복사와 완료·되돌리기 UI를 구현한다.",
+      "context": "사용자가 로컬 저장과 Peer 확인을 같은 성공으로 오인하면 메뉴가 실제 주문에서 빠질 수 있다. 복사와 주문 완료는 동일한 검증 snapshot에 묶이고 미제출·stale·충돌을 우회할 수 없어야 한다.",
+      "goal": "사용자가 자신의 메뉴를 구조적으로 제출하고 누락 위험을 확인한 뒤 검증된 최신 요약으로만 복사와 주문 완료를 수행한다.",
+      "scope": {
+        "include": [
+          "메뉴 항목·옵션 추가·수정·삭제 form과 본인 권한",
+          "참여자별 제출·네 상태·동기화 중 표시와 preflight 결과",
+          "clipboard 경고, 요약 복사, 주문 완료·되돌리기 control"
+        ],
+        "exclude": [
+          "가격 계산·배민 메뉴 자동 입력과 강제 완료",
+          "자동 clipboard 만료·삭제"
+        ]
+      },
+      "acceptance": [
+        "현재 참여자는 하나 이상의 필수 메뉴명과 순서 있는 옵션을 제출하고 타인의 메뉴를 편집할 수 없다.",
+        "참여자별 미제출, 로컬 저장됨, 복제됨, 동기화됨, 확인 필요와 동기화 중 활동이 숨김 없이 표시된다.",
+        "누락·stale·충돌·미확정 참여가 있으면 복사와 주문 완료가 비활성화되고 문제 사용자·revision과 새로고침 동작을 보여준다.",
+        "성공 preflight 뒤 복사된 요약은 snapshot의 최신 revision과 일치하며 실행 전에 평문 clipboard 잔존·자동 삭제 비보장을 알린다.",
+        "권한 있는 참여자는 14:30 전 완료·되돌리기를 수행하고 완료 상태에서는 메뉴·참여·메타데이터 입력이 잠긴다."
+      ],
+      "traceability": [
+        "PRD-01-FR-03",
+        "PRD-01-FR-05",
+        "PRD-01-FR-06",
+        "PRD-01-AC-02",
+        "PRD-01-AC-05",
+        "POL-01-R-06",
+        "POL-02-R-04",
+        "POL-03-R-04",
+        "POL-04-R-03",
+        "D-07",
+        "D-09",
+        "D-17",
+        "D-30",
+        "D-44",
+        "F-34",
+        "F-35",
+        "F-36",
+        "F-37",
+        "F-38",
+        "F-39",
+        "F-66",
+        "F-67",
+        "F-73"
+      ],
+      "allowedPaths": [
+        "LunchTime/Features/Room/MenuOrder/**",
+        "LunchTimeTests/Features/Room/MenuOrder/**",
+        "LunchTimeUITests/MenuOrder/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/App/Navigation/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/Room/Overview/**",
+        "LunchTime/Features/Room/Participation/**",
+        "LunchTime/Features/Room/Chat/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/MenuOrderFeatureTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/MenuOrderTests",
+        "권한, 모든 sync 상태, 미제출·stale·conflict 차단, clipboard 경고와 snapshot 일치 화면 증거를 첨부한다."
+      ],
+      "documentImpact": [
+        "메뉴 누락 안전 UX를 구현하므로 PRD-01-AC-02와 POL-02-R-04 영향 검토를 반드시 수행한다.",
+        "copy·완료 차단 또는 clipboard 보장 변경은 PRD-01, POL-02와 POL-03 선행 갱신 없이는 허용하지 않는다."
+      ]
+    },
+    {
+      "key": "LT-032",
+      "title": "Room 채팅과 라운지 화면 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:ui"
+      ],
+      "priority": "P1",
+      "phase": "Surface",
+      "order": 32,
+      "dependsOn": [
+        "LT-017",
+        "LT-024",
+        "LT-028"
+      ],
+      "overview": "Room Window 채팅 영역과 독립 라운지 Window를 메모리·권한·14:30 경계에 맞춰 구현한다.",
+      "context": "채팅은 구조화 주문 정보를 대체하지 않으며 Room과 라운지가 섞이면 안 된다. 재시작 뒤 복구가 불완전할 수 있으므로 과거 메시지를 영구 기록처럼 표현해서도 안 된다.",
+      "goal": "사용자가 Room 협의와 라운지 대화를 분리해 사용하고 메모리 전용·best-effort·read-only 경계를 화면에서 정확히 이해한다.",
+      "scope": {
+        "include": [
+          "Room chat message list·composer와 system event 구분",
+          "라운지 최상위 destination·message list·composer",
+          "전송·복구 진행, 마지막 sync와 14:30 read-only 상태"
+        ],
+        "exclude": [
+          "unread badge, 알림, 검색과 영구 history",
+          "MenuBar 라운지 바로가기"
+        ]
+      },
+      "acceptance": [
+        "Room 사용자 메시지와 system event가 시각적으로 구분되고 구조화 메뉴 본문을 system event에 복제하지 않는다.",
+        "Room 비참여자는 읽기만 가능하고 현재 참여자는 마감 뒤에도 14:30 전까지 메시지를 작성한다.",
+        "라운지는 Room·가게·참여·메뉴·주문 상태 없이 별도 destination에서 자동 신뢰 Peer가 읽고 쓴다.",
+        "중복 message ID는 한 번만 보이고 늦은 메시지는 결정적 위치에 삽입된다.",
+        "14:30에는 composer가 닫히고 현재 session 메모리는 read-only로 남지만 재실행 뒤 완전 복구를 약속하지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-04",
+        "PRD-01-FR-07",
+        "PRD-01-AC-04",
+        "PRD-01-AC-06",
+        "POL-04-R-03",
+        "POL-04-R-04",
+        "D-04",
+        "D-05",
+        "D-13",
+        "D-24",
+        "F-19",
+        "F-45",
+        "F-46",
+        "F-47"
+      ],
+      "allowedPaths": [
+        "LunchTime/Features/Room/Chat/**",
+        "LunchTime/Features/Lounge/**",
+        "LunchTimeTests/Features/Room/Chat/**",
+        "LunchTimeTests/Features/Lounge/**",
+        "LunchTimeUITests/ChatAndLounge/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/App/Navigation/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/MenuBar/**",
+        "LunchTime/Features/Room/MenuOrder/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/ChatAndLoungeFeatureTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/ChatAndLoungeTests",
+        "권한, namespace 분리, 중복, late insertion, 14:30와 restart 안내의 화면 증거를 첨부한다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-04·PRD-01-AC-06과 POL-04-R-03·POL-04-R-04의 구현이며 unread·알림 범위를 포함하지 않는다.",
+        "채팅 보존·접근 권한 변경은 PRD와 POL-02·POL-03·POL-04를 함께 갱신해야 한다."
+      ]
+    },
+    {
+      "key": "LT-033",
+      "title": "히스토리 재모집과 Recent Room 상세 화면 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:ui",
+        "area:data"
+      ],
+      "priority": "P1",
+      "phase": "Surface",
+      "order": 33,
+      "dependsOn": [
+        "LT-025",
+        "LT-027",
+        "LT-028"
+      ],
+      "overview": "장기 가게 히스토리의 재모집 흐름과 최대 14일 Recent Room read-only 상세를 목적이 섞이지 않게 각각 구현한다.",
+      "context": "재모집 history는 최소 가게 정보이고 Recent Room은 참여자·메뉴가 있는 제한 상세다. 둘을 합치면 불완전 Room을 재사용하거나 채팅·메뉴를 새 Room에 복사할 위험이 있다.",
+      "goal": "사용자가 성공 가게로 안전하게 새 생성 화면을 열고 종료 Room의 완전·불완전 상세를 수정 없이 확인한다.",
+      "scope": {
+        "include": [
+          "History 목록·정렬·삭제와 다시 모집 action",
+          "가게명·raw 링크 prefill 및 새 마감 확인",
+          "Recent Room 목록·상세·완전성·재계산 시각과 수동 새로고침 진입"
+        ],
+        "exclude": [
+          "이전 참여자·메뉴·채팅 복사",
+          "Recent Room에서 수정·재개·즉시 Room 생성"
+        ]
+      },
+      "acceptance": [
+        "History는 가게명, 최근 완료 시각과 로컬 이용 횟수만 보이고 불완전·취소 Room은 성공 항목에 없다.",
+        "다시 모집은 trim 가게명과 raw 링크가 채워진 생성 화면을 열며 사용자가 새 마감을 확인해야 생성된다.",
+        "이전 참여자, 메뉴, 채팅과 완료 상태가 새 Room에 복사되지 않는다.",
+        "Recent Room은 가게·상태·참여자·메뉴·system event와 완전성·마지막 재계산을 read-only로 보이고 채팅은 포함하지 않는다.",
+        "취소 Room은 Recent 목록에 없고 만료 상세 제거와 최소 history 유지가 서로 독립적으로 표시된다."
+      ],
+      "traceability": [
+        "PRD-01-FR-08",
+        "PRD-01-FR-11",
+        "PRD-01-AC-05",
+        "PRD-01-AC-07",
+        "POL-04-R-05",
+        "POL-04-R-06",
+        "D-11",
+        "D-28",
+        "D-34",
+        "D-36",
+        "F-41",
+        "F-42",
+        "F-43",
+        "F-44"
+      ],
+      "allowedPaths": [
+        "LunchTime/Features/History/**",
+        "LunchTime/Features/RecentRooms/**",
+        "LunchTimeTests/Features/History/**",
+        "LunchTimeTests/Features/RecentRooms/**",
+        "LunchTimeUITests/HistoryAndRecentRooms/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/App/Navigation/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/NewRoom/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/HistoryAndRecentRoomsFeatureTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/HistoryAndRecentRoomsTests",
+        "prefill 원문, 새 마감, 금지 복사, 불완전 상세, 취소 제외와 만료 경계 화면 증거를 첨부한다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-05·PRD-01-AC-07과 POL-04-R-05·POL-04-R-06의 구현이며 두 history 역할을 합치지 않는다.",
+        "저장 필드·재모집 자동화·상세 권한 변경은 PRD와 Policies 선행 갱신이 필요하다."
+      ]
+    },
+    {
+      "key": "LT-034",
+      "title": "Connection·Settings·수동 동기화 화면 구현",
+      "type": "type:feat",
+      "areas": [
+        "area:ui",
+        "area:p2p"
+      ],
+      "priority": "P1",
+      "phase": "Surface",
+      "order": 34,
+      "dependsOn": [
+        "LT-011",
+        "LT-015",
+        "LT-017",
+        "LT-028"
+      ],
+      "overview": "첫 닉네임 설정, Peer 목록, 연결·동기화 상태와 bounded 수동 새로고침을 제공하는 Connection / Settings 화면을 구현한다.",
+      "context": "사용자는 인식 범위와 복구 동작을 알아야 하지만 개별 ACK나 trust 상태를 관리할 필요는 없다. 수동 새로고침도 자동 session과 같은 한도를 지켜야 한다.",
+      "goal": "사용자가 허용된 Peer 정보와 동기화 문제 원인을 보고 한 번의 bounded 수동 대조를 명시적으로 시작한다.",
+      "scope": {
+        "include": [
+          "첫 닉네임 설정·표시값 변경과 쓰기 readiness",
+          "Peer nickname·online·last-seen·sync status 목록",
+          "지원 네트워크·시계 문제 안내와 수동 refresh 진행·결과"
+        ],
+        "exclude": [
+          "수동 trust 승인·차단과 Room별 ACK 상세",
+          "unbounded refresh 반복 또는 background polling control"
+        ]
+      },
+      "acceptance": [
+        "첫 닉네임 전에는 Peer 노출과 Room 쓰기 진입이 막히고 설정 뒤 활성화된다.",
+        "닉네임 변경은 표시만 갱신하며 사용자 ID·권한·기존 참여와 소유권을 바꾸지 않는다.",
+        "Peer 목록은 nickname, online/offline, last-seen, 네 sync 상태만 보이며 중복 닉네임 접미사와 14일 offline 경계를 적용한다.",
+        "수동 새로고침은 새 최대 3회·30초 session을 시작하고 진행·마지막 확인·확인 필요 결과를 표시한다.",
+        "비지원 네트워크, 시계 차이와 session 한도 소진을 서로 구분해 이유와 복구 방법을 제공한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-09",
+        "PRD-01-FR-10",
+        "PRD-01-FR-12",
+        "PRD-01-AC-03",
+        "PRD-01-AC-08",
+        "POL-02-R-02",
+        "POL-02-R-03",
+        "POL-02-R-07",
+        "POL-02-R-08",
+        "POL-03-R-02",
+        "POL-04-R-07",
+        "D-32",
+        "D-35",
+        "D-38",
+        "D-42",
+        "D-43",
+        "F-56",
+        "F-58",
+        "F-63"
+      ],
+      "allowedPaths": [
+        "LunchTime/Features/Settings/**",
+        "LunchTime/Features/Connection/**",
+        "LunchTimeTests/Features/Settings/**",
+        "LunchTimeTests/Features/Connection/**",
+        "LunchTimeUITests/ConnectionSettings/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/App/Navigation/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/Room/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/ConnectionSettingsFeatureTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/ConnectionSettingsTests",
+        "onboarding, nickname-only 변경, peer field allowlist, bounded refresh와 오류별 안내 화면 증거를 첨부한다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-03·PRD-01-AC-08과 POL-04-R-07의 구현이며 trust 관리 UI를 추가하지 않는다.",
+        "표시 필드, refresh 한도 또는 onboarding 권한 변경은 관련 PRD와 Policies를 갱신한다."
+      ]
+    },
+    {
+      "key": "LT-035",
+      "title": "주문 누락 방지 전체 흐름 release gate",
+      "type": "type:test",
+      "areas": [
+        "area:quality",
+        "area:domain"
+      ],
+      "priority": "P0",
+      "phase": "Verification",
+      "order": 35,
+      "dependsOn": [
+        "LT-013",
+        "LT-019",
+        "LT-020",
+        "LT-021",
+        "LT-022",
+        "LT-030",
+        "LT-031"
+      ],
+      "overview": "생성·참여 ACK·메뉴 revision·preflight·요약 복사·주문 완료와 취소·충돌을 다중 Peer 통합 시험으로 검증하는 release gate를 만든다.",
+      "context": "개별 단위 테스트가 통과해도 network partition과 늦은 이벤트 조합에서 메뉴가 조용히 빠질 수 있다. MVP의 최악 실패를 독립된 end-to-end gate로 막아야 한다.",
+      "goal": "지원되는 모든 핵심 주문 시나리오에서 동기화된 메뉴는 누락되지 않고 불확실한 상태는 완료·복사를 통과하지 못한다.",
+      "scope": {
+        "include": [
+          "단독·다인 Room, ACK·late delivery·menu edit·offline Peer 통합 fixture",
+          "중복 참여·Room 취소·완료·되돌리기 경쟁",
+          "주문 snapshot과 clipboard output 일치 검증"
+        ],
+        "exclude": [
+          "실제 배민 주문·결제와 UI 디자인 변경",
+          "실패를 통과시키기 위한 test-only 우회"
+        ]
+      },
+      "acceptance": [
+        "never-shared 단독 Room만 ACK 없이 완료되고 once-shared 단독·다인 Room은 필수 ACK 없이는 완료되지 않는다.",
+        "마감 전 승인·늦은 전달과 ACK 없는 참여 실패가 최종 참여자·메뉴 목록에 정확히 반영된다.",
+        "미제출, stale menu, divergent summary와 참여 충돌은 복사·완료를 차단하고 해결 뒤에만 통과한다.",
+        "과거 offline 또는 Room 무관 Peer만으로 완료를 막지 않으며 현재 더 최신 summary는 대조 전까지 차단한다.",
+        "성공한 모든 fixture에서 복사 요약과 완료 snapshot의 사용자·revision 집합이 완전히 일치한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-02",
+        "PRD-01-FR-03",
+        "PRD-01-FR-05",
+        "PRD-01-FR-06",
+        "PRD-01-AC-01",
+        "PRD-01-AC-02",
+        "PRD-01-AC-09",
+        "PRD-01-AC-10",
+        "PRD-01-AC-11",
+        "POL-01-R-02",
+        "POL-01-R-04",
+        "POL-01-R-05",
+        "POL-01-R-06",
+        "POL-02-R-03",
+        "POL-02-R-04",
+        "POL-02-R-05",
+        "D-17",
+        "D-29",
+        "D-30",
+        "D-33",
+        "D-40",
+        "F-34",
+        "F-36",
+        "F-37",
+        "F-38",
+        "F-67"
+      ],
+      "allowedPaths": [
+        "LunchTimeTests/EndToEnd/OrderSafety/**",
+        "LunchTimeUITests/EndToEnd/OrderSafety/**",
+        "Tests/Fixtures/OrderSafety/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/OrderSafetyEndToEndTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/OrderSafetyEndToEndTests",
+        "scenario matrix와 각 실패의 차단 이유, 성공 snapshot hash를 CI artifact로 남긴다."
+      ],
+      "documentImpact": [
+        "제품 동작을 바꾸지 않는 회귀 gate다. PRD-01-AC-02와 관련 Policies의 모든 조건을 시험에 포함했는지 영향 검토한다.",
+        "테스트가 정본과 충돌하면 테스트 기대값을 임의 완화하지 않고 문서·구현 불일치를 보고한다."
+      ]
+    },
+    {
+      "key": "LT-036",
+      "title": "잠자기·시간 경계·finalization 전체 흐름 release gate",
+      "type": "type:test",
+      "areas": [
+        "area:quality",
+        "area:p2p"
+      ],
+      "priority": "P0",
+      "phase": "Verification",
+      "order": 36,
+      "dependsOn": [
+        "LT-009",
+        "LT-015",
+        "LT-026",
+        "LT-027",
+        "LT-029",
+        "LT-034"
+      ],
+      "overview": "앱 실행·foreground·잠자기·네트워크 전환, 시계 차이, 14:30 종료와 late snapshot 재계산을 실제 lifecycle에 가까운 통합 gate로 검증한다.",
+      "context": "가상 clock 단위 테스트만으로 OS wake trigger와 UI 상태 연결을 증명할 수 없다. 또한 bounded 규칙이 통합 과정에서 중첩돼 30초·120초 상한을 넘지 않는지 확인해야 한다.",
+      "goal": "복귀·시간 경계의 모든 session이 한도 안에 멈추고 누락·시계 불확실성을 성공으로 숨기지 않으며 UI가 같은 결과를 표시한다.",
+      "scope": {
+        "include": [
+          "wake·foreground·network trigger와 조건부 anti-entropy 통합",
+          "시계 허용치 안·밖 쓰기와 복구",
+          "14:30 awake·sleeping finalization, MenuBar 제거와 late recomputation"
+        ],
+        "exclude": [
+          "새 retry trigger·시간 수치 변경",
+          "OS가 잠든 동안 실시간 통신 보장"
+        ]
+      },
+      "acceptance": [
+        "각 lifecycle trigger는 별도 재실행 없이 bounded sync를 시작하고 기존 안정 상태에 동기화 중을 덧붙인다.",
+        "실패 session은 3회 또는 30초에서 멈추며 새 의미 있는 trigger 전에는 주기 timer로 재시작하지 않는다.",
+        "시계 허용치 밖에서는 시간 의존 쓰기가 막히고 14:30 종료는 적용되며 정상 재대조 뒤에만 복구된다.",
+        "14:30 awake와 wake-late 모두 쓰기를 다시 열지 않고 최대 120초 결과를 만들며 MenuBar 당일 Room을 제거한다.",
+        "late valid event 재계산과 invalid-time event 격리가 Recent Room 완전성·history 결과와 일치한다."
+      ],
+      "traceability": [
+        "PRD-01-FR-01",
+        "PRD-01-FR-09",
+        "PRD-01-FR-10",
+        "PRD-01-FR-11",
+        "PRD-01-AC-03",
+        "PRD-01-AC-05",
+        "PRD-01-AC-09",
+        "POL-01-R-01",
+        "POL-01-R-04",
+        "POL-02-R-02",
+        "POL-02-R-06",
+        "POL-02-R-08",
+        "POL-04-R-02",
+        "POL-04-R-07",
+        "D-16",
+        "D-27",
+        "D-31",
+        "D-38",
+        "D-39",
+        "F-40",
+        "F-54",
+        "F-63",
+        "F-64",
+        "F-65"
+      ],
+      "allowedPaths": [
+        "LunchTimeTests/EndToEnd/WakeAndFinalization/**",
+        "LunchTimeUITests/EndToEnd/WakeAndFinalization/**",
+        "Tests/Fixtures/WakeAndFinalization/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/WakeAndFinalizationEndToEndTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/WakeAndFinalizationEndToEndTests",
+        "trigger timeline, 시도·경과 budget, UI 상태와 snapshot hash를 CI artifact로 남긴다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-03·PRD-01-AC-05·PRD-01-AC-09와 POL-02-R-02·POL-02-R-08의 회귀 gate이며 제품 동작을 바꾸지 않는다.",
+        "실기기 제약이 정본을 충족하지 못하면 지원 범위 변경을 별도 제품 결정으로 올린다."
+      ]
+    },
+    {
+      "key": "LT-037",
+      "title": "채팅 종료·재시작·Peer 복구 release gate",
+      "type": "type:test",
+      "areas": [
+        "area:quality"
+      ],
+      "priority": "P1",
+      "phase": "Verification",
+      "order": 37,
+      "dependsOn": [
+        "LT-010",
+        "LT-013",
+        "LT-024",
+        "LT-032"
+      ],
+      "overview": "Room·라운지 채팅의 메모리 전용, 중복 제거, best-effort 순서와 앱 종료·활성일 Peer 재수집 경계를 통합 검증한다.",
+      "context": "채팅이 저장소나 로그에 남는 것은 보안·보존 위반이고, 재실행 복구를 완전 전달로 오인하면 사용자가 사라진 메시지를 기대하게 된다.",
+      "goal": "채팅 본문은 process 수명을 넘겨 로컬 저장되지 않고 살아 있는 Peer가 있을 때만 현재 운영일 메시지를 정책대로 재수집한다.",
+      "scope": {
+        "include": [
+          "Room·라운지 message 중복·순서·namespace 통합 fixture",
+          "정상·강제 종료 뒤 storage·log 검사",
+          "활성 운영일 peer-present·absent 재실행과 14:30 read-only"
+        ],
+        "exclude": [
+          "완전 복구·read receipt·알림",
+          "OS swap·진단 dump 완전 삭제 보장"
+        ]
+      },
+      "acceptance": [
+        "동일 메시지 집합을 다른 순서·중복으로 받으면 같은 표시 순서와 한 개씩의 ID를 만든다.",
+        "Room과 라운지 메시지가 서로 섞이지 않고 각각의 쓰기 권한을 지킨다.",
+        "정상·강제 종료 뒤 앱 저장 파일, index와 진단 로그에서 fixture 본문을 찾을 수 없다.",
+        "활성 운영일에 살아 있는 Peer가 있으면 당일 메시지를 재수집하고 없으면 빈 결과를 허용된 상태로 표시한다.",
+        "이전 운영일과 14:30 이후 새 메시지는 복구·작성되지 않으며 현재 session 내용만 read-only로 남는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-04",
+        "PRD-01-FR-07",
+        "PRD-01-FR-11",
+        "PRD-01-AC-04",
+        "PRD-01-AC-06",
+        "POL-02-R-06",
+        "POL-03-R-04",
+        "POL-04-R-03",
+        "POL-04-R-04",
+        "D-19",
+        "D-37",
+        "F-20",
+        "F-47",
+        "F-62",
+        "F-69"
+      ],
+      "allowedPaths": [
+        "LunchTimeTests/EndToEnd/ChatRecovery/**",
+        "LunchTimeUITests/EndToEnd/ChatRecovery/**",
+        "Tests/Fixtures/ChatRecovery/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/ChatRecoveryEndToEndTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/ChatRecoveryEndToEndTests",
+        "process 종료 전후 storage·log scan 결과와 peer-present·absent UI 증거를 CI artifact로 남긴다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-04·PRD-01-AC-06과 POL-02-R-06의 회귀 gate이며 채팅 보존 정책을 변경하지 않는다.",
+        "시험 중 OS 한계를 발견하면 POL-03-R-06의 기존 경계와 비교해 문서 영향 여부를 기록한다."
+      ]
+    },
+    {
+      "key": "LT-038",
+      "title": "히스토리·Recent Room·재계산 release gate",
+      "type": "type:test",
+      "areas": [
+        "area:quality",
+        "area:data"
+      ],
+      "priority": "P1",
+      "phase": "Verification",
+      "order": 38,
+      "dependsOn": [
+        "LT-010",
+        "LT-025",
+        "LT-026",
+        "LT-027",
+        "LT-033"
+      ],
+      "overview": "14일 운영 상세, 장기 최소 history, 취소·불완전 제외와 late-event 재계산을 다중 Peer·재시작 통합 gate로 검증한다.",
+      "context": "두 history 계층의 수명과 필드가 다르다. late event가 성공 record를 잘못 남기거나 TTL 정리가 최소 history까지 지우면 재모집과 정확성이 모두 깨진다.",
+      "goal": "완료·취소·불완전·late event·만료 조합에서 Recent Room과 최소 history가 각자의 계약대로 결정적으로 유지된다.",
+      "scope": {
+        "include": [
+          "성공·진행 중·취소·불완전 finalization과 history 결과",
+          "late event 성공 record 생성·무효화·복구",
+          "14일 TTL, 장기 최소 record, exact-key Peer merge와 재모집 UI"
+        ],
+        "exclude": [
+          "채팅 history와 중앙 삭제 보장",
+          "새 history 필드"
+        ]
+      },
+      "acceptance": [
+        "성공 finalization Room만 최소 history에 반영되고 진행 중·취소·불완전 Room은 반영되지 않는다.",
+        "late event가 완료 조건을 깨고 복구하는 순서에서 성공 record가 무효화·복구되며 Recent 상세도 같은 완전성을 보인다.",
+        "14일 경계에서 운영 상세는 제거되고 최소 가게 history는 암호화 상태로 유지된다.",
+        "Peer merge는 trim 가게명과 raw 링크 exact key·최근 시각만 공유하고 로컬 이용 횟수는 바꾸지 않는다.",
+        "재모집 UI는 가게명·raw 링크만 prefill하고 새 마감 확인 전 Room을 만들지 않는다."
+      ],
+      "traceability": [
+        "PRD-01-FR-08",
+        "PRD-01-FR-11",
+        "PRD-01-AC-05",
+        "PRD-01-AC-07",
+        "POL-01-R-07",
+        "POL-02-R-06",
+        "POL-04-R-05",
+        "POL-04-R-06",
+        "D-11",
+        "D-28",
+        "D-34",
+        "D-36",
+        "F-41",
+        "F-42",
+        "F-43",
+        "F-44",
+        "F-68",
+        "F-70"
+      ],
+      "allowedPaths": [
+        "LunchTimeTests/EndToEnd/HistoryRecomputation/**",
+        "LunchTimeUITests/EndToEnd/HistoryRecomputation/**",
+        "Tests/Fixtures/HistoryRecomputation/**"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/HistoryRecomputationEndToEndTests",
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeUITests/HistoryRecomputationEndToEndTests",
+        "상태·late-event·TTL·merge 행렬과 snapshot/history hash를 CI artifact로 남긴다."
+      ],
+      "documentImpact": [
+        "PRD-01-AC-05·PRD-01-AC-07과 POL-02-R-06의 회귀 gate이며 history 역할·필드를 바꾸지 않는다.",
+        "불완전·취소·late-event 결과가 정본과 다르면 구현 defect와 문서 충돌을 구분해 보고한다."
+      ]
+    },
+    {
+      "key": "LT-039",
+      "title": "자동 신뢰·전송·저장 보안 release gate",
+      "type": "type:test",
+      "areas": [
+        "area:quality",
+        "area:security"
+      ],
+      "priority": "P0",
+      "phase": "Verification",
+      "order": 39,
+      "dependsOn": [
+        "LT-005",
+        "LT-008",
+        "LT-010",
+        "LT-011",
+        "LT-012",
+        "LT-013",
+        "LT-017",
+        "LT-024",
+        "LT-034"
+      ],
+      "overview": "지원 네트워크 자동 신뢰, 기기 식별, 전송·저장 암호화, 위조·재전송·로그·채팅·clipboard 경계를 독립 보안 gate로 검증한다.",
+      "context": "기능 시험만으로 평문 노출과 공격 입력 거부를 증명할 수 없다. 자동 신뢰의 한계를 과장하지 않으면서 MVP가 약속한 도청·파일 탈취 방어와 fail-closed 처리를 확인해야 한다.",
+      "goal": "출시 보안 gate의 모든 항목이 재현 가능한 증거로 통과하고 실패 데이터가 적용·동기화 성공으로 표시되지 않는다.",
+      "scope": {
+        "include": [
+          "지원·비지원 환경, key·handshake·packet·file 공격 시험",
+          "로그·crash metadata·discovery payload·chat storage 평문 검사",
+          "nickname identity, Peer field allowlist와 clipboard 안내 검증"
+        ],
+        "exclude": [
+          "자동 신뢰 내부 악성 Peer의 허용 평문 읽기 방어",
+          "사용자 신원 인증과 종단간 암호화 마케팅 보장"
+        ]
+      },
+      "acceptance": [
+        "packet capture에서 운영 payload 평문이 없고 변조·replay·알 수 없는 key frame은 적용되지 않는다.",
+        "암호화 저장 파일만으로 Room·메뉴·history 원문을 읽을 수 없고 Keychain 오류는 fail-closed다.",
+        "비지원 환경과 인증·복호화 실패 Peer는 정상 응답·동기화됨 범위에 포함되지 않는다.",
+        "discovery, 로그, crash metadata와 앱 종료 후 storage에 금지 평문 필드·채팅 fixture가 없다.",
+        "UI는 자동 신뢰를 사용자 인증으로 표현하지 않고 Peer allowlist 필드와 clipboard 잔존 경고를 정확히 표시한다.",
+        "독립 보안 reviewer가 POL-03-R-07 항목별 pass·fail과 잔여 위험을 승인한다."
+      ],
+      "traceability": [
+        "PRD-01-SP-04",
+        "PRD-01-FR-12",
+        "PRD-01-AC-08",
+        "POL-03-R-01",
+        "POL-03-R-02",
+        "POL-03-R-03",
+        "POL-03-R-04",
+        "POL-03-R-05",
+        "POL-03-R-06",
+        "POL-03-R-07",
+        "D-20",
+        "D-35",
+        "D-42",
+        "D-44",
+        "F-56",
+        "F-57",
+        "F-71",
+        "F-72"
+      ],
+      "allowedPaths": [
+        "LunchTimeTests/Security/**",
+        "LunchTimeUITests/Security/**",
+        "Tests/Fixtures/Security/**",
+        "docs/technical/security/mvp-gate.md"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/**",
+        "docs/prd/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/SecurityGateTests",
+        "지원·비지원, packet, file, tamper·replay, plaintext scan과 UI boundary 증거를 민감 정보 없이 첨부한다.",
+        "독립 보안 검토 결과와 POL-03-R-07 checklist를 docs/technical/security/mvp-gate.md에 기록한다."
+      ],
+      "documentImpact": [
+        "POL-03-R-07 출시 gate의 증거 문서를 추가하며 제품 보장 자체는 변경하지 않는다.",
+        "잔여 위험이 승인 경계를 넘으면 출시를 막고 PRD-01·POL-03 변경 또는 지원 범위 결정을 요청한다."
+      ]
+    },
+    {
+      "key": "LT-040",
+      "title": "파일럿 규모·전체 수용 시나리오 MVP release gate",
+      "type": "type:test",
+      "areas": [
+        "area:quality"
+      ],
+      "priority": "P0",
+      "phase": "Verification",
+      "order": 40,
+      "dependsOn": [
+        "LT-035",
+        "LT-036",
+        "LT-037",
+        "LT-038",
+        "LT-039"
+      ],
+      "overview": "초기 파일럿 규모와 최대 지원 Peer를 측정하고 PRD-01-AC-01부터 PRD-01-AC-11까지의 전체 수용 조건 및 출시 지표를 실제 운영 조건에서 최종 승인한다.",
+      "context": "지원 규모와 성공 목표는 임의 숫자로 정하지 않는다. 기능·보안 gate가 모두 통과한 뒤 실제 지연·복구·자원 사용과 점심 흐름에서 기준선과 출시 한계를 확정해야 한다.",
+      "goal": "Product Owner가 증거 기반 지원 규모·성공 gate와 모든 수용 시나리오 통과를 승인하거나 출시를 명시적으로 차단한다.",
+      "scope": {
+        "include": [
+          "PRD-01-SP-06 파일럿 인원·Peer 수·지연·복구·자원 측정",
+          "PRD-01-AC-01부터 PRD-01-AC-11까지 전체 수용 실행",
+          "성공 기준 표의 기준선·목표·기간·출처·가드레일 확정"
+        ],
+        "exclude": [
+          "증거 없는 지원 규모 약속",
+          "실패 gate를 무시한 출시와 새 제품 기능 구현"
+        ]
+      },
+      "acceptance": [
+        "선행 다섯 release gate가 모두 통과하고 미해결 P0 defect가 없는 상태에서만 파일럿을 시작한다.",
+        "지원 후보 Peer 수별 discovery, sync·wake 복구 시간, 자원 사용과 메뉴 ACK·누락 차단 결과를 반복 측정한다.",
+        "PRD-01-AC-01부터 PRD-01-AC-11까지 각 시나리오에 실행 증거와 pass·fail 판정이 있다.",
+        "성공 기준 표의 모든 빈 기준선·목표·측정 기간·출처·가드레일과 최대 지원 범위가 Product Owner 승인으로 채워진다.",
+        "가드레일 실패 또는 검증되지 않은 규모는 출시 범위에서 제외되고 지원을 과장해 표시하지 않는다.",
+        "최종 보고서는 중앙 서버를 임의 추가하지 않고 실패 시 지원 축소 또는 제품 재결정 경로를 제시한다."
+      ],
+      "traceability": [
+        "PRD-01-SP-06",
+        "PRD-01-FR-01",
+        "PRD-01-FR-02",
+        "PRD-01-FR-03",
+        "PRD-01-FR-04",
+        "PRD-01-FR-05",
+        "PRD-01-FR-06",
+        "PRD-01-FR-07",
+        "PRD-01-FR-08",
+        "PRD-01-FR-09",
+        "PRD-01-FR-10",
+        "PRD-01-FR-11",
+        "PRD-01-FR-12",
+        "PRD-01-AC-01",
+        "PRD-01-AC-02",
+        "PRD-01-AC-03",
+        "PRD-01-AC-04",
+        "PRD-01-AC-05",
+        "PRD-01-AC-06",
+        "PRD-01-AC-07",
+        "PRD-01-AC-08",
+        "PRD-01-AC-09",
+        "PRD-01-AC-10",
+        "PRD-01-AC-11",
+        "POL-01-R-01",
+        "POL-01-R-04",
+        "POL-02-R-02",
+        "POL-02-R-04",
+        "POL-02-R-06",
+        "POL-02-R-08",
+        "POL-03-R-07",
+        "POL-04-R-01",
+        "D-02",
+        "D-17",
+        "D-27",
+        "D-30",
+        "D-31",
+        "D-45",
+        "F-01",
+        "F-09",
+        "F-19",
+        "F-34",
+        "F-38",
+        "F-40",
+        "F-45",
+        "F-49",
+        "F-58",
+        "F-67",
+        "F-71",
+        "F-72"
+      ],
+      "allowedPaths": [
+        "LunchTimeTests/Release/MVP/**",
+        "LunchTimeUITests/Release/MVP/**",
+        "Tests/Fixtures/MVPRelease/**",
+        "docs/technical/release/mvp-pilot.md",
+        "docs/prd/01_lunchtime_mvp.md"
+      ],
+      "forbiddenPaths": [
+        "LunchTime.xcodeproj/**",
+        ".github/workflows/**",
+        "LunchTime/Core/**",
+        "LunchTime/Domain/**",
+        "LunchTime/Features/**",
+        "docs/policies/**"
+      ],
+      "verification": [
+        "xcodebuild test -scheme LunchTime -destination 'platform=macOS'",
+        "PRD-01-AC-01부터 PRD-01-AC-11까지의 scenario별 실행 ID, 환경·Peer 수, 결과와 artifact 링크를 최종 보고서에 기록한다.",
+        "node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs",
+        "독립 verifier와 Product Owner의 지원 규모·성공 기준·출시 판정을 docs/technical/release/mvp-pilot.md에 기록한다."
+      ],
+      "documentImpact": [
+        "PRD-01-SP-06 결과로 docs/prd/01_lunchtime_mvp.md의 성공 기준과 지원 규모를 반드시 갱신한다.",
+        "제품 동작 변경이 아니라 측정값 확정만 수행하고, 실패로 범위·계약 변경이 필요하면 별도 Product Definition 결정과 Policy 갱신을 먼저 진행한다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+name: MVP 작업
+description: AI 작업자가 독립적으로 구현하고 검증할 수 있는 작업 단위
+title: "[MVP] "
+labels:
+  - "status:todo"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        한 이슈에는 독립적으로 병합 가능한 결과 하나만 작성합니다.
+        생성 후 선행 작업은 GitHub 기본 의존 관계로 반드시 연결합니다.
+
+  - type: textarea
+    id: overview
+    attributes:
+      label: 개요
+      description: 이 작업이 무엇을 만드는지 한 단락으로 요약합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 맥락
+      description: 현재 문제, 사용자 영향과 이 작업이 필요한 이유를 설명합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 목표
+      description: 완료 후 관찰할 수 있는 결과 하나를 작성합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 작업 범위
+      description: 포함하는 작업과 의도적으로 제외하는 작업을 구분합니다.
+      placeholder: |
+        포함:
+        -
+
+        제외:
+        -
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 조건
+      description: 항목별로 독립적으로 확인 가능한 조건을 작성합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: prerequisites
+    attributes:
+      label: 선행 작업
+      description: 선행 이슈와 필요한 이유를 적습니다. 없음도 명시합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceability
+    attributes:
+      label: 추적성
+      description: PRD-NN-FR-NN, PRD-NN-AC-NN, PRD-NN-SP-NN 또는 POL-NN-R-NN을 연결하고 관련 결정 ID를 보조로 적습니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed_paths
+    attributes:
+      label: 변경 허용 경로
+      description: 저장소 기준의 좁은 경로나 경로 패턴을 작성합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: forbidden_paths
+    attributes:
+      label: 변경 금지 경로
+      description: 겹치는 병렬 작업과 공용 계약을 보호할 경로를 작성합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: 검증
+      description: 실행할 명령과 남겨야 할 증거를 작성합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: document_impact
+    attributes:
+      label: 문서 영향
+      description: 검토할 PRD·정책 또는 제품 동작이 바뀌지 않는 근거를 작성합니다.
+    validations:
+      required: true

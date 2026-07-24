@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub 작업 이슈 운영"
+  short_description: "이슈 선점부터 PR 병합 후속 처리까지 일관되게 실행"
+  default_prompt: "$run-github-work-item을 사용해 준비된 LunchTime 이슈를 선점하고 필요한 GitHub Project 상태를 전이해 주세요."

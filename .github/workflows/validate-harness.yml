@@ -1,4 +1,4 @@
-name: 제품 문서 검증
+name: 저장소 작업 도구 검증
 
 on:
   pull_request:
@@ -29,6 +29,49 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+
+      - name: 결정적 스크립트 구문 검사
+        run: |
+          node --check .agents/skills/update-product-docs/scripts/validate-product-docs.mjs
+          node --check .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
+          node --check .agents/skills/run-github-work-item/scripts/work-item.mjs
+          node --check .agents/skills/run-github-work-item/scripts/work-item.test.mjs
+          node --check .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs
+          node --check .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
+          node --check .agents/skills/commit-work-item/scripts/validate-commit-message.mjs
+          node --check .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
+          node --check .agents/skills/open-pull-request/scripts/validate-pr-body.mjs
+          node --check .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
+
+      - name: 작업 도구 회귀 테스트 실행
+        run: |
+          node --test .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
+          node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs
+          node --test .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
+          node --test .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
+          node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
+
+      - name: PR 템플릿 검증
+        run: |
+          node .agents/skills/open-pull-request/scripts/validate-pr-body.mjs \
+            --template .github/PULL_REQUEST_TEMPLATE.md
+
+      - name: PR 제목·본문·브랜치 검증
+        if: github.event_name == 'pull_request'
+        run: |
+          node .agents/skills/open-pull-request/scripts/validate-pr-body.mjs \
+            --event "$GITHUB_EVENT_PATH"
+
+      - name: 커밋 메시지 검증
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node .agents/skills/commit-work-item/scripts/validate-commit-message.mjs \
+            --range "${BASE_SHA}..${HEAD_SHA}"
+
+      - name: MVP 작업 이슈 매니페스트 검증
+        run: node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs validate
 
       - name: 제품 문서 검증
         run: node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs
