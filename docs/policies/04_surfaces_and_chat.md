@@ -1,10 +1,14 @@
 # POL-04. macOS 화면·채팅
 
-> 상태: 정본 초안
->
-> 관련 결정: D-06, D-09, D-12~D-13, D-23~D-25, D-28, D-32, D-34~D-36, D-39, C-01, C-04, C-06, C-07
+| 항목 | 값 |
+|---|---|
+| 의사결정 상태 | `approved` |
+| 책임자 | Product Owner |
+| 마지막 검토 | 2026-07-24 |
+| 관련 PRD | [PRD-01](../prd/01_lunchtime_mvp.md) |
+| 관련 결정 | D-06, D-09, D-12~D-13, D-23~D-25, D-28, D-32, D-34~D-36, D-39, D-42~D-43, C-01, C-04, C-06, C-07 |
 
-## 1. MVP Surface
+## POL-04-R-01. MVP Surface
 
 MVP는 다음 macOS Surface를 제공한다.
 
@@ -21,7 +25,7 @@ MVP는 다음 macOS Surface를 제공한다.
 - CLI는 MVP에서 제외한다.
 - 정식 제품 용어는 `라운지`다. 휴게실, 잡담방은 UI 명칭으로 사용하지 않는다.
 
-## 2. MenuBar
+## POL-04-R-02. MenuBar
 
 MenuBar는 항상 전체 상세 창을 대신하지 않는 요약·진입 Surface다.
 
@@ -58,7 +62,7 @@ MenuBar는 항상 전체 상세 창을 대신하지 않는 요약·진입 Surfac
 
 라운지는 MVP에 포함하지만 메인 앱 창 또는 별도 창 탐색으로 들어간다. 라운지 바로가기와 읽지 않음 표시는 후속 기능이다.
 
-## 3. Room Window
+## POL-04-R-03. Room Window
 
 Room Window는 다음 영역을 같은 맥락 안에 제공한다.
 
@@ -100,7 +104,7 @@ Room Window는 다음 영역을 같은 맥락 안에 제공한다.
 - Room이 취소되거나 14:30이 되면 채팅 입력창을 비활성화한다. 취소 Room은 14:30까지, 정상 종료 Room은 현재 앱 세션이 끝날 때까지 Room Window를 열어 현재 메모리의 채팅을 읽을 수 있다.
 - 메시지 ID로 중복을 제거하며 Peer에서 다시 받은 메시지를 두 번 표시하지 않는다. 동일한 메시지 집합을 보유한 Peer끼리는 가능한 범위에서 결정적 순서를 표시하되, 완전 복구나 모든 Peer의 동일한 전역 순서는 보장하지 않는다.
 
-## 4. Lounge Window
+## POL-04-R-04. Lounge Window
 
 - 라운지는 MVP에 포함한다.
 - 라운지는 모든 자동 신뢰 회사 WiFi Peer에게 열려 있는 일일 대화 공간이다.
@@ -112,7 +116,7 @@ Room Window는 다음 영역을 같은 맥락 안에 제공한다.
 - 라운지 채팅을 재사용 히스토리나 Recent Room Detail에 넣지 않는다.
 - 읽지 않음 배지, 알림과 MenuBar 바로가기는 MVP에서 제외한다.
 
-## 5. History Window
+## POL-04-R-05. History Window
 
 - 가게 이름, 최근 주문 완료 시각과 로컬 이용 횟수를 목록으로 보여준다.
 - 동일 항목은 `trim(가게 이름) + 입력 링크 원문`이 모두 완전히 일치할 때만 합친다. 링크의 공백을 포함해 URL 정규화는 하지 않는다.
@@ -121,7 +125,7 @@ Room Window는 다음 영역을 같은 맥락 안에 제공한다.
 - History Window에서 과거 채팅, 참여자나 개인 메뉴를 보여주지 않는다.
 - 사용자는 로컬 히스토리 항목을 삭제할 수 있으며, 모든 Peer에서 영구 삭제된다는 표현을 사용하지 않는다.
 
-## 6. Recent Room Detail
+## POL-04-R-06. Recent Room Detail
 
 - Recent Room 목록에는 현재 기기에 복구된 최대 14일 이내의 취소되지 않은 종료 Room을 표시한다.
 - 자동 신뢰 회사 WiFi Peer는 해당 Room 참여 여부와 관계없이 상세를 열 수 있다.
@@ -133,7 +137,7 @@ Room Window는 다음 영역을 같은 맥락 안에 제공한다.
 - 운영 데이터가 만료되면 해당 상세 항목을 제거한다. 재사용 히스토리의 최소 가게 레코드는 별도 정책에 따라 계속 남을 수 있다.
 - 취소 Room은 Recent Room 목록과 재사용 히스토리에서 제외한다.
 
-## 7. Connection / Settings와 복구 경험
+## POL-04-R-07. Connection / Settings와 복구 경험
 
 Connection / Settings에서 인식된 Peer를 목록으로 표시한다.
 
@@ -144,10 +148,25 @@ Connection / Settings에서 인식된 Peer를 목록으로 표시한다.
 | 마지막 확인 | 로컬 기기가 마지막으로 Peer를 확인한 시각 |
 | 동기화 상태 | `이 기기에 저장됨` / `복제됨` / `동기화됨` / `확인 필요` |
 
+- 첫 실행에서는 닉네임을 설정해야 Peer 노출과 Room 쓰기를 시작할 수 있다.
+- 사용자는 Connection / Settings에서 닉네임을 바꿀 수 있다. 변경은 표시값만 갱신하고 사용자 ID와 기존 권한·소유권은 유지한다.
+- 알려진 오프라인 Peer는 마지막 확인 시각부터 최대 14일 동안 표시한 뒤 제거한다.
 - Peer 목록은 Connection / Settings에서만 제공하며 Room과 MenuBar에는 전체 목록을 넣지 않는다.
 - Peer별 Room 데이터 보유·ACK 여부 또는 별도 신뢰 상태는 표시하지 않는다.
 - `동기화 중`은 네 상태를 대체하지 않는 일시적인 활동 표시다.
-- 현재 세션이 최대 3회 또는 총 30초 한도에 먼저 도달해 실패하면 `확인 필요`로 멈춘다.
+- 현재 세션의 재시도 한도에 도달해 실패하면 `확인 필요`로 멈춘다. 정확한 한도와 새 세션 조건은 [POL-02-R-02](./02_replication_consistency_retention.md)을 따른다.
 - `새로고침`은 Connection / Settings, Room Window와 Recent Room Detail에서 실행할 수 있어야 하며 새 제한 세션을 시작한다.
 - 잠자기 복귀와 네트워크 전환 때는 사용자가 누르기 전에 자동 동기화를 시작하되 결과와 마지막 확인 시각을 표시한다.
 - 지원 네트워크가 아닐 때는 그 사실을 연결 상태와 구분해 안내한다.
+
+## 추적성
+
+| Policy rule | PRD 요구사항 | 수용 기준 | 관련 결정 |
+|---|---|---|---|
+| POL-04-R-01 | PRD-01-FR-01, PRD-01-FR-04, PRD-01-FR-07, PRD-01-FR-08, PRD-01-FR-10, PRD-01-FR-11 | PRD-01-AC-01, PRD-01-AC-04, PRD-01-AC-05, PRD-01-AC-06, PRD-01-AC-07 | D-22, D-23, D-24 |
+| POL-04-R-02 | PRD-01-FR-01, PRD-01-FR-10 | PRD-01-AC-01, PRD-01-AC-05 | D-22, D-39 |
+| POL-04-R-03 | PRD-01-FR-02, PRD-01-FR-03, PRD-01-FR-04, PRD-01-FR-05, PRD-01-FR-06, PRD-01-FR-10 | PRD-01-AC-02, PRD-01-AC-09, PRD-01-AC-10 | D-04, D-06, D-09, D-29, D-32 |
+| POL-04-R-04 | PRD-01-FR-07 | PRD-01-AC-06 | D-05, D-13, D-24 |
+| POL-04-R-05 | PRD-01-FR-08 | PRD-01-AC-07 | D-11, D-36 |
+| POL-04-R-06 | PRD-01-FR-11 | PRD-01-AC-05 | D-28, D-34 |
+| POL-04-R-07 | PRD-01-FR-10 | PRD-01-AC-03, PRD-01-AC-08 | D-32, D-35, D-43 |
