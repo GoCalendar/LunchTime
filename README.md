@@ -28,6 +28,7 @@ LunchTime은 회사에서 반복되는 점심 모집과 배달 주문 협의를 
 | `docs/product-definition/` | 아이디어, 가설, 질문, 논의와 의사결정 과정을 기록합니다. | 논의 이력 |
 | `docs/prd/` | 논의를 거쳐 확정된 제품·기능 요구사항을 기록합니다. | 요구사항 정본 |
 | `docs/policies/` | 상태 전이, 권한, 예외 처리 등 세부 동작 규칙을 기록합니다. | 동작 규칙 정본 |
+| `docs/architecture/` | 승인된 제품 계약을 실현하는 구성요소, 통신과 데이터 흐름을 설명합니다. | 기술 구조 |
 
 `product-definition`은 결정의 배경을 이해하기 위한 기록입니다. 현재 제품이 어떻게 동작해야 하는지는 PRD와 정책 문서를 기준으로 판단합니다. 두 정본 사이에 모순이 발견되면 어느 한쪽을 임의로 우선하지 않고 함께 정정합니다.
 
@@ -81,6 +82,12 @@ PRD-01은 첫 번째 제품 약속입니다. 앞으로 독립적인 사용자 �
 | [POL-02. 복제·정합성·보존](docs/policies/02_replication_consistency_retention.md) | P2P 장부, 복귀 동기화, 누락 방지, 보존과 히스토리 |
 | [POL-03. 보안·신뢰 경계](docs/policies/03_security_and_trust.md) | 회사 WiFi 자동 신뢰, 전송·저장 암호화와 내부 위협 경계 |
 | [POL-04. macOS 화면·채팅](docs/policies/04_surfaces_and_chat.md) | 메뉴 막대, 방, 라운지, QR과 연결 상태 화면 |
+
+### 시스템 아키텍처
+
+[시스템 아키텍처 인덱스](docs/architecture/README.md)에서 시스템 경계,
+Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 질문별로 찾을 수
+있습니다.
 
 ## 제품 문서 갱신 절차
 

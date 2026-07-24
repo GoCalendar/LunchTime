@@ -11,6 +11,15 @@ import test from "node:test";
 const validatorPath = fileURLToPath(
   new URL("./validate-product-docs.mjs", import.meta.url),
 );
+const architectureFiles = [
+  "docs/architecture/README.md",
+  "docs/architecture/01_system_context.md",
+  "docs/architecture/02_peer_network_and_transport.md",
+  "docs/architecture/03_communication_protocol.md",
+  "docs/architecture/04_replication_consistency_and_recovery.md",
+  "docs/architecture/05_storage_and_security.md",
+];
+const architectureDetailFiles = architectureFiles.slice(1);
 
 function write(root, relativePath, content) {
   const target = path.join(root, relativePath);
@@ -42,6 +51,7 @@ function createFixture() {
       "docs/prd/100_future.md",
       "docs/policies/README.md",
       "docs/policies/100_future.md",
+      "[시스템 아키텍처](docs/architecture/README.md)",
       "AGENTS.md",
       "CONTRIBUTING.md",
       ".agents/skills/update-product-docs/SKILL.md",
@@ -60,6 +70,70 @@ function createFixture() {
     "docs/policies/README.md",
     "# 정책 인덱스\n\n100_future.md\n",
   );
+  write(
+    root,
+    "docs/architecture/README.md",
+    [
+      "# 시스템 아키텍처",
+      "",
+      "## 빠른 선택",
+      "",
+      "| 궁금한 질문 | 읽을 문서 | 확정 계약 | 논리 모델 | 미결정 기술의 위치 |",
+      "|---|---|---|---|---|",
+      ...architectureDetailFiles.map((file, index) =>
+        [
+          `| 질문 ${index + 1}`,
+          `[문서 ${index + 1}](./${path.basename(file)})`,
+          `계약 ${index + 1}`,
+          `모델 ${index + 1}`,
+          `기술 ${index + 1} |`,
+        ].join(" | "),
+      ),
+      "",
+      "## 추천 읽기 순서",
+      "",
+      ...architectureDetailFiles.map(
+        (file, index) =>
+          `${index + 1}. [문서 ${index + 1}](./${path.basename(file)})`,
+      ),
+      "",
+      "## 정본과의 경계",
+      "",
+      "PRD와 Policy를 입력 정본으로 사용한다.",
+      "",
+      "## 입력 계약",
+      "",
+      "상세 문서는 필요한 입력 계약을 완전한 ID로 기록한다.",
+      "",
+      "## 기술 검증 대기 지도",
+      "",
+      "미결정 구현 방식은 기술 검증에서 확정한다.",
+      "",
+    ].join("\n"),
+  );
+  for (const file of architectureDetailFiles) {
+    write(
+      root,
+      file,
+      [
+        `# ${path.basename(file, ".md")}`,
+        "",
+        "이 문서는 검증 fixture의 아키텍처 범위를 설명한다.",
+        "",
+        "## 한눈에 보기",
+        "",
+        "```mermaid",
+        "flowchart LR",
+        "    A[입력] --> B[결과]",
+        "```",
+        "",
+        "- 입력이 결과로 이동한다.",
+        "- 결과는 화면에 표시된다.",
+        "- 구현 기술은 아직 확정하지 않는다.",
+        "",
+      ].join("\n"),
+    );
+  }
 
   write(
     root,
@@ -209,6 +283,758 @@ test("세 자리 문서·계약 ID를 허용한다", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /제품 문서 검증 통과/);
   });
+});
+
+test("필수 아키텍처 문서가 하나라도 없으면 거부한다", () => {
+  for (const file of architectureFiles) {
+    withFixture((root) => {
+      fs.unlinkSync(path.join(root, file));
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.ok(
+        result.stderr.includes(`필수 아키텍처 문서가 없습니다: ${file}`),
+        result.stderr,
+      );
+    });
+  }
+});
+
+test("상세 아키텍처 문서의 첫 H2가 한눈에 보기가 아니면 거부한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, architectureDetailFiles[0]);
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace("## 한눈에 보기", "## 구성요소");
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /상세 아키텍처 문서의 첫 H2는 '## 한눈에 보기'여야 합니다/,
+    );
+  });
+});
+
+test("한눈에 보기의 첫 자료가 Mermaid가 아니면 거부한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, architectureDetailFiles[0]);
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        "## 한눈에 보기\n\n```mermaid",
+        "## 한눈에 보기\n\n설명부터 시작한다.\n\n```mermaid",
+      );
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /'## 한눈에 보기'의 첫 자료는 Mermaid fenced block이어야 합니다/,
+    );
+  });
+});
+
+test("한눈에 보기 Mermaid의 빈 chart body와 미종결 fence를 거부한다", () => {
+  const cases = [
+    {
+      replace: [
+        "```mermaid",
+        "flowchart LR",
+        "    A[입력] --> B[결과]",
+        "```",
+      ].join("\n"),
+      replacement: ["```mermaid", "", "```"].join("\n"),
+      message: /Mermaid chart body가 비어 있습니다/,
+    },
+    {
+      replace: [
+        "```mermaid",
+        "flowchart LR",
+        "    A[입력] --> B[결과]",
+        "```",
+      ].join("\n"),
+      replacement: [
+        "```mermaid",
+        "flowchart LR",
+        "    A[입력] --> B[결과]",
+      ].join("\n"),
+      message: /Mermaid fenced block이 종결되지 않았습니다/,
+    },
+  ];
+
+  for (const { replace, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, architectureDetailFiles[0]);
+      const content = fs
+        .readFileSync(target, "utf8")
+        .replace(replace, replacement);
+      fs.writeFileSync(target, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("한눈에 보기 Mermaid 뒤 top-level bullet 요약은 3~5개여야 한다", () => {
+  const originalBullets = [
+    "- 입력이 결과로 이동한다.",
+    "- 결과는 화면에 표시된다.",
+    "- 구현 기술은 아직 확정하지 않는다.",
+  ].join("\n");
+  const cases = [
+    { count: 0, replacement: "" },
+    {
+      count: 2,
+      replacement: [
+        "- 입력이 결과로 이동한다.",
+        "- 결과는 화면에 표시된다.",
+      ].join("\n"),
+    },
+    {
+      count: 6,
+      replacement: Array.from(
+        { length: 6 },
+        (_, index) => `- 요약 ${index + 1}`,
+      ).join("\n"),
+    },
+  ];
+
+  for (const { count, replacement } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, architectureDetailFiles[0]);
+      const content = fs
+        .readFileSync(target, "utf8")
+        .replace(originalBullets, replacement);
+      fs.writeFileSync(target, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        new RegExp(`visible top-level bullet 요약이 3~5개.*현재 ${count}개`),
+      );
+    });
+  }
+});
+
+test("한눈에 보기 Mermaid 직후의 선행 문단과 nested bullet 오산을 거부한다", () => {
+  const originalBullets = [
+    "- 입력이 결과로 이동한다.",
+    "- 결과는 화면에 표시된다.",
+    "- 구현 기술은 아직 확정하지 않는다.",
+  ].join("\n");
+  const cases = [
+    {
+      replacement: [
+        "요약보다 설명이 먼저 나온다.",
+        "",
+        originalBullets,
+      ].join("\n"),
+      message: /첫 visible material은 연속된 top-level bullet list/,
+    },
+    {
+      replacement: [
+        "- 직접 요약은 하나뿐이다.",
+        "  - nested 요약 1",
+        "  - nested 요약 2",
+      ].join("\n"),
+      message: /현재 1개/,
+    },
+  ];
+
+  for (const { replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, architectureDetailFiles[0]);
+      const content = fs
+        .readFileSync(target, "utf8")
+        .replace(originalBullets, replacement);
+      fs.writeFileSync(target, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("Mermaid 요약 앞의 주석은 건너뛰고 intervening fence는 visible material로 거부한다", () => {
+  const boundary = [
+    "```",
+    "",
+    "- 입력이 결과로 이동한다.",
+  ].join("\n");
+
+  withFixture((root) => {
+    const target = path.join(root, architectureDetailFiles[0]);
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        boundary,
+        [
+          "```",
+          "",
+          "<!-- Mermaid 요약 설명 -->",
+          "",
+          "- 입력이 결과로 이동한다.",
+        ].join("\n"),
+      );
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, architectureDetailFiles[0]);
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        boundary,
+        [
+          "```",
+          "",
+          "```text",
+          "요약보다 먼저 나온 fenced block",
+          "```",
+          "",
+          "- 입력이 결과로 이동한다.",
+        ].join("\n"),
+      );
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /Mermaid 직후 첫 visible material은 연속된 top-level bullet list/,
+    );
+  });
+});
+
+test("CommonMark thematic break를 bullet 요약 항목으로 세지 않는다", () => {
+  const originalBullets = [
+    "- 입력이 결과로 이동한다.",
+    "- 결과는 화면에 표시된다.",
+    "- 구현 기술은 아직 확정하지 않는다.",
+  ].join("\n");
+
+  for (const thematicBreak of ["***", "* * *", "---", "- - -", "_ _ _"]) {
+    withFixture((root) => {
+      const target = path.join(root, architectureDetailFiles[0]);
+      const replacement = [
+        thematicBreak,
+        "- 결과는 화면에 표시된다.",
+        "- 구현 기술은 아직 확정하지 않는다.",
+      ].join("\n");
+      const content = fs
+        .readFileSync(target, "utf8")
+        .replace(originalBullets, replacement);
+      fs.writeFileSync(target, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /visible top-level bullet 요약이 3~5개/,
+      );
+    });
+  }
+});
+
+test("Markdown이 허용하는 1~3칸 들여쓰기 top-level bullet을 허용한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, architectureDetailFiles[0]);
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replaceAll("\n- ", "\n   - ");
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("README는 아키텍처 인덱스를 visible Markdown link로 연결해야 한다", () => {
+  const link = "[시스템 아키텍처](docs/architecture/README.md)";
+  const replacements = [
+    "docs/architecture/README.md",
+    "[](docs/architecture/README.md)",
+    `\`${link}\``,
+    `<!-- ${link} -->`,
+    ["```markdown", link, "```"].join("\n"),
+  ];
+
+  for (const replacement of replacements) {
+    withFixture((root) => {
+      const target = path.join(root, "README.md");
+      const content = fs.readFileSync(target, "utf8").replace(link, replacement);
+      fs.writeFileSync(target, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /README\.md: docs\/architecture\/README\.md를 가리키는 visible Markdown link가 필요합니다/,
+      );
+    });
+  }
+});
+
+test("README의 visible reference-style link를 아키텍처 탐색 링크로 인정한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, "README.md");
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        "[시스템 아키텍처](docs/architecture/README.md)",
+        "[시스템 아키텍처][architecture-index]",
+      )
+      .concat("\n[architecture-index]: docs/architecture/README.md\n");
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("아키텍처 탐색 topology는 image를 문서 링크로 인정하지 않는다", () => {
+  withFixture((root) => {
+    const target = path.join(root, "README.md");
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        "[시스템 아키텍처](docs/architecture/README.md)",
+        "![시스템 아키텍처](docs/architecture/README.md)",
+      );
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /README\.md: docs\/architecture\/README\.md를 가리키는 visible Markdown link가 필요합니다/,
+    );
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, "docs/architecture/README.md");
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        "[문서 1](./01_system_context.md)",
+        "![문서 1](./01_system_context.md)",
+      );
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /빠른 선택 표 1번째 행의 '읽을 문서'에는 허용된 상세 아키텍처 문서 링크가 정확히 하나 필요합니다/,
+    );
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, "docs/architecture/README.md");
+    const source = "1. [문서 1](./01_system_context.md)";
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(source, `1. ![문서 1](./01_system_context.md)`);
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /추천 읽기 순서에는 visible Markdown link가 정확히 5개 필요합니다/,
+    );
+  });
+});
+
+test("아키텍처 인덱스의 필수 H2 섹션 누락을 거부한다", () => {
+  const requiredSections = [
+    "빠른 선택",
+    "추천 읽기 순서",
+    "정본과의 경계",
+    "입력 계약",
+    "기술 검증 대기 지도",
+  ];
+
+  for (const heading of requiredSections) {
+    withFixture((root) => {
+      const target = path.join(root, "docs/architecture/README.md");
+      const content = fs
+        .readFileSync(target, "utf8")
+        .replace(`## ${heading}`, `## 누락된 ${heading}`);
+      fs.writeFileSync(target, content);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.ok(
+        result.stderr.includes(`필수 H2 섹션이 없습니다: ${heading}`),
+        result.stderr,
+      );
+    });
+  }
+});
+
+test("빠른 선택 표의 계약 열과 상세 문서 행 누락을 거부한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, "docs/architecture/README.md");
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(" | 논리 모델 |", " | 다른 모델 |");
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /빠른 선택 표는 정확한 header/);
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, "docs/architecture/README.md");
+    const missingFile = architectureDetailFiles[4];
+    const missingRow = new RegExp(
+      `^.*\\]\\(\\./${path.basename(missingFile).replaceAll(".", "\\.")}\\).*$\\n`,
+      "m",
+    );
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(missingRow, "");
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /빠른 선택 표에는 상세 아키텍처 문서 행이 정확히 5개 필요합니다/,
+    );
+    assert.ok(
+      result.stderr.includes(
+        `빠른 선택 표의 문서 열은 ${missingFile} 링크를 정확히 한 번 포함해야 합니다.`,
+      ),
+      result.stderr,
+    );
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, "docs/architecture/README.md");
+    const content = fs.readFileSync(target, "utf8");
+    const boundary = "\n## 추천 읽기 순서";
+    const boundaryIndex = content.indexOf(boundary);
+    let quickSelection = content.slice(0, boundaryIndex);
+    const remainingSections = content.slice(boundaryIndex);
+    const links = architectureDetailFiles.map(
+      (file, index) => `[문서 ${index + 1}](./${path.basename(file)})`,
+    );
+    for (const [index, link] of links.slice(1).entries()) {
+      quickSelection = quickSelection.replace(link, `문서 ${index + 2}`);
+    }
+    quickSelection = quickSelection.replace(links[0], links.join(" / "));
+    fs.writeFileSync(target, quickSelection + remainingSections);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /빠른 선택 표 1번째 행의 '읽을 문서'에는 허용된 상세 아키텍처 문서 링크가 정확히 하나 필요합니다/,
+    );
+    assert.match(
+      result.stderr,
+      /빠른 선택 표 2번째 행의 '읽을 문서'에는 허용된 상세 아키텍처 문서 링크가 정확히 하나 필요합니다/,
+    );
+  });
+});
+
+test("추천 읽기 순서에서 상세 문서 링크 누락을 거부한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, "docs/architecture/README.md");
+    const missingFile = architectureDetailFiles[2];
+    const source = `3. [문서 3](./${path.basename(missingFile)})`;
+    const content = fs.readFileSync(target, "utf8").replace(source, "3. 문서 3");
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.ok(
+      result.stderr.includes(
+        `추천 읽기 순서는 ${missingFile} 링크를 정확히 한 번 포함해야 합니다.`,
+      ),
+      result.stderr,
+    );
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, "docs/architecture/README.md");
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        "5. [문서 5](./05_storage_and_security.md)",
+        [
+          "5. [문서 5](./05_storage_and_security.md)",
+          "6. [추가 링크](./01_system_context.md)",
+        ].join("\n"),
+      );
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /추천 읽기 순서에는 visible Markdown link가 정확히 5개 필요합니다/,
+    );
+  });
+});
+
+test("추천 읽기 순서는 상세 문서 배열의 순서를 그대로 따라야 한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, "docs/architecture/README.md");
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        "1. [문서 1](./01_system_context.md)",
+        "1. [문서 1](./02_peer_network_and_transport.md)",
+      )
+      .replace(
+        "2. [문서 2](./02_peer_network_and_transport.md)",
+        "2. [문서 2](./01_system_context.md)",
+      );
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /추천 읽기 순서는 상세 아키텍처 문서를 지정된 순서대로 연결해야 합니다/,
+    );
+  });
+});
+
+test("아키텍처 문서의 깨진 내부 링크를 거부한다", () => {
+  withFixture((root) => {
+    fs.appendFileSync(
+      path.join(root, "docs/architecture/README.md"),
+      "\n[없는 문서](./missing.md)\n",
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /docs\/architecture\/README\.md: 깨진 링크 -> \.\/missing\.md/,
+    );
+  });
+});
+
+test("아키텍처 문서의 깨진 image resource를 거부한다", () => {
+  withFixture((root) => {
+    fs.appendFileSync(
+      path.join(root, "docs/architecture/README.md"),
+      "\n![없는 이미지](./missing.png)\n",
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /docs\/architecture\/README\.md: 깨진 링크 -> \.\/missing\.png/,
+    );
+  });
+});
+
+test("reference-style Markdown link와 image의 깨진 local target을 거부한다", () => {
+  const cases = [
+    [
+      "[없는 문서][missing-document]",
+      "[missing-document]: ./missing-reference.md",
+    ],
+    [
+      "![없는 이미지][missing-image]",
+      "[missing-image]: ./missing-reference.png",
+    ],
+  ];
+
+  for (const referenceResource of cases) {
+    withFixture((root) => {
+      fs.appendFileSync(
+        path.join(root, "docs/architecture/README.md"),
+        `\n${referenceResource.join("\n\n")}\n`,
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /docs\/architecture\/README\.md: 깨진 링크 -> \.\/missing-reference\.(?:md|png)/,
+      );
+    });
+  }
+});
+
+test("Markdown local target은 저장소 루트 내부의 상대 경로만 허용한다", () => {
+  for (const unsafeTarget of [
+    "/etc/passwd",
+    "C:\\Windows\\system32\\drivers\\etc\\hosts",
+    "../../../outside.md",
+  ]) {
+    withFixture((root) => {
+      fs.appendFileSync(
+        path.join(root, "docs/architecture/README.md"),
+        `\n[허용되지 않는 대상](${unsafeTarget})\n`,
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.ok(
+        result.stderr.includes(
+          `저장소 루트 내부의 상대 링크만 허용됩니다 -> ${unsafeTarget}`,
+        ),
+        result.stderr,
+      );
+    });
+  }
+});
+
+test("정상 fragment와 저장소 루트 내부 local link를 허용한다", () => {
+  withFixture((root) => {
+    fs.appendFileSync(
+      path.join(root, "docs/architecture/README.md"),
+      [
+        "",
+        "[현재 문서 위치](#빠른-선택)",
+        "[저장소 README](../../README.md)",
+        "",
+      ].join("\n"),
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("fence·HTML comment·inline code의 pseudo link는 검사하지 않는다", () => {
+  const pseudoLinks = [
+    ["```markdown", "[없는 문서](./missing.md)", "```"].join("\n"),
+    "<!-- [없는 문서](./missing.md) -->",
+    "`[없는 문서](./missing.md)`",
+    [
+      "```markdown",
+      "[없는 문서][missing-reference]",
+      "[missing-reference]: ./missing.md",
+      "```",
+    ].join("\n"),
+    [
+      "<!--",
+      "[없는 문서][missing-reference]",
+      "[missing-reference]: ./missing.md",
+      "-->",
+    ].join("\n"),
+    [
+      "`[없는 문서][missing-reference]`",
+      "`[missing-reference]: ./missing.md`",
+    ].join("\n"),
+  ];
+
+  for (const pseudoLink of pseudoLinks) {
+    withFixture((root) => {
+      fs.appendFileSync(
+        path.join(root, "docs/architecture/README.md"),
+        `\n${pseudoLink}\n`,
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 0, result.stderr);
+    });
+  }
+});
+
+test("아키텍처의 정의되지 않은 완전한 계약 참조를 거부한다", () => {
+  const cases = [
+    {
+      id: "PRD-100-FR-999",
+      message: /정의되지 않은 PRD 계약 ID PRD-100-FR-999/,
+    },
+    {
+      id: "PRD-100-AC-999",
+      message: /정의되지 않은 PRD 계약 ID PRD-100-AC-999/,
+    },
+    {
+      id: "PRD-100-SP-999",
+      message: /정의되지 않은 PRD 계약 ID PRD-100-SP-999/,
+    },
+    {
+      id: "PRD-999",
+      message: /정의되지 않은 PRD ID PRD-999/,
+    },
+    {
+      id: "POL-03-R-99",
+      message: /정의되지 않은 정책 규칙 ID POL-03-R-99/,
+    },
+    {
+      id: "POL-999",
+      message: /정의되지 않은 정책 ID POL-999/,
+    },
+    {
+      id: "D-999",
+      message: /정의되지 않은 결정 ID D-999/,
+    },
+    {
+      id: "F-999",
+      message: /정의되지 않은 기능 ID F-999/,
+    },
+  ];
+
+  for (const { id, message } of cases) {
+    withFixture((root) => {
+      fs.appendFileSync(
+        path.join(root, architectureDetailFiles[0]),
+        `\n참조: ${id}\n`,
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("fence와 HTML comment의 pseudo F·D 정의를 현재 정의로 인정하지 않는다", () => {
+  const cases = [
+    {
+      definitionFile: "docs/product-definition/06_feature_inventory.md",
+      id: "F-999",
+      definition: ["```markdown", "| F-999 | 숨긴 기능 |", "```", ""].join(
+        "\n",
+      ),
+      message: /정의되지 않은 기능 ID F-999/,
+    },
+    {
+      definitionFile: "docs/product-definition/06_feature_inventory.md",
+      id: "F-999",
+      definition: "<!-- | F-999 | 숨긴 기능 | -->\n",
+      message: /정의되지 않은 기능 ID F-999/,
+    },
+    {
+      definitionFile: "docs/product-definition/10_decision_backlog.md",
+      id: "D-999",
+      definition: ["```markdown", "| D-999 | 숨긴 결정 |", "```", ""].join(
+        "\n",
+      ),
+      message: /정의되지 않은 결정 ID D-999/,
+    },
+    {
+      definitionFile: "docs/product-definition/10_decision_backlog.md",
+      id: "D-999",
+      definition: "<!-- | D-999 | 숨긴 결정 | -->\n",
+      message: /정의되지 않은 결정 ID D-999/,
+    },
+  ];
+
+  for (const { definitionFile, id, definition, message } of cases) {
+    withFixture((root) => {
+      write(root, definitionFile, definition);
+      fs.appendFileSync(
+        path.join(root, architectureDetailFiles[0]),
+        `\n참조: ${id}\n`,
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("아키텍처의 FR·AC·SP·R shorthand를 거부한다", () => {
+  for (const id of ["FR-01", "AC-01", "SP-01", "R-01"]) {
+    withFixture((root) => {
+      fs.appendFileSync(
+        path.join(root, architectureDetailFiles[0]),
+        `\n참조: ${id}\n`,
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.ok(
+        result.stderr.includes(`네임스페이스 없는 아키텍처 계약 ID ${id}`),
+        result.stderr,
+      );
+    });
+  }
 });
 
 test("자리수가 과도하거나 안전한 정수가 아닌 ID를 유한 시간에 거부한다", () => {
