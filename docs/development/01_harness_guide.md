@@ -1,0 +1,197 @@
+# LunchTime 개발 하네스 가이드
+
+이 문서는 대화 이력이 없는 작업자가 GitHub 이슈를 확인한 순간부터 병합 뒤
+완료 처리까지 같은 계약으로 진행하는 짧은 실행 가이드다. 세부 명령과 필드
+형식은 연결된 Skill·템플릿이 소유하며, 이 문서는 단계와 중단 판단을 연결한다.
+
+## 한눈에 보기
+
+```mermaid
+flowchart TD
+    S01["STEP 01<br/>이슈·제품 정본 확인"] --> S02["STEP 02<br/>check"]
+    S02 --> S03["STEP 03<br/>start"]
+    S03 --> S04["STEP 04<br/>최신 main·branch·worktree"]
+    S04 --> S05["STEP 05<br/>행동 시나리오·검증 계획"]
+    S05 --> S06["STEP 06<br/>구현·테스트"]
+    S06 --> S07["STEP 07<br/>제품 문서 영향"]
+    S07 --> S08["STEP 08<br/>독립 리뷰"]
+    S08 --> S09["STEP 09<br/>명시적 staging·원자적 commit"]
+    S09 --> S10["STEP 10<br/>PR·CI"]
+    S10 --> S11["STEP 11<br/>squash merge·complete"]
+```
+
+- 각 단계는 앞 단계의 완료 증거를 입력으로 받으며, 실패·불일치를 숨긴 채
+  다음 단계로 넘어가지 않는다.
+- 이슈의 `완료 조건`이 행동 시나리오를 소유하고, PR의 기존 `검증` 표가 테스트,
+  독립 리뷰와 CI 증거를 전달한다.
+- 제품 결과와 규칙은 [PRD](../prd/README.md)와
+  [Policy](../policies/README.md)가 소유한다. 하네스는 이를 구현·검증하는
+  절차만 정한다.
+- GitHub 상태 변경과 자동 반복은 각 Skill이 정한 유한한 경계 안에서만
+  수행한다.
+
+## 구성요소와 책임
+
+| 구성요소 | 이 흐름에서 맡는 책임 |
+|---|---|
+| [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈 계약 확인, `check`·`start`, 병합 뒤 `complete`, Project·레이블·담당자 상태 일치 |
+| [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 구현 전후 PRD·Policy·제품 정의 영향과 정본 충돌 확인 |
+| [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) | 범위·검증·문서 영향을 대조한 explicit staging과 원자적 commit |
+| [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md) | 전체 branch 검증, push, Draft·Ready PR 생성과 생성 결과 재확인 |
+| [MVP 작업 이슈 양식](../../.github/ISSUE_TEMPLATE/work-item.yml) | 11개 기존 본문 구역과 행동 시나리오를 담는 `완료 조건` |
+| [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md) | 다섯 H2 안에서 변경 결과·추적성·검증·문서 영향 인계 |
+| [MVP Project](https://github.com/orgs/GoCalendar/projects/1) · [보드](https://github.com/orgs/GoCalendar/projects/1/views/2) | `Todo`·`In Progress`·`Done` 작업 상태 관측 |
+| [`validate` workflow](../../.github/workflows/validate-harness.yml) | PR과 `main`에서 문서·계약·회귀 테스트·commit·diff 게이트 실행 |
+
+명령 인자, 이슈 본문 구조와 GitHub 전이의 상세 정본은 각 Skill과 참조 계약에
+둔다. 이 가이드와 세부 계약이 어긋나면 한쪽을 우회하지 말고 같은 변경에서
+정렬한다.
+
+## STEP 01. 이슈와 제품 정본 확인
+
+- **목적:** 구현할 결과 하나와 그 결과를 지배하는 제품·경로 계약을 대화 이력 없이 복원한다.
+
+- **핵심 입력:** GitHub 이슈의 11개 본문 구역, [PRD](../prd/README.md), [Policy](../policies/README.md), 결정 이력, 기본 의존 관계와 변경 허용·금지 경로다.
+
+- **완료 조건:** 목표·범위·추적 ID·선행 작업·행동 중심 `완료 조건`·검증·문서 영향을 설명할 수 있고, 누락된 제품 결정이 없다.
+
+- **대표 실패·중단 조건:** 이슈 계약이 불완전하거나 정본끼리 충돌하거나 제품 결정을 추측해야 하거나 작업 경로가 다른 진행 중 이슈와 겹친다.
+
+## STEP 02. `check`로 준비 상태 검증
+
+- **목적:** GitHub 상태를 바꾸기 전에 이슈가 실제로 선점 가능한지 읽기 전용으로 확인한다.
+
+- **핵심 입력:** 이슈 번호와 [`run-github-work-item`의 `check`](../../.agents/skills/run-github-work-item/SKILL.md), 담당자·레이블·기본 의존 관계·Project 상태·동시 작업 한도다.
+
+- **완료 조건:** `check`가 열린 `Todo`, 담당자 없음, 선행 이슈 종료, Project `Todo`, 진입 한도 충족을 모두 확인한다.
+
+- **대표 실패·중단 조건:** 이슈가 이미 선점됐거나 차단됐거나 Project·레이블 상태가 어긋나거나 GitHub 관계를 신뢰성 있게 읽을 수 없다.
+
+## STEP 03. `start`로 작업 선점
+
+- **목적:** 구현 직전에 이슈·담당자·레이블·Project와 작업 branch 소유권을 하나의 검증된 시작 상태로 맞춘다.
+
+- **핵심 입력:** `work/issue-<번호>-<slug>` branch 이름, 안정적인 agent marker와 [`run-github-work-item`의 `start`](../../.agents/skills/run-github-work-item/SKILL.md)다.
+
+- **완료 조건:** 승리한 선점 표식, 현재 담당자, `status:in-progress`, Project `In Progress`와 기록된 branch가 재조회에서 모두 일치한다.
+
+- **대표 실패·중단 조건:** 경합에서 다른 선점이 승리했거나 branch 형식·권한·상태 전이·사후 검증 중 하나라도 실패한다.
+
+## STEP 04. 최신 `main`에서 branch와 worktree 생성
+
+- **목적:** 성공한 선점이 기록한 정확한 branch를 최신 `origin/main` 위의 독립 작업 공간에 둔다.
+
+- **핵심 입력:** 갱신한 `origin/main`, `start`에 기록된 branch, 저장소 [개발 협약](../../CONTRIBUTING.md)과 독립 worktree 경로다.
+
+- **완료 조건:** 현재 branch가 선점 기록과 같고 base가 최신 `origin/main`이며, 작업자별 worktree가 분리되고 시작 전 사용자 변경을 침범하지 않는다.
+
+- **대표 실패·중단 조건:** `start` 전 branch 생성, 오래된 base, branch 불일치, 공유 worktree·branch, 기존 사용자 변경과 안전하게 분리할 수 없는 상태다.
+
+## STEP 05. 행동 시나리오와 검증 계획 작성
+
+- **목적:** 구현 전에 관찰 가능한 성공·실패·복구 결과와 그 증거를 확정한다.
+
+- **핵심 입력:** 이슈의 `완료 조건`, 추적된 PRD·Policy ID와 [BDD/ATDD 테스트 표준](./02_testing_standard.md)의 시나리오 축·테스트 계층이다.
+
+- **완료 조건:** 적용 가능한 happy·error·recovery 시나리오가 조건·행동·결과와 추적 ID로 연결되고, 각 시나리오의 결정적 검증 방법이 이슈 `검증` 계획과 일치한다.
+
+- **대표 실패·중단 조건:** 구현 세부사항만 검사하거나 error·recovery path가 없거나 실제 시간·무한 재시도·flaky rerun에 의존하거나 제품 결과를 이슈에서 새로 정한다.
+
+## STEP 06. 구현과 테스트
+
+- **목적:** 실패하는 행동 증거에서 시작해 이슈 범위 안의 최소 구현으로 계약을 만족시킨다.
+
+- **핵심 입력:** STEP 05의 시나리오, 허용 경로, 기존 코드·테스트 관례, fake clock·fake transport와 결정적 fixture다.
+
+- **완료 조건:** 관련 수용·행동 테스트와 happy·error·recovery 경로가 통과하고 리팩터링 뒤에도 전체 관련 회귀 테스트가 재현 가능하게 통과한다.
+
+- **대표 실패·중단 조건:** 금지 경로 침범, 정본과 다른 동작, 테스트 순서·공유 상태 의존, 임의 sleep, 실패를 숨기는 반복 실행 또는 범위를 넓혀야만 통과하는 구현이다.
+
+## STEP 07. 제품 문서 영향 확인
+
+- **목적:** 구현이 사용자 결과나 상태·권한·실패·복구·보존·보안 계약을 바꾸는지 commit 전에 판정한다.
+
+- **핵심 입력:** 전체 raw diff, 이슈 추적 ID와 [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md)의 구현 영향 확인 절차다.
+
+- **완료 조건:** 영향을 받는 PRD·Policy·결정 문서를 같은 변경에서 갱신했거나, 제품 동작이 바뀌지 않는 구체적인 근거를 기록했다.
+
+- **대표 실패·중단 조건:** 정본 갱신이 필요한데 허용 경로 밖이거나 정본 충돌·미결정 제품 선택이 있거나 validator 통과만으로 의미상 정확성을 단정한다.
+
+## STEP 08. 독립 리뷰
+
+- **목적:** 작성자의 자기 검토와 분리된 읽기 전용 관점에서 요구사항 누락·회귀·위험을 찾는다.
+
+- **핵심 입력:** 원본 이슈·PRD·Policy, answer injection이 없는 review prompt, frozen raw diff, 실제 테스트 결과와 아래 위험 등급별 reviewer 구성이다.
+
+- **완료 조건:** P0~P2 결과가 `file:line`, 재현·근거와 필요한 수정으로 기록되고, 수정했다면 writer와 분리된 reviewer가 새 snapshot을 별도 pass로 다시 확인한다.
+
+- **대표 실패·중단 조건:** 작성 컨텍스트의 “문제 없음”을 승인으로 사용하거나 reviewer가 수정하거나 기대 답을 미리 주입하거나 세 번째 pass 뒤에도 P0/P1이 남는다.
+
+## STEP 09. 명시적 staging과 원자적 commit
+
+- **목적:** 검증된 이슈 결과 하나만 index에 올리고 독립적으로 되돌릴 수 있는 commit으로 남긴다.
+
+- **핵심 입력:** 검토한 개별 경로, 전체 diff·테스트·독립 리뷰·문서 영향 증거와 [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) 계약이다.
+
+- **완료 조건:** `git add -- <개별 파일>...`로만 staging하고 cached diff·공백·메시지·신원·hook을 검증한 원자적 commit 하나가 만들어지며 push하지 않는다.
+
+- **대표 실패·중단 조건:** 기존 staged 변경, 범위 밖·사용자 소유 파일, `git add .`·`git add -A`·glob·directory staging, 실패한 hook, 자동 amend·reset이 필요하다.
+
+## STEP 10. PR 작성과 CI
+
+- **목적:** 전체 branch 결과를 다음 작업자가 재구성할 수 있는 Draft 또는 Ready PR로 게시하고 원격 게이트를 확인한다.
+
+- **핵심 입력:** commit된 clean branch, [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md), [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md), base `main`과 `validate` workflow다.
+
+- **완료 조건:** `Closes #N`, 다섯 H2, 실제 추적·문서 영향·검증 증거와 정확히 하나의 `독립 리뷰` 검증 행을 가진 PR이 생성되고, Ready이면 모든 행과 최신 `main` 기준 CI가 통과한다.
+
+- **대표 실패·중단 조건:** dirty·뒤처진 branch, 중복 PR, 미실행·실패·결정 필요를 숨긴 Ready, 독립 리뷰 행 누락·중복·실패, CI 실패 또는 생성 뒤 재조회 불일치다.
+
+## STEP 11. Squash merge와 `complete`
+
+- **목적:** 검증된 PR 결과 하나를 `main`에 남기고 이슈·Project·후행 의존 관계를 병합 사실과 일치시킨다.
+
+- **핵심 입력:** 최신 `main` 기준 통과한 Ready PR, squash 제목, 병합 결과와 [`run-github-work-item`의 `complete`](../../.agents/skills/run-github-work-item/SKILL.md)다.
+
+- **완료 조건:** squash merge와 원격 branch 삭제 뒤 `complete`가 이슈 `Done`·Project `Done`·종료 상태와 후행 차단 해제를 재검증하고, 최종 `main`·로컬 상태를 확인한다.
+
+- **대표 실패·중단 조건:** PR 미병합, 종료 참조·base/head 불일치, CI·리뷰 미완료, 병합 전에 `complete` 실행, 일부 GitHub 전이 실패 뒤 자동 반복이다.
+
+## 독립 리뷰 표준
+
+### 역할과 입력
+
+- **작성·수정자:** 구현과 수정만 수행하며 같은 작성 컨텍스트의 승인 판정을
+  최종 근거로 사용하지 않는다.
+- **Reviewer:** 작성 컨텍스트와 분리된 읽기 전용 역할이다. 파일·GitHub 상태를
+  수정하지 않고 발견 사항만 보고한다.
+- **Approver:** 새 snapshot의 요구사항 충족 여부를 판정하며 해당 snapshot을
+  작성·수정한 역할과 분리한다.
+- Reviewer에게 원본 요구사항, 관련 정본, raw diff, 재실행 가능한 테스트 명령과
+  실제 결과를 제공한다. 요약만 제공하거나 “문제 없음으로 결론 내라” 같은 예상
+  답을 주입하지 않는다.
+
+### 발견 사항과 반복 한도
+
+발견 사항은 `P0`·`P1`·`P2`, `file:line`, 재현 절차 또는 직접 근거, 필요한
+수정을 포함한다. 발견 사항이 없으면 검토한 snapshot과 관점을 명시해
+`P0~P2 없음`으로 보고한다.
+
+Writer가 수정한 뒤에는 이전 판정을 재사용하지 않고 frozen raw diff와 새 테스트
+결과로 별도 review pass를 실행한다. 같은 reviewer가 다시 보더라도 계속 읽기
+전용이어야 하며 writer 역할을 겸하지 않는다. 최초 검토를 포함해 최대 3 pass만
+허용하고, 세 번째 pass 뒤에도 P0/P1이 남으면 무한 review-fix를 중단해 blocker로
+보고한다.
+
+| 변경 위험 | 최소 독립 리뷰 |
+|---|---|
+| 낮음 — 단순 문서·국소 변경 | 분리된 reviewer 1명 |
+| 중간 — 계약·validator·workflow 변경 | 서로 다른 관점의 reviewer 2명 |
+| 높음 — 분산 통신·정합성·보안 | 필요한 전문 관점별 reviewer를 병렬 배치 |
+
+PR의 `검증` 표에는 `독립 리뷰` 대상 행을 정확히 하나 두고 관점, pass, 결과와
+근거를 남긴다. Ready PR은 이 행이 `통과`여야 한다. GitHub의 형식적 승인 수가
+0이어도 이 증거를 생략하지 않는다.
+
+현재 흐름은 기존 네 Skill과 분리된 일반 reviewer 역할로 충분하다. 독립적이고
+반복 재사용할 새 책임이 확인되기 전에는 리뷰 전용 Skill을 추가하지 않는다.

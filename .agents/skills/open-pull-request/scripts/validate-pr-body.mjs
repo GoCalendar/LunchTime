@@ -422,18 +422,36 @@ function validateVerification(content, errors, { template, draft }) {
     headerIndex >= 0 && lines[headerIndex + 1]
       ? splitMarkdownRow(lines[headerIndex + 1])
       : [];
-  if (
+  const invalidSeparator =
     separatorCells.length !== 4 ||
-    !separatorCells.every((cell) => /^:?-{3,}:?$/.test(cell))
-  ) {
+    !separatorCells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  if (invalidSeparator) {
     errors.push("검증 표 header 바로 아래에 네 열의 Markdown 구분선이 필요합니다.");
+  }
+
+  const rows = [];
+  if (headerIndex >= 0 && !invalidSeparator) {
+    for (let index = headerIndex + 2; index < lines.length; index += 1) {
+      if (!/^\|.*\|$/.test(lines[index])) break;
+      rows.push(splitMarkdownRow(lines[index]));
+    }
+  }
+  const independentReviewRows = rows.filter(
+    (row) => row[0] === "독립 리뷰",
+  );
+  if (independentReviewRows.length !== 1) {
+    errors.push(
+      `검증 표에는 대상 cell이 정확히 \`독립 리뷰\`인 행이 하나 필요합니다. (현재 ${independentReviewRows.length}개)`,
+    );
+  }
+  if (
+    independentReviewRows.length === 1 &&
+    independentReviewRows[0].length !== 4
+  ) {
+    errors.push("검증 표의 `독립 리뷰` 행은 네 열이어야 합니다.");
   }
   if (template) return;
 
-  const rows = lines
-    .slice(headerIndex + 2)
-    .filter((line) => /^\|.*\|$/.test(line))
-    .map((line) => splitMarkdownRow(line));
   if (rows.length === 0) {
     errors.push("검증 표에 실제 결과 행이 하나 이상 필요합니다.");
     return;
@@ -448,11 +466,26 @@ function validateVerification(content, errors, { template, draft }) {
       errors.push("검증 결과는 `통과`, `실패`, `미실행` 중 하나여야 합니다.");
     }
     if (!draft && result !== "통과") {
-      errors.push("Ready PR에는 실패 또는 미실행 검증을 남길 수 없습니다.");
+      if (row[0] === "독립 리뷰") {
+        errors.push("Ready PR의 `독립 리뷰` 결과는 `통과`여야 합니다.");
+      } else {
+        errors.push("Ready PR에는 실패 또는 미실행 검증을 남길 수 없습니다.");
+      }
     }
     if (row.some((cell) => !cell)) {
       errors.push("검증 표의 대상, 명령·확인, 결과와 증거를 모두 작성해야 합니다.");
     }
+  }
+
+  const independentReview = independentReviewRows[0];
+  if (
+    !draft &&
+    independentReview?.length === 4 &&
+    (!independentReview[3] || hasPlaceholder(independentReview[3]))
+  ) {
+    errors.push(
+      "Ready PR의 `독립 리뷰`에는 placeholder가 아닌 증거가 필요합니다.",
+    );
   }
 }
 

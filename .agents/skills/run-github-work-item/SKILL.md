@@ -14,7 +14,10 @@ GitHub 이슈, Project와 의존 관계 상태를 일치시킨다. 점검 실패
 - **병합된 작업 완료:** [work-item-lifecycle.md](references/work-item-lifecycle.md)를 읽고 PR 병합을 확인한 뒤 `complete`를 실행한다.
 - **병합되지 않은 작업 포기:** [work-item-lifecycle.md](references/work-item-lifecycle.md)를 읽고 열려 있는 PR을 닫은 뒤 원래 브랜치, 에이전트 표식과 사유로 `release`를 실행한다.
 - **파생 차단 레이블 복구:** [work-item-lifecycle.md](references/work-item-lifecycle.md)를 읽고 선점되지 않은 `Todo` 이슈에만 `reconcile`을 실행한다.
-- **이슈 본문 작성·감사:** [issue-contract.md](references/issue-contract.md)를 읽고 로컬 본문 파일이 있으면 `validate-body`를 실행한다.
+- **이슈 본문 작성·감사:** [issue-contract.md](references/issue-contract.md)를
+  읽고 `완료 조건`에 happy·error·recovery 행동 시나리오, 추적 ID와 검증
+  계획을 연결한다. 로컬 본문 파일이 있으면 `validate-body`를 실행하되 구조
+  통과를 시나리오 품질 승인으로 간주하지 않는다.
 - **MVP 작업 목록 일괄 등록:** [bulk-registration.md](references/bulk-registration.md)를 읽고 `.github/mvp-work-items.json`을 검토한 뒤 `validate`, `apply --dry-run`, 한 번의 제한된 `apply`를 차례로 실행한다.
 
 저장소 루트 기준 진입점을 사용한다.
@@ -31,6 +34,17 @@ node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs apply --dry-r
 ```
 
 `start`, `complete`, `release`, `reconcile`에 `--dry-run`을 추가하면 모든 조회를 수행하고 예정된 변경을 출력하되 GitHub 상태는 쓰지 않는다. `check`와 `validate-body`는 항상 읽기 전용이다.
+
+구현은 이슈의 시나리오를 테스트하고 제품 문서 영향을 판정한 뒤 고정한 raw
+diff snapshot을 작성 컨텍스트와 분리된 읽기 전용 검토자에게 넘긴다. 작성자
+자기 검토는 독립 리뷰가 아니며 작성·수정자와 최종 승인자를 분리한다. 의도한
+답이나 예상 결론을 주입하지 않고 원본 요구사항, raw diff와 테스트 결과를
+제공하며, 검토자는 P0~P2 발견 사항을 파일 위치와 재현 근거로 보고하고 직접
+수정하지 않는다. 낮은 위험은 최소 1명, 계약·validator·workflow 변경은 최소
+2명, 고위험 변경은 필요한 전문 관점별 검토자를 사용한다. 수정 후에는 새
+snapshot을 별도 패스로 검토하고 최초 리뷰를 1회로 세어 최대 3회까지만
+review-fix를 반복한다. 3회 뒤에도 P0/P1이 남으면 상태 전이나 승인을 진행하지
+않고 blocker로 보고한다. 이 흐름을 위해 새 리뷰 전용 Skill을 만들지 않는다.
 
 ## 안전 규칙
 

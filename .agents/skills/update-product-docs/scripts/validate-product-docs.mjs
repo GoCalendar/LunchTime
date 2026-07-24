@@ -102,6 +102,14 @@ function walk(relativePath) {
     .flatMap((entry) => walk(path.join(relativePath, entry.name)));
 }
 
+function isFile(relativePath) {
+  try {
+    return fs.statSync(path.join(root, relativePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 const MAX_ID_DIGITS = 16;
 const MAX_ID_RANGE_COUNT = 1_000;
 const MAX_EXPANDED_ID_COUNT = 10_000;
@@ -551,6 +559,564 @@ function readH2Section(content, heading) {
   return null;
 }
 
+function validateOverviewDocument(
+  file,
+  { documentLabel, requireFlowchart = false },
+) {
+  const absolutePath = path.join(root, file);
+  if (!isFile(file)) return;
+
+  const content = fs.readFileSync(absolutePath, "utf8");
+  const withoutComments = maskHtmlComments(content);
+  const visibleStructure = maskRanges(
+    withoutComments,
+    scanFencedBlockRanges(withoutComments),
+  );
+  const firstH2 = visibleStructure.match(/^## (?!#)(.+?)[ \t]*$/m);
+
+  if (!firstH2 || firstH2[1] !== "한눈에 보기") {
+    errors.push(
+      `${file}: ${documentLabel}의 첫 H2는 '## 한눈에 보기'여야 합니다.`,
+    );
+    return;
+  }
+
+  const firstMaterial = findFirstNonBlankLine(
+    withoutComments,
+    firstH2.index + firstH2[0].length,
+  );
+  const openingFence = firstMaterial?.line.match(
+    /^ {0,3}(`{3,}|~{3,})mermaid\s*$/i,
+  );
+  if (!openingFence) {
+    errors.push(
+      `${file}: '## 한눈에 보기'의 첫 자료는 Mermaid fenced block이어야 합니다.`,
+    );
+    return;
+  }
+
+  const marker = openingFence[1];
+  const closingFence = findClosingFence(
+    withoutComments,
+    firstMaterial.end,
+    marker[0],
+    marker.length,
+  );
+  if (!closingFence) {
+    errors.push(
+      `${file}: '## 한눈에 보기'의 Mermaid fenced block이 종결되지 않았습니다.`,
+    );
+    return;
+  }
+
+  const chartBody = withoutComments.slice(
+    firstMaterial.end,
+    closingFence.start,
+  );
+  if (!chartBody.trim()) {
+    errors.push(
+      `${file}: '## 한눈에 보기'의 Mermaid chart body가 비어 있습니다.`,
+    );
+  } else if (requireFlowchart) {
+    const firstDirective = chartBody
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("%%"));
+    if (
+      !firstDirective ||
+      !/^flowchart[ \t]+(?:TB|TD|BT|RL|LR)[ \t]*$/i.test(firstDirective)
+    ) {
+      errors.push(
+        `${file}: '## 한눈에 보기'의 Mermaid chart는 유효한 방향을 가진 flowchart여야 합니다.`,
+      );
+    }
+  }
+
+  const afterClosingFence = withoutComments.slice(closingFence.end);
+  const summaryStructure = maskRanges(
+    afterClosingFence,
+    scanFencedBlockRanges(afterClosingFence),
+  );
+  const nextH2 = summaryStructure.match(/^## (?!#).+?[ \t]*$/m);
+  const summarySection = afterClosingFence.slice(
+    0,
+    nextH2 ? nextH2.index : afterClosingFence.length,
+  );
+  const { startsWithList, directItemCount } =
+    readLeadingTopLevelBulletSummary(summarySection);
+  if (!startsWithList || directItemCount < 3 || directItemCount > 5) {
+    errors.push(
+      `${file}: 한눈에 보기 Mermaid 직후 첫 visible material은 연속된 top-level bullet list여야 하며, visible top-level bullet 요약이 3~5개 필요합니다. (현재 ${directItemCount}개)`,
+    );
+  }
+}
+
+function readVisibleH2Sections(content) {
+  const visibleStructure = maskInvisibleMarkdown(content);
+  const matches = [
+    ...visibleStructure.matchAll(/^## (?!#)(.+?)[ \t]*$/gm),
+  ];
+  return matches.map((match, index) => ({
+    heading: match[1],
+    content: content.slice(
+      match.index + match[0].length,
+      matches[index + 1]?.index ?? content.length,
+    ),
+  }));
+}
+
+function validateHarnessSteps(file) {
+  const absolutePath = path.join(root, file);
+  if (!isFile(file)) return;
+
+  const sections = readVisibleH2Sections(
+    fs.readFileSync(absolutePath, "utf8"),
+  );
+  const stepSections = sections.filter((section) =>
+    /^STEP(?:[ \t]|$)/.test(section.heading),
+  );
+  const parsedSteps = stepSections.map((section) => ({
+    ...section,
+    number: section.heading.match(
+      /^STEP ([0-9]{2})\.(?:[ \t]+\S.*)?$/,
+    )?.[1],
+  }));
+  const expectedNumbers = Array.from(
+    { length: 11 },
+    (_, index) => String(index + 1).padStart(2, "0"),
+  );
+
+  for (const number of expectedNumbers) {
+    const count = parsedSteps.filter((step) => step.number === number).length;
+    if (count !== 1) {
+      errors.push(
+        `${file}: '## STEP ${number}.' 섹션이 정확히 하나 필요합니다. (현재 ${count}개)`,
+      );
+    }
+  }
+
+  const actualOrder = parsedSteps.map((step) => step.number ?? "형식 오류");
+  if (
+    actualOrder.length !== expectedNumbers.length ||
+    actualOrder.some((number, index) => number !== expectedNumbers[index])
+  ) {
+    errors.push(
+      `${file}: STEP H2는 '## STEP 01.'부터 '## STEP 11.'까지 정확한 순서와 형식으로 나와야 합니다.`,
+    );
+  }
+
+  const fields = [
+    "목적",
+    "핵심 입력",
+    "완료 조건",
+    "대표 실패·중단 조건",
+  ];
+  for (const step of parsedSteps.filter(({ number }) => number)) {
+    const withoutComments = maskHtmlComments(step.content);
+    const fencedBlocks = scanFencedBlockRanges(withoutComments);
+    const visibleContent = maskRanges(withoutComments, fencedBlocks);
+    const directItems = [];
+    let directIndent;
+    let directBulletCount = 0;
+    let currentItem;
+    let hasUnexpectedMaterial = fencedBlocks.length > 0;
+
+    for (const line of visibleContent.split("\n")) {
+      if (!line.trim()) continue;
+
+      const bullet = matchTopLevelBullet(line);
+      if (bullet) {
+        const indent = bullet[1].length;
+        directIndent ??= indent;
+        if (indent !== directIndent) {
+          hasUnexpectedMaterial = true;
+          currentItem = undefined;
+          continue;
+        }
+
+        directBulletCount += 1;
+        const normalized = line.slice(indent);
+        const fieldMatch = normalized.match(
+          /^- \*\*(목적|핵심 입력|완료 조건|대표 실패·중단 조건):\*\*(?:[ \t]+(.*))?[ \t]*$/,
+        );
+        if (!fieldMatch) {
+          hasUnexpectedMaterial = true;
+          currentItem = undefined;
+          continue;
+        }
+
+        currentItem = {
+          field: fieldMatch[1],
+          hasValue: Boolean(fieldMatch[2]?.trim()),
+        };
+        directItems.push(currentItem);
+        continue;
+      }
+
+      const indentation = line.match(/^ */)[0].length;
+      const looksLikeNestedBullet = /^ +[-+*][ \t]+\S/.test(line);
+      if (
+        !currentItem ||
+        indentation < (directIndent ?? 0) + 2 ||
+        looksLikeNestedBullet
+      ) {
+        hasUnexpectedMaterial = true;
+        currentItem = undefined;
+        continue;
+      }
+      currentItem.hasValue ||= Boolean(line.trim());
+    }
+
+    if (directBulletCount !== fields.length || hasUnexpectedMaterial) {
+      errors.push(
+        `${file}: '## STEP ${step.number}.'에는 지정된 네 direct item 외의 visible material을 둘 수 없습니다. (direct item ${directBulletCount}개)`,
+      );
+    }
+
+    for (const field of fields) {
+      const matches = directItems.filter((item) => item.field === field);
+      if (matches.length !== 1 || !matches[0]?.hasValue) {
+        errors.push(
+          `${file}: '## STEP ${step.number}.'에는 비어 있지 않은 direct item '- **${field}:**'이 정확히 하나 필요합니다. (현재 ${matches.length}개)`,
+        );
+      }
+    }
+  }
+}
+
+function isSupportedYamlScalarSyntax(rawValue) {
+  const value = rawValue.trim();
+  if (!value || value.startsWith("#")) return true;
+
+  if (value.startsWith('"')) {
+    const quoted = value.match(/^("(?:[^"\\]|\\.)*")(?:[ \t]+#.*)?$/);
+    if (!quoted) return false;
+    try {
+      return typeof JSON.parse(quoted[1]) === "string";
+    } catch {
+      return false;
+    }
+  }
+  if (value.startsWith("'")) {
+    return /^'(?:[^']|'')*'(?:[ \t]+#.*)?$/.test(value);
+  }
+
+  const withoutComment = value.replace(/[ \t]+#.*$/, "").trim();
+  if (
+    !withoutComment ||
+    /:[ \t]/.test(withoutComment) ||
+    /^(?:[-?:](?:[ \t]|$)|[,}\]\[{\#&*!|>%@`])/.test(withoutComment)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function parseSimpleYamlScalar(rawValue) {
+  if (!isSupportedYamlScalarSyntax(rawValue)) return null;
+
+  const value = rawValue.trim();
+  if (!value || value.startsWith("#")) return null;
+  if (value.startsWith('"')) {
+    const quoted = value.match(/^("(?:[^"\\]|\\.)*")/);
+    const parsed = quoted ? JSON.parse(quoted[1]) : "";
+    return parsed.trim() ? parsed : null;
+  }
+  if (value.startsWith("'")) {
+    const quoted = value.match(/^('(?:[^']|'')*')/);
+    const parsed = quoted
+      ? quoted[1].slice(1, -1).replace(/''/g, "'")
+      : "";
+    return parsed.trim() ? parsed : null;
+  }
+  return null;
+}
+
+function parseSafeYamlStringScalar(rawValue) {
+  if (!isSupportedYamlScalarSyntax(rawValue)) return null;
+
+  const value = rawValue.trim();
+  if (!value || value.startsWith("#")) return null;
+  if (value.startsWith('"')) {
+    const quoted = value.match(/^("(?:[^"\\]|\\.)*")(?:[ \t]+#.*)?$/);
+    if (!quoted) return null;
+    try {
+      const parsed = JSON.parse(quoted[1]);
+      return parsed.trim() ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  if (value.startsWith("'")) {
+    const quoted = value.match(/^('(?:[^']|'')*')(?:[ \t]+#.*)?$/);
+    if (!quoted) return null;
+    const parsed = quoted[1].slice(1, -1).replace(/''/g, "'");
+    return parsed.trim() ? parsed : null;
+  }
+
+  const parsed = value.replace(/[ \t]+#.*$/, "").trim();
+  if (
+    !parsed ||
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(parsed) ||
+    /^(?:~|null|true|false|yes|no|on|off|y|n)$/i.test(parsed) ||
+    /^[-+]?(?:\.(?:inf|nan|[0-9][0-9_]*)|0b[01_]+|0o[0-7_]+|0x[0-9a-f_]+|[0-9][0-9_]*(?::[0-5]?[0-9])*(?:\.[0-9_]*)?(?:e[-+]?[0-9]+)?)$/i.test(
+      parsed,
+    ) ||
+    /^\d{4}-\d{1,2}-\d{1,2}(?:[Tt ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[ \t]*(?:Z|[-+]\d{1,2}(?::?\d{2})?))?)?$/.test(
+      parsed,
+    )
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+function looksLikeSimpleFrontmatterBlock(lines) {
+  let hasRequiredField = false;
+  let hasContent = false;
+
+  for (const line of lines) {
+    if (!line.trim() || /^[ \t]*#/.test(line)) continue;
+    hasContent = true;
+    const mapping = line.match(
+      /^([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*)$/,
+    );
+    if (!mapping) return false;
+    hasRequiredField ||= ["name", "description"].includes(mapping[1]);
+  }
+
+  return hasContent && hasRequiredField;
+}
+
+function validateSkillFrontmatter(skillDirectory) {
+  const skillFile = `${skillDirectory}/SKILL.md`;
+  if (!isFile(skillFile)) return;
+
+  const content = fs
+    .readFileSync(path.join(root, skillFile), "utf8")
+    .replace(/\r\n?/g, "\n");
+  const lines = content.split("\n");
+  if (lines[0] !== "---") {
+    errors.push(
+      `${skillFile}: 파일 맨 앞에 '---'로 시작하는 YAML frontmatter가 필요합니다.`,
+    );
+    return;
+  }
+
+  const closingIndex = lines.indexOf("---", 1);
+  if (closingIndex < 0) {
+    errors.push(
+      `${skillFile}: YAML frontmatter 종료 구분자 '---'가 없습니다.`,
+    );
+    return;
+  }
+
+  const visibleLines = maskInvisibleMarkdown(content).split("\n");
+  for (
+    let openingIndex = closingIndex + 1;
+    openingIndex < visibleLines.length;
+    openingIndex += 1
+  ) {
+    if (visibleLines[openingIndex] !== "---") continue;
+    const duplicateClosingIndex = visibleLines.indexOf(
+      "---",
+      openingIndex + 1,
+    );
+    if (duplicateClosingIndex < 0) continue;
+    if (
+      looksLikeSimpleFrontmatterBlock(
+        visibleLines.slice(openingIndex + 1, duplicateClosingIndex),
+      )
+    ) {
+      errors.push(
+        `${skillFile}: YAML frontmatter block은 파일 맨 앞에 정확히 하나만 허용합니다.`,
+      );
+      break;
+    }
+    openingIndex = duplicateClosingIndex;
+  }
+
+  const entries = [];
+  const invalidLines = [];
+  for (let index = 1; index < closingIndex; index += 1) {
+    const line = lines[index];
+    if (!line.trim() || /^[ \t]*#/.test(line)) continue;
+    const mapping = line.match(
+      /^([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*)$/,
+    );
+    if (!mapping) {
+      invalidLines.push(index + 1);
+      continue;
+    }
+
+    const value = parseSafeYamlStringScalar(mapping[2]);
+    if (value === null) invalidLines.push(index + 1);
+    entries.push({ key: mapping[1], value });
+  }
+
+  if (invalidLines.length > 0) {
+    errors.push(
+      `${skillFile}: frontmatter는 안전한 단일-line string scalar만 사용하는 YAML block-mapping이어야 합니다. (line ${invalidLines.join(", ")})`,
+    );
+  }
+
+  for (const field of ["name", "description"]) {
+    const matches = entries.filter(({ key }) => key === field);
+    if (matches.length !== 1 || matches[0]?.value === null) {
+      errors.push(
+        `${skillFile}: frontmatter '${field}'에 비어 있지 않은 안전한 string 값이 정확히 하나 필요합니다.`,
+      );
+    }
+  }
+
+  const nameEntries = entries.filter(({ key }) => key === "name");
+  if (nameEntries.length === 1 && nameEntries[0].value !== null) {
+    const expectedName = path.basename(skillDirectory);
+    if (nameEntries[0].value !== expectedName) {
+      errors.push(
+        `${skillFile}: frontmatter 'name'은 Skill 디렉터리 이름 '${expectedName}'과 일치해야 합니다: ${nameEntries[0].value}`,
+      );
+    }
+  }
+}
+
+function validateSkillInterface(skillDirectory) {
+  const skillFile = `${skillDirectory}/SKILL.md`;
+  const interfaceFile = `${skillDirectory}/agents/openai.yaml`;
+
+  for (const file of [skillFile, interfaceFile]) {
+    if (!isFile(file)) {
+      errors.push(`필수 Skill 파일이 없습니다: ${file}`);
+    }
+  }
+  validateSkillFrontmatter(skillDirectory);
+  if (!isFile(interfaceFile)) return;
+
+  const content = fs
+    .readFileSync(path.join(root, interfaceFile), "utf8")
+    .replace(/\r\n?/g, "\n");
+  const invalidYamlLines = new Set();
+  let hasYamlContent = false;
+  let hasDocumentStart = false;
+  let yamlStack = [
+    {
+      indent: -1,
+      acceptsChildren: true,
+      childIndent: undefined,
+    },
+  ];
+  for (const [index, line] of content.split("\n").entries()) {
+    if (!line.trim() || /^[ \t]*#/.test(line)) {
+      continue;
+    }
+    if (line === "---") {
+      if (hasYamlContent || hasDocumentStart) {
+        invalidYamlLines.add(index + 1);
+      }
+      hasDocumentStart = true;
+      yamlStack = [
+        {
+          indent: -1,
+          acceptsChildren: true,
+          childIndent: undefined,
+        },
+      ];
+      continue;
+    }
+    if (line === "...") {
+      invalidYamlLines.add(index + 1);
+      continue;
+    }
+    hasYamlContent = true;
+
+    const mapping = line.match(
+      /^( *)([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*)$/,
+    );
+    if (!mapping) {
+      invalidYamlLines.add(index + 1);
+      continue;
+    }
+
+    const indent = mapping[1].length;
+    while (
+      yamlStack.length > 1 &&
+      yamlStack[yamlStack.length - 1].indent >= indent
+    ) {
+      yamlStack.pop();
+    }
+    const parent = yamlStack[yamlStack.length - 1];
+    if (
+      !parent.acceptsChildren ||
+      (parent.childIndent !== undefined && parent.childIndent !== indent)
+    ) {
+      invalidYamlLines.add(index + 1);
+    } else if (parent.childIndent === undefined) {
+      parent.childIndent = indent;
+    }
+
+    if (!isSupportedYamlScalarSyntax(mapping[3])) {
+      invalidYamlLines.add(index + 1);
+    }
+    const trimmedValue = mapping[3].trim();
+    yamlStack.push({
+      indent,
+      acceptsChildren: !trimmedValue || trimmedValue.startsWith("#"),
+      childIndent: undefined,
+    });
+  }
+  if (invalidYamlLines.size > 0) {
+    errors.push(
+      `${interfaceFile}: 지원하는 단일-document YAML block-mapping 구조가 아닙니다. (line ${[...invalidYamlLines].join(", ")})`,
+    );
+  }
+
+  const interfaceMatches = [
+    ...content.matchAll(/^interface:[ \t]*(?:#.*)?$/gm),
+  ];
+  if (interfaceMatches.length !== 1) {
+    errors.push(
+      `${interfaceFile}: top-level 'interface:' mapping이 정확히 하나 필요합니다.`,
+    );
+    return;
+  }
+
+  const interfaceStart =
+    interfaceMatches[0].index + interfaceMatches[0][0].length;
+  const afterInterface = content.slice(interfaceStart);
+  const nextTopLevelKey = afterInterface.match(
+    /^(?![ \t#\r\n])[^:\r\n]+:[^\r\n]*$/m,
+  );
+  const interfaceBlock = afterInterface.slice(
+    0,
+    nextTopLevelKey?.index ?? afterInterface.length,
+  );
+  const mappingEntries = [
+    ...interfaceBlock.matchAll(/^( +)([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*)$/gm),
+  ];
+  const directIndent = mappingEntries.reduce(
+    (minimum, match) => Math.min(minimum, match[1].length),
+    Number.POSITIVE_INFINITY,
+  );
+
+  for (const field of [
+    "display_name",
+    "short_description",
+    "default_prompt",
+  ]) {
+    const matches = mappingEntries.filter(
+      (match) =>
+        match[1].length === directIndent && match[2] === field,
+    );
+    const value =
+      matches.length === 1 ? parseSimpleYamlScalar(matches[0][3]) : null;
+    if (matches.length !== 1 || value === null) {
+      errors.push(
+        `${interfaceFile}: interface.${field}에 비어 있지 않은 scalar 값이 정확히 하나 필요합니다.`,
+      );
+    }
+  }
+}
+
 function sameCells(actual, expected) {
   return (
     actual?.length === expected.length &&
@@ -635,6 +1201,16 @@ const architectureFiles = [
 ];
 const architectureDetailFiles = architectureFiles.slice(1);
 const architectureIndexFile = architectureFiles[0];
+const developmentFiles = [
+  "docs/development/01_harness_guide.md",
+  "docs/development/02_testing_standard.md",
+];
+const skillDirectories = [
+  ".agents/skills/update-product-docs",
+  ".agents/skills/run-github-work-item",
+  ".agents/skills/commit-work-item",
+  ".agents/skills/open-pull-request",
+];
 const architectureIndexSections = [
   "빠른 선택",
   "추천 읽기 순서",
@@ -651,13 +1227,32 @@ const architectureQuickSelectionHeaders = [
 ];
 
 for (const file of architectureFiles) {
-  if (!fs.existsSync(path.join(root, file))) {
+  if (!isFile(file)) {
     errors.push(`필수 아키텍처 문서가 없습니다: ${file}`);
   }
 }
 
+for (const file of developmentFiles) {
+  if (!isFile(file)) {
+    errors.push(`필수 개발 표준 문서가 없습니다: ${file}`);
+  }
+}
+
+const unexpectedDevelopmentFiles = walk("docs/development")
+  .filter((file) => !developmentFiles.includes(file))
+  .sort();
+for (const file of unexpectedDevelopmentFiles) {
+  errors.push(
+    `docs/development에는 지정된 두 문서만 둘 수 있습니다. 허용되지 않은 파일: ${file}`,
+  );
+}
+
+for (const skillDirectory of skillDirectories) {
+  validateSkillInterface(skillDirectory);
+}
+
 const architectureIndexPath = path.join(root, architectureIndexFile);
-if (fs.existsSync(architectureIndexPath)) {
+if (isFile(architectureIndexFile)) {
   const indexContent = fs.readFileSync(architectureIndexPath, "utf8");
   const sections = new Map();
 
@@ -763,84 +1358,18 @@ if (fs.existsSync(architectureIndexPath)) {
 }
 
 for (const file of architectureDetailFiles) {
-  const absolutePath = path.join(root, file);
-  if (!fs.existsSync(absolutePath)) continue;
-
-  const content = fs.readFileSync(absolutePath, "utf8");
-  const withoutComments = maskHtmlComments(content);
-  const visibleStructure = maskRanges(
-    withoutComments,
-    scanFencedBlockRanges(withoutComments),
-  );
-  const firstH2 = visibleStructure.match(/^## (?!#)(.+?)[ \t]*$/m);
-
-  if (!firstH2 || firstH2[1] !== "한눈에 보기") {
-    errors.push(
-      `${file}: 상세 아키텍처 문서의 첫 H2는 '## 한눈에 보기'여야 합니다.`,
-    );
-    continue;
-  }
-
-  const firstMaterial = findFirstNonBlankLine(
-    withoutComments,
-    firstH2.index + firstH2[0].length,
-  );
-  const openingFence = firstMaterial?.line.match(
-    /^ {0,3}(`{3,}|~{3,})mermaid\s*$/i,
-  );
-  if (!openingFence) {
-    errors.push(
-      `${file}: '## 한눈에 보기'의 첫 자료는 Mermaid fenced block이어야 합니다.`,
-    );
-    continue;
-  }
-
-  const marker = openingFence[1];
-  const closingFence = findClosingFence(
-    withoutComments,
-    firstMaterial.end,
-    marker[0],
-    marker.length,
-  );
-  if (!closingFence) {
-    errors.push(
-      `${file}: '## 한눈에 보기'의 Mermaid fenced block이 종결되지 않았습니다.`,
-    );
-    continue;
-  }
-
-  const chartBody = withoutComments.slice(
-    firstMaterial.end,
-    closingFence.start,
-  );
-  if (!chartBody.trim()) {
-    errors.push(
-      `${file}: '## 한눈에 보기'의 Mermaid chart body가 비어 있습니다.`,
-    );
-  }
-
-  const afterClosingFence = withoutComments.slice(closingFence.end);
-  const summaryStructure = maskRanges(
-    afterClosingFence,
-    scanFencedBlockRanges(afterClosingFence),
-  );
-  const nextH2 = summaryStructure.match(/^## (?!#).+?[ \t]*$/m);
-  const summarySection = afterClosingFence.slice(
-    0,
-    nextH2 ? nextH2.index : afterClosingFence.length,
-  );
-  const { startsWithList, directItemCount } =
-    readLeadingTopLevelBulletSummary(summarySection);
-  if (
-    !startsWithList ||
-    directItemCount < 3 ||
-    directItemCount > 5
-  ) {
-    errors.push(
-      `${file}: 한눈에 보기 Mermaid 직후 첫 visible material은 연속된 top-level bullet list여야 하며, visible top-level bullet 요약이 3~5개 필요합니다. (현재 ${directItemCount}개)`,
-    );
-  }
+  validateOverviewDocument(file, {
+    documentLabel: "상세 아키텍처 문서",
+  });
 }
+
+for (const file of developmentFiles) {
+  validateOverviewDocument(file, {
+    documentLabel: "개발 표준 문서",
+    requireFlowchart: true,
+  });
+}
+validateHarnessSteps(developmentFiles[0]);
 
 for (const file of markdownFiles) {
   const content = fs.readFileSync(path.join(root, file), "utf8");
@@ -1333,7 +1862,7 @@ if (fs.existsSync(backlogPath)) {
 
 for (const file of architectureFiles) {
   const absolutePath = path.join(root, file);
-  if (!fs.existsSync(absolutePath)) continue;
+  if (!isFile(file)) continue;
   const visibleContent = maskInvisibleMarkdown(
     fs.readFileSync(absolutePath, "utf8"),
   );
@@ -1399,6 +1928,19 @@ if (!hasArchitectureIndexLink) {
   errors.push(
     `README.md: ${architectureIndexFile}를 가리키는 visible Markdown link가 필요합니다.`,
   );
+}
+
+for (const developmentFile of developmentFiles) {
+  const developmentTarget = path.join(root, developmentFile);
+  const hasDevelopmentLink = findVisibleMarkdownLinks(readme).some(
+    (target) =>
+      resolveLocalMarkdownTarget("README.md", target) === developmentTarget,
+  );
+  if (!hasDevelopmentLink) {
+    errors.push(
+      `README.md: ${developmentFile}를 가리키는 visible Markdown link가 필요합니다.`,
+    );
+  }
 }
 
 for (const directory of ["docs/prd", "docs/policies"]) {
