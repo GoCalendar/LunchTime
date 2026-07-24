@@ -1,4 +1,4 @@
 interface:
-  display_name: "Update Product Docs"
-  short_description: "PR 전 PRD·Policies 영향도를 검사하고 정본을 갱신합니다"
-  default_prompt: "Use $update-product-docs to review the implementation diff and update affected PRD or Policies before opening a PR."
+  display_name: "제품 문서 갱신"
+  short_description: "사람과 AI가 읽기 좋은 PRD·정책을 작성하고 검증"
+  default_prompt: "$update-product-docs를 사용해 LunchTime PRD 또는 정책을 작성하거나 검토하고 구현 전에 추적성을 유지해 줘."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pull Request 열기"
+  short_description: "이슈 변경을 AI가 재구성 가능한 PR로 생성하고 검증합니다"
+  default_prompt: "$open-pull-request를 사용해 현재 이슈 브랜치의 변경을 검증하고 맥락이 완결된 PR을 작성해 주세요."

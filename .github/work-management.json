@@ -1,0 +1,24 @@
+{
+  "repository": "GoCalendar/LunchTime",
+  "branch": {
+    "base": "main",
+    "prefix": "work/"
+  },
+  "project": {
+    "owner": "GoCalendar",
+    "number": 1,
+    "statusField": "Status",
+    "statusOptions": {
+      "todo": "Todo",
+      "inProgress": "In Progress",
+      "done": "Done"
+    }
+  },
+  "labels": {
+    "todo": "status:todo",
+    "inProgress": "status:in-progress",
+    "done": "status:done",
+    "blocked": "dependency:blocked"
+  },
+  "maxInProgress": 2
+}
