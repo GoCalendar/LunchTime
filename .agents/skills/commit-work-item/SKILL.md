@@ -1,6 +1,6 @@
 ---
 name: commit-work-item
-description: LunchTime GitHub 작업 이슈의 로컬 변경을 범위·제품 문서 영향·검증 증거와 대조한 뒤 안전한 원자적 Git 커밋으로 만든다. 이슈 구현을 커밋하거나, 커밋 메시지를 작성하거나, 변경을 스테이징해 커밋해 달라는 요청에 사용한다.
+description: LunchTime GitHub 작업 이슈의 로컬 변경을 범위·제품 문서 영향·검증 증거와 대조하고 로컬 도구·OS·IDE 잔여물의 Git index 진입을 차단한 뒤 안전한 원자적 Git 커밋으로 만든다. 이슈 구현을 커밋하거나, 커밋 메시지를 작성하거나, 변경을 스테이징해 커밋해 달라는 요청에 사용한다.
 ---
 
 # 작업 이슈 커밋
@@ -67,9 +67,19 @@ description: LunchTime GitHub 작업 이슈의 로컬 변경을 범위·제품 �
 3. 검토한 개별 파일 경로를 `git add -- <path>...`로만 스테이징한다.
 4. `git add .`, `git add -A`, `git add --all`, 디렉터리·glob 경로,
    `git commit -a`를 사용하지 않는다.
-5. 전체 cached diff를 다시 읽어 이슈 범위, 독립 검토한 snapshot, 비밀·개인
+5. 다음 결정적 gate로 전체 Git index에서 `.omc`, OS 메타데이터와 명백한
+   편집기·IDE 개인 상태를 검사한다.
+
+   ```bash
+   node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs --index
+   ```
+
+   실패하면 커밋하거나 파일을 자동 삭제·unstage하지 말고 정확한 경로와 이유를
+   보고한다. `.gitignore`는 일반 staging과 상태 노이즈를 줄일 뿐 이 gate를
+   대체하지 않는다.
+6. 전체 cached diff를 다시 읽어 이슈 범위, 독립 검토한 snapshot, 비밀·개인
    정보, 로컬 절대 경로, 개인 설정과 우발적 파일을 확인한다.
-6. 커밋할 패치 자체에 `git diff --cached --check`를 실행한다.
+7. 커밋할 패치 자체에 `git diff --cached --check`를 실행한다.
 
 ## 5. 메시지와 신원 확인
 
@@ -89,8 +99,8 @@ description: LunchTime GitHub 작업 이슈의 로컬 변경을 범위·제품 �
 
 ## 6. 커밋 후 검증과 보고
 
-1. 생성된 커밋의 해시, 제목, 본문과 포함 경로를 다시 읽고 메시지 validator로
-   재검증한다.
+1. 생성된 커밋의 해시, 제목, 본문과 포함 경로를 다시 읽고 메시지 validator와
+   commit path gate로 재검증한다.
 2. 사전 확인한 로컬 신원, 이슈 범위와 메시지 계약이 모두 일치하는지
    확인한다.
 3. `git status --short --branch`로 남은 변경을 확인한다. 남은 사용자 변경을

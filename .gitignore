@@ -1,0 +1,21 @@
+# Local agent runtime state
+.omc/
+
+# OS metadata
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Editor backup and swap files
+.*.swp
+.*.swo
+.*.swn
+*~
+
+# JetBrains private workspace state
+**/.idea/workspace.xml
+**/.idea/tasks.xml
+**/.idea/dataSources.local.xml
+**/.idea/shelf/
+**/.idea/httpRequests/

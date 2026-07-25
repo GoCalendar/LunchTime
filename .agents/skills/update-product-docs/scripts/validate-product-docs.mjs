@@ -4,6 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+import {
+  definedProductContractIds,
+  visibleContractMarkdown,
+} from "./product-contract-ids.mjs";
+
 const root = process.cwd();
 const errors = [];
 const excludedPaths = new Set();
@@ -784,6 +789,359 @@ function validateHarnessSteps(file) {
   }
 }
 
+function validateHarnessOrchestration(file) {
+  if (!isFile(file)) return;
+
+  const content = fs.readFileSync(path.join(root, file), "utf8");
+  const visibleContent = visibleContractMarkdown(content);
+  const sections = readVisibleH2Sections(content);
+
+  if (
+    !/Claude Code와\s+Codex/.test(visibleContent) ||
+    !/단일\s+orchestrator\s+인덱스/.test(visibleContent)
+  ) {
+    errors.push(
+      `${file}: Claude Code와 Codex가 공유하는 단일 orchestrator 인덱스임을 명시해야 합니다.`,
+    );
+  }
+
+  const requiredSections = ["요청 라우팅", "규칙 소유와 링크"];
+  for (const heading of requiredSections) {
+    const count = sections.filter((section) => section.heading === heading).length;
+    if (count !== 1) {
+      errors.push(
+        `${file}: '## ${heading}' 섹션이 정확히 하나 필요합니다. (현재 ${count}개)`,
+      );
+    }
+  }
+
+  for (const [number, status] of [
+    ["02", "Todo"],
+    ["03", "In Progress"],
+  ]) {
+    const section = sections.find((entry) =>
+      entry.heading.startsWith(`STEP ${number}.`),
+    );
+    if (
+      !section ||
+      !new RegExp(
+        `Project 관리 이슈인 경우[\\s\\S]{0,120}Project[^\\n]{0,80}${status}`,
+      ).test(section.content)
+    ) {
+      errors.push(
+        `${file}: STEP ${number}은 Project 상태 ${status}를 Project 관리 이슈에만 조건부로 요구해야 합니다.`,
+      );
+    }
+  }
+
+  const routingSection = readH2Section(content, "요청 라우팅");
+  if (routingSection !== null) {
+    const rows = readTraceTableRows(routingSection, {
+      file,
+      label: "요청 라우팅",
+      headers: [
+        [
+          "요청 유형",
+          "첫 정본 입력",
+          "실행 Skill·소유자",
+          "종료·인계 지점",
+        ],
+      ],
+    });
+    const requiredRoutes = [
+      "새 이슈 작성·감사",
+      "기존 이슈 구현·재개",
+      "제품 문서 작성·변경",
+      "commit 작성",
+      "PR 생성·갱신만",
+      "작업 완료·병합",
+      "실패·부분 응답 복구",
+    ];
+    for (const route of requiredRoutes) {
+      const count = rows.filter((row) => row[0] === route).length;
+      if (count !== 1) {
+        errors.push(
+          `${file}: 요청 라우팅 표에 '${route}' 행이 정확히 하나 필요합니다. (현재 ${count}개)`,
+        );
+      }
+    }
+    if (rows.length !== requiredRoutes.length) {
+      errors.push(
+        `${file}: 요청 라우팅 표에는 지정된 ${requiredRoutes.length}개 요청 유형만 필요합니다. (현재 ${rows.length}개)`,
+      );
+    }
+
+    const routeText = (name) =>
+      rows.find((row) => row[0] === name)?.join(" ") ?? "";
+    if (
+      !/run-github-work-item/.test(routeText("새 이슈 작성·감사")) ||
+      !/\bcreate\b/.test(routeText("새 이슈 작성·감사")) ||
+      !/on-demand/i.test(routeText("새 이슈 작성·감사")) ||
+      !/11단계 밖/.test(routeText("새 이슈 작성·감사"))
+    ) {
+      errors.push(
+        `${file}: 새 이슈 작성·감사는 run-github-work-item create가 소유하는 on-demand 11단계 밖 작업이어야 합니다.`,
+      );
+    }
+    if (
+      !/open-pull-request/.test(routeText("PR 생성·갱신만")) ||
+      !/멈추/.test(routeText("PR 생성·갱신만")) ||
+      !/병합하지/.test(routeText("PR 생성·갱신만"))
+    ) {
+      errors.push(
+        `${file}: PR 생성·갱신만 요청은 open-pull-request 재조회에서 멈추고 병합하지 않아야 합니다.`,
+      );
+    }
+    if (
+      !/open-pull-request/.test(routeText("작업 완료·병합")) ||
+      !/run-github-work-item/.test(routeText("작업 완료·병합")) ||
+      !/현재 head/.test(routeText("작업 완료·병합")) ||
+      !/\bCI\b/.test(routeText("작업 완료·병합")) ||
+      !/review snapshot/.test(routeText("작업 완료·병합")) ||
+      !/squash merge/.test(routeText("작업 완료·병합")) ||
+      !/\bcomplete\b/.test(routeText("작업 완료·병합"))
+    ) {
+      errors.push(
+        `${file}: 작업 완료·병합 라우팅은 현재 head·CI·review snapshot에서 squash merge와 complete까지 두 Skill owner를 연결해야 합니다.`,
+      );
+    }
+  }
+
+  const ownershipSection = readH2Section(content, "규칙 소유와 링크");
+  if (ownershipSection !== null) {
+    if (!/한 규칙에는 세부 정본 소유자를 하나만 둔다/.test(ownershipSection)) {
+      errors.push(
+        `${file}: 규칙 소유와 링크에는 한 규칙의 세부 정본 소유자를 하나만 둔다는 원칙이 필요합니다.`,
+      );
+    }
+    const rows = readTraceTableRows(ownershipSection, {
+      file,
+      label: "규칙 소유와 링크",
+      headers: [["규칙", "단일 소유 정본", "이 인덱스의 역할"]],
+    });
+    const requiredOwners = [
+      "사용자 결과·수용 동작",
+      "상태·권한·실패·복구·보존·보안",
+      "작업 범위·경로·행동 시나리오·검증 계획",
+      "상태 전이·GitHub 쓰기·재조회·복구 명령",
+      "PR의 고정 필드",
+      "CI의 결정적 증거",
+    ];
+    for (const owner of requiredOwners) {
+      const count = rows.filter((row) => row[0] === owner).length;
+      if (count !== 1) {
+        errors.push(
+          `${file}: 규칙 소유와 링크 표에 '${owner}' 행이 정확히 하나 필요합니다. (현재 ${count}개)`,
+        );
+      }
+    }
+    if (rows.length !== requiredOwners.length) {
+      errors.push(
+        `${file}: 규칙 소유와 링크 표에는 지정된 ${requiredOwners.length}개 소유 규칙만 필요합니다. (현재 ${rows.length}개)`,
+      );
+    }
+  }
+}
+
+function validateHarnessSkillContracts() {
+  const requiredFiles = [
+    ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
+    ".agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
+    ".agents/skills/open-pull-request/scripts/validate-finalize.mjs",
+    ".agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
+  ];
+  for (const file of requiredFiles) {
+    if (!isFile(file)) {
+      errors.push(`필수 하네스 검증 파일이 없습니다: ${file}`);
+    }
+  }
+
+  const contracts = [
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      terms: [
+        ["승인된 결정", /승인된 결정/],
+        ["planned ID", /planned ID/],
+        [
+          "같은 이슈·branch·PR",
+          /같은[\s\S]{0,160}이슈[\s\S]{0,160}branch[\s\S]{0,160}PR/,
+        ],
+        ["별도 문서 이슈 불필요", /별도 문서 이슈나 PR을 만들 필요는 없다/],
+        ["Ready 전 실제 정의", /Ready 전[\s\S]{0,300}실제[\s\S]{0,80}정의/],
+        ["README·인덱스", /README·(?:하위 )?인덱스/],
+        [
+          "concrete planned definition file",
+          /namespace[\s\S]{0,180}`NN_\*\.md`[\s\S]{0,220}README[\s\S]{0,120}재귀 glob/,
+        ],
+        [
+          "exact-head product definitions",
+          /exact PR head Git tree[\s\S]{0,240}image alt[\s\S]{0,160}<details>/,
+        ],
+        ["validator", /validator/],
+        ["구현·테스트 추적", /구현·테스트/],
+        [
+          "미결정 시 중단",
+          /(?:미결정 제품 선택[\s\S]{0,160}중단|제품 결정이 승인되지 않았다면 중단)/,
+        ],
+      ],
+    },
+    {
+      file: ".agents/skills/run-github-work-item/SKILL.md",
+      terms: [
+        [
+          "exact create labels",
+          /요청·파생 label의 정확한 집합[\s\S]{0,180}요청하지 않은 label/,
+        ],
+        [
+          "stale blocked bounded repair",
+          /stale[\s\S]{0,80}`dependency:blocked`[\s\S]{0,180}live 의존 관계/,
+        ],
+      ],
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      terms: [
+        ["PR-only 중단", /PR 생성·갱신만[\s\S]{0,240}멈춘다/],
+        ["명시적 finalize", /완료·병합·end-to-end/],
+        ["finalize validator", /validate-finalize\.mjs/],
+        ["exact-head guard", /--match-head-commit/],
+        [
+          "structured exact review head",
+          /review-head=<40자리 SHA>[\s\S]{0,180}정확히 한 번[\s\S]{0,180}완전히 일치/,
+        ],
+        ["squash merge", /gh pr merge[\s\S]{0,180}--squash/],
+        ["merge branch 보존", /`--delete-branch`[\s\S]{0,160}사용하지 않는다/],
+        [
+          "exact remote OID 조회",
+          /git ls-remote --heads origin refs\/heads\/<validated-branch>/,
+        ],
+        [
+          "CAS remote 삭제",
+          /--force-with-lease=refs\/heads\/<validated-branch>:<validated-head>/,
+        ],
+        ["required CI", /required check/],
+        ["review thread", /review thread/],
+        [
+          "identity-bound required CI",
+          /required check[\s\S]{0,220}`statusCheckRollup`[\s\S]{0,180}유일한 성공 run/,
+        ],
+        [
+          "identity-bound review threads",
+          /review thread 응답[\s\S]{0,180}repo·PR node·number·URL·`updatedAt`[\s\S]{0,160}base\/head/,
+        ],
+        [
+          "exact-head product tree",
+          /exact head Git tree[\s\S]{0,180}추적 ID/,
+        ],
+        ["종료 이슈 재검증", /closingIssuesReferences/],
+        [
+          "MERGED recovery",
+          /--merged-recovery[\s\S]{0,500}`MERGED`[\s\S]{0,240}`mergedAt`[\s\S]{0,240}`mergeCommit\.oid`/,
+        ],
+        [
+          "recovery merge 무반복",
+          /merge 명령은[\s\S]{0,120}실행하지 않고[\s\S]{0,180}원격 ref 확인/,
+        ],
+        [
+          "recovery OPEN gate 분리",
+          /병합 전에만 의미가 있는 required check·review thread[\s\S]{0,120}(?:받거나[\s\S]{0,60})?다시 판정하지 않고/,
+        ],
+        [
+          "recovery squash topology",
+          /유일한 parent[\s\S]{0,120}`baseRefOid`[\s\S]{0,180}merge tree[\s\S]{0,120}exact head tree[\s\S]{0,240}first-parent/,
+        ],
+        [
+          "recovery ownership dry-run",
+          /complete <issue> --pr <pr> --head <validated-head> --dry-run/,
+        ],
+        [
+          "recovery main cwd",
+          /issue worktree가[\s\S]{0,100}(?:이미 )?없[\s\S]{0,180}clean `main` worktree[\s\S]{0,120}재개/,
+        ],
+        [
+          "Ready ID 정의 형식",
+          /FR·AC·Policy visible heading[\s\S]{0,160}PRD 기술 스파이크[\s\S]{0,80}표의 첫 셀/,
+        ],
+        [
+          "병합 뒤 remote 삭제",
+          /재조회가 성공한 뒤에만 exact remote[\s\S]{0,200}(?:읽는다|삭제)/,
+        ],
+        [
+          "complete 전 local 보존",
+          /`complete` 성공[\s\S]{0,160}전에는 worktree나 local branch를 삭제하지 않는다/,
+        ],
+        [
+          "exact local OID 조회",
+          /git -C <issue-worktree> rev-parse HEAD[\s\S]{0,240}git -C <main-worktree> rev-parse refs\/heads\/<validated-branch>[\s\S]{0,160}<validated-head>/,
+        ],
+        [
+          "CAS local 삭제",
+          /git -C <main-worktree> update-ref -d[\s\\]*refs\/heads\/<validated-branch> <validated-head>/,
+        ],
+        [
+          "main cwd worktree 제거",
+          /git -C <main-worktree> worktree remove -- <issue-worktree>/,
+        ],
+        [
+          "ignored worktree preflight",
+          /status --porcelain=v1[\s\S]{0,180}--untracked-files=all[\s\S]{0,120}--ignored=matching[\s\S]{0,120}--ignore-submodules=none[\s\S]{0,220}ls-files --others --ignored/,
+        ],
+        ["dirty 변경 중단", /dirty·staged·untracked 사용자 변경/],
+        ["불명확 응답 무재시도", /불명확한 응답[\s\S]{0,160}다시 실행하지 않는다/],
+      ],
+    },
+    {
+      file: ".github/workflows/validate-harness.yml",
+      terms: [
+        [
+          "CI product contract ID 구문 검사",
+          /node --check \.agents\/skills\/update-product-docs\/scripts\/product-contract-ids\.mjs/,
+        ],
+        [
+          "CI product contract ID 테스트 구문 검사",
+          /node --check \.agents\/skills\/update-product-docs\/scripts\/product-contract-ids\.test\.mjs/,
+        ],
+        [
+          "CI product contract ID 회귀 테스트",
+          /node --test \.agents\/skills\/update-product-docs\/scripts\/product-contract-ids\.test\.mjs/,
+        ],
+        [
+          "CI commit path 구문 검사",
+          /node --check \.agents\/skills\/commit-work-item\/scripts\/validate-commit-paths\.mjs/,
+        ],
+        [
+          "CI commit path 회귀 테스트",
+          /node --test \.agents\/skills\/commit-work-item\/scripts\/validate-commit-paths\.test\.mjs/,
+        ],
+        [
+          "CI commit path index gate",
+          /node \.agents\/skills\/commit-work-item\/scripts\/validate-commit-paths\.mjs\s+\\?\s*--index/,
+        ],
+        [
+          "CI finalize 구문 검사",
+          /node --check \.agents\/skills\/open-pull-request\/scripts\/validate-finalize\.mjs/,
+        ],
+        [
+          "CI finalize 회귀 테스트",
+          /node --test \.agents\/skills\/open-pull-request\/scripts\/validate-finalize\.test\.mjs/,
+        ],
+      ],
+    },
+  ];
+
+  for (const { file, terms } of contracts) {
+    if (!isFile(file)) continue;
+    const content = maskHtmlComments(
+      fs.readFileSync(path.join(root, file), "utf8"),
+    );
+    for (const [label, pattern] of terms) {
+      if (!pattern.test(content)) {
+        errors.push(`${file}: 하네스 수명주기 계약이 없습니다: ${label}`);
+      }
+    }
+  }
+}
+
 function isSupportedYamlScalarSyntax(rawValue) {
   const value = rawValue.trim();
   if (!value || value.startsWith("#")) return true;
@@ -1370,6 +1728,8 @@ for (const file of developmentFiles) {
   });
 }
 validateHarnessSteps(developmentFiles[0]);
+validateHarnessOrchestration(developmentFiles[0]);
+validateHarnessSkillContracts();
 
 for (const file of markdownFiles) {
   const content = fs.readFileSync(path.join(root, file), "utf8");
@@ -1421,7 +1781,7 @@ const policyTraceEdges = new Set();
 
 for (const file of prdFiles) {
   const content = fs.readFileSync(path.join(root, file), "utf8");
-  const visibleContent = maskInvisibleMarkdown(content);
+  const visibleContent = visibleContractMarkdown(content);
   const firstLine = visibleContent.split("\n", 1)[0];
   const heading = firstLine.match(/^# (PRD-(\d{2,}))\.\s+\S/);
   const filename = path.basename(file).match(/^(\d{2,})_/);
@@ -1469,7 +1829,7 @@ for (const file of prdFiles) {
     documentDefinitions.push({ id: match[1], type: match[2] });
   }
   for (const match of visibleContent.matchAll(
-    /^\|\s*(PRD-\d{2,}-(SP)-\d{2,})\s+\S[^|]*\|/gm,
+    /^\|\s*(PRD-\d{2,}-(SP)-\d{2,})\s+[^|\s][^|]*\|/gm,
   )) {
     documentDefinitions.push({ id: match[1], type: match[2] });
   }
@@ -1586,7 +1946,7 @@ for (const file of prdFiles) {
 
 for (const file of policyFiles) {
   const content = fs.readFileSync(path.join(root, file), "utf8");
-  const visibleContent = maskInvisibleMarkdown(content);
+  const visibleContent = visibleContractMarkdown(content);
   const firstLine = visibleContent.split("\n", 1)[0];
   const heading = firstLine.match(/^# (POL-(\d{2,}))\.\s+\S/);
   const filename = path.basename(file).match(/^(\d{2,})_/);
@@ -1694,6 +2054,30 @@ for (const file of policyFiles) {
       }
     }
   }
+}
+
+try {
+  const sharedDefinitionIds = definedProductContractIds(root);
+  const canonicalDefinitionIds = new Set([
+    ...requirementIds.keys(),
+    ...policyRuleIds.keys(),
+  ]);
+  for (const id of [...canonicalDefinitionIds].sort()) {
+    if (!sharedDefinitionIds.has(id)) {
+      errors.push(
+        `제품 계약 ID parser 불일치: 정본 validator만 정의로 인식한 ID ${id}`,
+      );
+    }
+  }
+  for (const id of [...sharedDefinitionIds].sort()) {
+    if (!canonicalDefinitionIds.has(id)) {
+      errors.push(
+        `제품 계약 ID parser 불일치: Ready PR validator만 정의로 인식한 ID ${id}`,
+      );
+    }
+  }
+} catch (error) {
+  errors.push(`제품 계약 ID parser를 실행할 수 없습니다: ${error.message}`);
 }
 
 for (const edge of [...prdTraceEdges].sort()) {

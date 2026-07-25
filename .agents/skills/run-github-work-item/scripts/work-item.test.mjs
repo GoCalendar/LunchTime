@@ -22,6 +22,11 @@ let reconcileStatePath;
 let lifecycleGhPath;
 let lifecycleStatePath;
 let lifecycleLogPath;
+let createGhPath;
+let createStatePath;
+let createLogPath;
+let createBodyPath;
+const mergedHead = "1234567890abcdef1234567890abcdef12345678";
 
 before(() => {
   fixtureDirectory = mkdtempSync(join(tmpdir(), "lunchtime-work-item-"));
@@ -33,6 +38,35 @@ before(() => {
   lifecycleGhPath = join(lifecycleBinDirectory, "gh");
   lifecycleStatePath = join(fixtureDirectory, "lifecycle-state.json");
   lifecycleLogPath = join(fixtureDirectory, "lifecycle-calls.log");
+  const createBinDirectory = join(fixtureDirectory, "create-bin");
+  mkdirSync(createBinDirectory);
+  createGhPath = join(createBinDirectory, "gh");
+  createStatePath = join(fixtureDirectory, "create-state.json");
+  createLogPath = join(fixtureDirectory, "create-calls.log");
+  createBodyPath = join(fixtureDirectory, "create-body.md");
+
+  mkdirSync(join(fixtureDirectory, "docs/prd"), { recursive: true });
+  mkdirSync(join(fixtureDirectory, "docs/policies"), { recursive: true });
+  writeFileSync(
+    join(fixtureDirectory, "docs/prd/01_fixture.md"),
+    [
+      "# PRD-01. Fixture",
+      "",
+      "### PRD-01-FR-01. Fixture requirement",
+      "",
+      "### PRD-01-AC-02. Fixture acceptance",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(fixtureDirectory, "docs/policies/02_fixture.md"),
+    [
+      "# POL-02. Fixture",
+      "",
+      "## POL-02-R-04. Fixture rule",
+      "",
+    ].join("\n"),
+  );
 
   writeFileSync(
     join(fixtureDirectory, "work-management.json"),
@@ -148,7 +182,13 @@ if (endpoint !== "graphql" && method !== "GET" && !reconcileMutation) {
   failMutation(method + " " + endpoint);
 }
 
-const active = mode === "active" || mode === "wrong-base";
+const active = [
+  "active",
+  "wrong-base",
+  "head-mismatch",
+  "multiple-closing",
+  "duplicate-status",
+].includes(mode);
 const closedNotPlanned = mode === "closed-not-planned";
 const staleBlocked = reconcileState?.blocked ?? (mode === "blocked-stale" || mode === "reconcile-remove");
 const missingBlocked = mode === "blocked-missing" || mode === "reconcile-add";
@@ -189,10 +229,12 @@ const issue = {
           ? "status:in-progress"
           : "status:todo",
     },
+    ...(mode === "duplicate-status" ? [{ name: "status:done" }] : []),
     ...(staleBlocked ? [{ name: "dependency:blocked" }] : []),
   ],
   assignees:
     active || closedNotPlanned ? [{ login: "fixture-user" }] : [],
+  user: { login: "fixture-user" },
   body: issueBody,
   state_reason: closedNotPlanned ? "not_planned" : null,
 };
@@ -203,6 +245,7 @@ const dependent = {
   html_url: "https://github.com/Example/LunchTime/issues/2",
   labels: [{ name: "status:todo" }, { name: "dependency:blocked" }],
   assignees: [],
+  user: { login: "fixture-user" },
 };
 const statusName = closedNotPlanned
   ? "Done"
@@ -332,7 +375,13 @@ if (endpoint === "user") {
     merge_commit_sha: "abc123",
     body: "Closes #1",
     base: { ref: mode === "wrong-base" ? "work/issue-99-integration" : "main" },
-    head: { ref: branch },
+    head: {
+      ref: branch,
+      sha:
+        mode === "head-mismatch"
+          ? "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+          : "1234567890abcdef1234567890abcdef12345678",
+    },
   });
 } else if (endpoint?.startsWith("repos/Example/LunchTime/pulls?")) {
   output([]);
@@ -383,7 +432,18 @@ if (endpoint === "user") {
                   number: 1,
                   repository: { nameWithOwner: "Example/LunchTime" },
                 },
+                ...(mode === "multiple-closing"
+                  ? [
+                      {
+                        number: 2,
+                        repository: {
+                          nameWithOwner: "Example/LunchTime",
+                        },
+                      },
+                    ]
+                  : []),
               ],
+              pageInfo: { hasNextPage: false },
             },
           },
         },
@@ -590,7 +650,10 @@ if (endpoint === "user") {
     merge_commit_sha: "abc123",
     body: "Closes #1",
     base: { ref: "main" },
-    head: { ref: "work/issue-1-stateful" },
+    head: {
+      ref: "work/issue-1-stateful",
+      sha: "1234567890abcdef1234567890abcdef12345678",
+    },
   });
 } else if (endpoint?.startsWith("repos/Example/LunchTime/pulls?")) {
   output([]);
@@ -622,6 +685,7 @@ if (endpoint === "user") {
                   repository: { nameWithOwner: "Example/LunchTime" },
                 },
               ],
+              pageInfo: { hasNextPage: false },
             },
           },
         },
@@ -713,6 +777,279 @@ if (endpoint === "user") {
 `,
   );
   chmodSync(lifecycleGhPath, 0o755);
+
+  writeFileSync(
+    createGhPath,
+    `#!/usr/bin/env node
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+
+const statePath = process.env.MOCK_CREATE_STATE;
+const logPath = process.env.MOCK_CREATE_LOG;
+const state = JSON.parse(readFileSync(statePath, "utf8"));
+const args = process.argv.slice(2);
+const endpoint = args.find(
+  (arg) => arg === "user" || arg === "graphql" || arg.startsWith("repos/"),
+);
+const methodIndex = args.indexOf("--method");
+const method = methodIndex === -1 ? "GET" : args[methodIndex + 1];
+const input = args.includes("--input")
+  ? JSON.parse(readFileSync(0, "utf8"))
+  : null;
+const query = input?.query || "";
+
+function save() {
+  writeFileSync(statePath, JSON.stringify(state, null, 2) + "\\n");
+}
+function output(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+function record(kind, body = input) {
+  state.writes.push({ kind, body });
+  save();
+}
+function issue(number) {
+  const found = state.issues.find((candidate) => candidate.number === number);
+  if (!found) {
+    process.stderr.write("unknown issue " + number + "\\n");
+    process.exit(3);
+  }
+  return found;
+}
+function projectDefinition() {
+  return {
+    id: "PROJECT",
+    title: "LunchTime MVP",
+    fields: {
+      nodes: [
+        {
+          id: "STATUS_FIELD",
+          name: "Status",
+          options: [
+            { id: "TODO", name: "Todo" },
+            { id: "IN_PROGRESS", name: "In Progress" },
+            { id: "DONE", name: "Done" },
+          ],
+        },
+      ],
+    },
+    items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+  };
+}
+
+appendFileSync(
+  logPath,
+  JSON.stringify({
+    method,
+    endpoint,
+    operation:
+      /AddWorkItemToProject/.test(query)
+        ? "AddWorkItemToProject"
+        : /mutation UpdateStatus/.test(query)
+          ? "UpdateStatus"
+          : /WorkItemCreateProject/.test(query)
+            ? "WorkItemCreateProject"
+            : /WorkItemProject/.test(query)
+              ? "WorkItemProject"
+              : null,
+    body: endpoint === "graphql" ? input?.variables || null : input,
+  }) + "\\n",
+);
+
+if (args[0] !== "api") {
+  process.stderr.write("unexpected gh command\\n");
+  process.exit(2);
+}
+
+if (endpoint === "user") {
+  output({ login: "fixture-user" });
+} else if (
+  endpoint?.includes("/collaborators/") &&
+  endpoint.endsWith("/permission")
+) {
+  output({ permission: state.permission || "write" });
+} else if (endpoint === "repos/Example/LunchTime/labels") {
+  output(state.labels.map((name) => ({ name })));
+} else if (endpoint?.startsWith("repos/Example/LunchTime/labels?")) {
+  output(state.labels.map((name) => ({ name })));
+} else if (
+  endpoint?.startsWith("repos/Example/LunchTime/milestones?state=open")
+) {
+  output(state.milestones);
+} else if (
+  endpoint?.startsWith("repos/Example/LunchTime/issues?state=all")
+) {
+  output(state.issues);
+} else if (
+  endpoint === "repos/Example/LunchTime/issues" &&
+  method === "POST"
+) {
+  if (Object.prototype.hasOwnProperty.call(input, "assignees")) {
+    process.stderr.write("create payload must omit assignees\\n");
+    process.exit(4);
+  }
+  const created = {
+    number: state.nextIssueNumber,
+    id: 1000 + state.nextIssueNumber,
+    node_id: "ISSUE_" + state.nextIssueNumber,
+    html_url:
+      "https://github.com/Example/LunchTime/issues/" + state.nextIssueNumber,
+    state: "open",
+    state_reason: null,
+    title: input.title,
+    body: input.body,
+    labels: input.labels.map((name) => ({ name })),
+    assignees: [],
+    user: { login: "fixture-user" },
+    milestone: {
+      number: input.milestone,
+      title: state.milestones.find(
+        (milestone) => milestone.number === input.milestone,
+      ).title,
+    },
+  };
+  state.nextIssueNumber += 1;
+  state.issues.push(created);
+  record("issue-create");
+  output(created);
+} else if (endpoint === "graphql") {
+  const project = projectDefinition();
+  if (/AddWorkItemToProject/.test(query)) {
+    if (state.failProjectAdds > 0) {
+      state.failProjectAdds -= 1;
+      save();
+      process.stderr.write("planned Project add failure\\n");
+      process.exit(42);
+    }
+    const target = state.issues.find(
+      (candidate) => candidate.node_id === input.variables.contentId,
+    );
+    const item = {
+      id: "ITEM_" + target.number,
+      issueNumber: target.number,
+      status: null,
+    };
+    state.projectItems.push(item);
+    record("project-add", input.variables);
+    output({ data: { addProjectV2ItemById: { item: { id: item.id } } } });
+  } else if (/mutation UpdateStatus/.test(query)) {
+    const item = state.projectItems.find(
+      (candidate) => candidate.id === input.variables.itemId,
+    );
+    item.status = "Todo";
+    record("project-status", input.variables);
+    output({
+      data: {
+        updateProjectV2ItemFieldValue: {
+          projectV2Item: { id: item.id },
+        },
+      },
+    });
+  } else if (/WorkItemProject/.test(query)) {
+    const item = state.projectItems.find(
+      (candidate) => candidate.issueNumber === input.variables.issueNumber,
+    );
+    output({
+      data: {
+        repositoryOwner: { projectV2: project },
+        repository: {
+          issue: {
+            id: "ISSUE_" + input.variables.issueNumber,
+            projectItems: {
+              nodes: item
+                ? [
+                    {
+                      id: item.id,
+                      project: { id: "PROJECT" },
+                      fieldValueByName: item.status
+                        ? { name: item.status, optionId: "TODO" }
+                        : null,
+                    },
+                  ]
+                : [],
+            },
+          },
+        },
+      },
+    });
+  } else if (/WorkItemCreateProject/.test(query)) {
+    output({ data: { repositoryOwner: { projectV2: project } } });
+  } else {
+    process.stderr.write("unhandled graphql\\n");
+    process.exit(3);
+  }
+} else {
+  const issueMatch =
+    /^repos\\/Example\\/LunchTime\\/issues\\/(\\d+)$/.exec(endpoint || "");
+  const labelsMatch =
+    /^repos\\/Example\\/LunchTime\\/issues\\/(\\d+)\\/labels$/.exec(
+      endpoint || "",
+    );
+  const labelItemMatch =
+    /^repos\\/Example\\/LunchTime\\/issues\\/(\\d+)\\/labels\\/(.+)$/.exec(
+      endpoint || "",
+    );
+  const blockersMatch =
+    /^repos\\/Example\\/LunchTime\\/issues\\/(\\d+)\\/dependencies\\/blocked_by/.exec(
+      endpoint || "",
+    );
+  const commentsMatch =
+    /^repos\\/Example\\/LunchTime\\/issues\\/(\\d+)\\/comments/.exec(
+      endpoint || "",
+    );
+
+  if (issueMatch && method === "GET") {
+    output(issue(Number(issueMatch[1])));
+  } else if (issueMatch && method === "PATCH") {
+    const target = issue(Number(issueMatch[1]));
+    if (input.milestone) {
+      target.milestone = {
+        number: input.milestone,
+        title: state.milestones.find(
+          (milestone) => milestone.number === input.milestone,
+        ).title,
+      };
+    }
+    if (input.assignees) target.assignees = input.assignees.map((login) => ({ login }));
+    record("issue-patch");
+    output(target);
+  } else if (labelsMatch && method === "POST") {
+    const target = issue(Number(labelsMatch[1]));
+    for (const label of input.labels) {
+      if (!target.labels.some((entry) => entry.name === label)) {
+        target.labels.push({ name: label });
+      }
+    }
+    record("labels");
+    output(target.labels);
+  } else if (labelItemMatch && method === "DELETE") {
+    const target = issue(Number(labelItemMatch[1]));
+    const label = decodeURIComponent(labelItemMatch[2]);
+    target.labels = target.labels.filter((entry) => entry.name !== label);
+    record("label-delete", { label });
+    output({});
+  } else if (blockersMatch && method === "GET") {
+    const numbers = state.dependencies[blockersMatch[1]] || [];
+    output(numbers.map((number) => issue(number)));
+  } else if (blockersMatch && method === "POST") {
+    const blocker = state.issues.find(
+      (candidate) => candidate.id === input.issue_id,
+    );
+    state.dependencies[blockersMatch[1]] ||= [];
+    if (!state.dependencies[blockersMatch[1]].includes(blocker.number)) {
+      state.dependencies[blockersMatch[1]].push(blocker.number);
+    }
+    record("dependency");
+    output({});
+  } else if (commentsMatch && method === "GET") {
+    output([]);
+  } else {
+    process.stderr.write("unhandled " + method + " " + endpoint + "\\n");
+    process.exit(3);
+  }
+}
+`,
+  );
+  chmodSync(createGhPath, 0o755);
 });
 
 after(() => {
@@ -811,6 +1148,103 @@ function runLifecycleCli(args) {
   });
 }
 
+function resetCreateState(overrides = {}) {
+  const state = {
+    permission: "write",
+    labels: [
+      "status:todo",
+      "status:in-progress",
+      "status:done",
+      "dependency:blocked",
+      "type:docs",
+      "area:quality",
+    ],
+    milestones: [{ number: 3, title: "MVP" }],
+    issues: [
+      {
+        number: 7,
+        id: 1007,
+        node_id: "ISSUE_7",
+        html_url: "https://github.com/Example/LunchTime/issues/7",
+        state: "open",
+        state_reason: null,
+        title: "Existing blocker",
+        body: "",
+        labels: [{ name: "status:todo" }],
+        assignees: [],
+        milestone: { number: 3, title: "MVP" },
+        user: { login: "fixture-user" },
+      },
+    ],
+    nextIssueNumber: 8,
+    projectItems: [],
+    dependencies: {},
+    writes: [],
+    failProjectAdds: 0,
+    ...overrides,
+  };
+  writeFileSync(createStatePath, `${JSON.stringify(state, null, 2)}\n`);
+  writeFileSync(createLogPath, "");
+  writeFileSync(createBodyPath, `${validBody()}\n`);
+  return state;
+}
+
+function readCreateState() {
+  return JSON.parse(readFileSync(createStatePath, "utf8"));
+}
+
+function writeCreateState(state) {
+  writeFileSync(createStatePath, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+function readCreateCalls() {
+  const text = readFileSync(createLogPath, "utf8").trim();
+  return text ? text.split("\n").map((line) => JSON.parse(line)) : [];
+}
+
+function runCreateCli(args) {
+  return spawnSync(process.execPath, [workItemScript, ...args], {
+    cwd: fixtureDirectory,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${dirname(createGhPath)}:${process.env.PATH}`,
+      NODE_ENV: "test",
+      MOCK_CREATE_STATE: createStatePath,
+      MOCK_CREATE_LOG: createLogPath,
+    },
+  });
+}
+
+function createArgs({
+  key = "docs-harness-create",
+  project = false,
+  blockedBy = false,
+} = {}) {
+  return [
+    "create",
+    "--idempotency-key",
+    key,
+    "--title",
+    "개별 작업 이슈 생성 계약을 검증한다",
+    "--body",
+    createBodyPath,
+    "--milestone",
+    "MVP",
+    "--label",
+    "type:docs",
+    "--label",
+    "area:quality",
+    ...(blockedBy ? ["--blocked-by", "7"] : []),
+    ...(project ? ["--project"] : []),
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--json",
+  ];
+}
+
 function validBody(
   traceability = "PRD-01-FR-01 POL-02-R-04",
   headingLevel = "##",
@@ -840,11 +1274,474 @@ function validBody(
     .join("\n\n");
 }
 
+function plannedBody(
+  traceability = [
+    "PRD-123-FR-456 planned — 이 PR에서 정의",
+    "POL-123-R-456 planned — 이 PR에서 정의",
+  ].join("\n"),
+) {
+  return validBody(traceability)
+    .replace(
+      "## 변경 허용 경로\n충분히 구체적인 작업 설명을 작성합니다.",
+      [
+        "## 변경 허용 경로",
+        "- docs/prd/123_fixture.md",
+        "- docs/policies/123_fixture.md",
+      ].join("\n"),
+    )
+    .replace(
+      "## 변경 금지 경로\n충분히 구체적인 작업 설명을 작성합니다.",
+      "## 변경 금지 경로\n- 애플리케이션 범위 밖 경로",
+    )
+    .replace(
+      "## 문서 영향\n충분히 구체적인 작업 설명을 작성합니다.",
+      [
+        "## 문서 영향",
+        "- PRD-123-FR-456: docs/prd/123_fixture.md에서 정의",
+        "- POL-123-R-456: docs/policies/123_fixture.md에서 정의",
+      ].join("\n"),
+    );
+}
+
 test("help does not require gh or configuration", () => {
   const result = runCli(["--help"]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /check <issue-number-or-url>/);
+  assert.match(result.stdout, /create --idempotency-key/);
   assert.equal(result.mutations, "");
+});
+
+test("create rejects invalid local input and does not expose an assignee option", () => {
+  resetCreateState();
+  const missingLabel = runCreateCli(
+    createArgs().filter(
+      (value, index, values) =>
+        value !== "--label" && values[index - 1] !== "--label",
+    ),
+  );
+  assert.equal(missingLabel.status, 1);
+  assert.match(missingLabel.stderr, /at least one --label/);
+  assert.equal(readCreateState().writes.length, 0);
+
+  const assignee = runCreateCli([
+    ...createArgs(),
+    "--assignee",
+    "fixture-user",
+    "--dry-run",
+  ]);
+  assert.equal(assignee.status, 1);
+  assert.match(assignee.stderr, /Unknown option: --assignee/);
+  assert.equal(readCreateState().writes.length, 0);
+});
+
+test("create dry-run performs live reads, plans exact state, and writes nothing", () => {
+  resetCreateState();
+  const result = runCreateCli([...createArgs(), "--dry-run"]);
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.dryRun, true);
+  assert.equal(payload.writes, 0);
+  assert.match(payload.planToken, /^[a-f0-9]{64}$/);
+  assert.deepEqual(payload.labels, [
+    "area:quality",
+    "status:todo",
+    "type:docs",
+  ]);
+  assert.equal(payload.project, null);
+  assert.match(payload.planned.join("\n"), /create unassigned Issue/);
+  assert.equal(readCreateState().writes.length, 0);
+  assert.equal(
+    readCreateCalls().some(
+      (call) => call.method !== "GET" || call.operation?.startsWith("Add"),
+    ),
+    false,
+  );
+});
+
+test("create fails closed on missing labels and ambiguous milestones", () => {
+  const missingLabelState = resetCreateState();
+  missingLabelState.labels = missingLabelState.labels.filter(
+    (label) => label !== "area:quality",
+  );
+  writeCreateState(missingLabelState);
+  const missingLabel = runCreateCli([...createArgs(), "--dry-run"]);
+  assert.equal(missingLabel.status, 1);
+  assert.match(missingLabel.stderr, /Missing repository label/);
+  assert.equal(readCreateState().writes.length, 0);
+
+  const milestoneState = resetCreateState();
+  milestoneState.milestones.push({ number: 4, title: "MVP" });
+  writeCreateState(milestoneState);
+  const ambiguous = runCreateCli([...createArgs(), "--dry-run"]);
+  assert.equal(ambiguous.status, 1);
+  assert.match(
+    JSON.parse(ambiguous.stderr).error,
+    /exactly one open milestone "MVP", found 2/,
+  );
+  assert.equal(readCreateState().writes.length, 0);
+});
+
+test("create requires a fresh plan token, creates without assignee, and is idempotent", () => {
+  resetCreateState();
+  const args = createArgs();
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  const token = JSON.parse(dryRun.stdout).planToken;
+
+  const stale = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    "0".repeat(64),
+  ]);
+  assert.equal(stale.status, 1);
+  assert.match(stale.stderr, /plan changed/);
+  assert.equal(readCreateState().writes.length, 0);
+
+  const created = runCreateCli([...args, "--confirm-plan", token]);
+  assert.equal(created.status, 0, created.stderr);
+  const payload = JSON.parse(created.stdout);
+  assert.equal(payload.issue, 8);
+  const state = readCreateState();
+  assert.equal(state.issues.length, 2);
+  assert.deepEqual(state.issues[1].assignees, []);
+  assert.match(
+    state.issues[1].body,
+    /^<!-- lunchtime-work-item:create key=docs-harness-create project=none -->/,
+  );
+  const createWrite = state.writes.find(
+    (write) => write.kind === "issue-create",
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(createWrite.body, "assignees"),
+    false,
+  );
+
+  const secondDryRun = runCreateCli([...args, "--dry-run"]);
+  assert.equal(secondDryRun.status, 0, secondDryRun.stderr);
+  assert.match(
+    JSON.parse(secondDryRun.stdout).planned.join("\n"),
+    /skip Issue #8; exact create state already exists/,
+  );
+  assert.equal(
+    readCreateState().writes.filter((write) => write.kind === "issue-create")
+      .length,
+    1,
+  );
+});
+
+test("create exact state rejects every unrequested label without overwriting it", () => {
+  resetCreateState();
+  const args = createArgs();
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  const token = JSON.parse(dryRun.stdout).planToken;
+  const created = runCreateCli([...args, "--confirm-plan", token]);
+  assert.equal(created.status, 0, created.stderr);
+
+  const state = readCreateState();
+  state.issues[1].labels.push({ name: "priority:p0" });
+  writeCreateState(state);
+  const conflict = runCreateCli([...args, "--dry-run"]);
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stderr, /unexpected label.*priority:p0/);
+  assert.ok(
+    readCreateState().issues[1].labels.some(
+      (label) => label.name === "priority:p0",
+    ),
+  );
+});
+
+test("a non-Project create marker remains checkable and startable without Project reads", () => {
+  resetCreateState();
+  const args = createArgs();
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  const token = JSON.parse(dryRun.stdout).planToken;
+  const created = runCreateCli([...args, "--confirm-plan", token]);
+  assert.equal(created.status, 0, created.stderr);
+  writeFileSync(createLogPath, "");
+
+  const checked = runCreateCli([
+    "check",
+    "8",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--json",
+  ]);
+  assert.equal(checked.status, 0, checked.stderr);
+  const checkPayload = JSON.parse(checked.stdout);
+  assert.equal(checkPayload.ready, true);
+  assert.equal(checkPayload.project.required, false);
+
+  const start = runCreateCli([
+    "start",
+    "8",
+    "--branch",
+    "work/issue-8-general-docs",
+    "--agent",
+    "codex:create-test",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--dry-run",
+    "--json",
+  ]);
+  assert.equal(start.status, 0, start.stderr);
+  assert.equal(
+    readCreateCalls().some((call) => call.endpoint === "graphql"),
+    false,
+  );
+});
+
+test("a project-none marker from a non-write Issue author cannot bypass Project", () => {
+  const state = resetCreateState({ permission: "read" });
+  state.issues.push({
+    ...state.issues[0],
+    number: 8,
+    id: 1008,
+    node_id: "ISSUE_8",
+    title: "Untrusted Project opt-out",
+    body: [
+      "<!-- lunchtime-work-item:create key=public-opt-out project=none -->",
+      "",
+      validBody(),
+    ].join("\n"),
+    user: { login: "public-user" },
+  });
+  writeCreateState(state);
+
+  const checked = runCreateCli([
+    "check",
+    "8",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--json",
+  ]);
+  assert.equal(checked.status, 1);
+  assert.match(checked.stderr, /must appear exactly once in Project/);
+});
+
+test("create opt-in Project and native blocker reach exact Todo state", () => {
+  resetCreateState();
+  const args = createArgs({ project: true, blockedBy: true });
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  const dryPayload = JSON.parse(dryRun.stdout);
+  assert.equal(dryPayload.project, "LunchTime MVP");
+  assert.deepEqual(dryPayload.blockedBy, [7]);
+  assert.ok(dryPayload.labels.includes("dependency:blocked"));
+
+  const created = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    dryPayload.planToken,
+  ]);
+  assert.equal(created.status, 0, created.stderr);
+  const state = readCreateState();
+  assert.deepEqual(state.projectItems, [
+    { id: "ITEM_8", issueNumber: 8, status: "Todo" },
+  ]);
+  assert.deepEqual(state.dependencies, { 8: [7] });
+  assert.ok(
+    state.issues[1].labels.some(
+      (label) => label.name === "dependency:blocked",
+    ),
+  );
+});
+
+test("create recovery removes only a stale derived blocked label after blockers close", () => {
+  resetCreateState();
+  const args = createArgs({ blockedBy: true });
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  const created = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    JSON.parse(dryRun.stdout).planToken,
+  ]);
+  assert.equal(created.status, 0, created.stderr);
+
+  const state = readCreateState();
+  state.issues[0].state = "closed";
+  state.issues[0].state_reason = "completed";
+  writeCreateState(state);
+
+  const recoveryDryRun = runCreateCli([...args, "--dry-run"]);
+  assert.equal(recoveryDryRun.status, 0, recoveryDryRun.stderr);
+  const recoveryPlan = JSON.parse(recoveryDryRun.stdout);
+  assert.deepEqual(recoveryPlan.planned, [
+    "remove stale derived labels from Issue #8: dependency:blocked",
+  ]);
+
+  const recovered = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    recoveryPlan.planToken,
+  ]);
+  assert.equal(recovered.status, 0, recovered.stderr);
+  const recoveredState = readCreateState();
+  assert.equal(
+    recoveredState.issues[1].labels.some(
+      (label) => label.name === "dependency:blocked",
+    ),
+    false,
+  );
+  assert.deepEqual(recoveredState.dependencies, { 8: [7] });
+});
+
+test("create reports partial Project failure and resumes only after a new dry-run", () => {
+  resetCreateState({ failProjectAdds: 1 });
+  const args = createArgs({ project: true });
+  const firstDryRun = runCreateCli([...args, "--dry-run"]);
+  const firstToken = JSON.parse(firstDryRun.stdout).planToken;
+  const failed = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    firstToken,
+  ]);
+  assert.equal(failed.status, 1);
+  const failure = JSON.parse(failed.stderr);
+  assert.match(failure.completed.join("\n"), /created Issue #8/);
+  assert.match(failure.repair.join("\n"), /Do not retry automatically/);
+  assert.equal(
+    readCreateState().writes.filter((write) => write.kind === "issue-create")
+      .length,
+    1,
+  );
+
+  const recoveryDryRun = runCreateCli([...args, "--dry-run"]);
+  assert.equal(recoveryDryRun.status, 0, recoveryDryRun.stderr);
+  const recoveryPlan = JSON.parse(recoveryDryRun.stdout);
+  assert.match(recoveryPlan.planned.join("\n"), /add Issue to Project/);
+  assert.equal(
+    recoveryPlan.planned.some((entry) => entry.includes("create unassigned")),
+    false,
+  );
+  const recovered = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    recoveryPlan.planToken,
+  ]);
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.equal(
+    readCreateState().writes.filter((write) => write.kind === "issue-create")
+      .length,
+    1,
+  );
+});
+
+test("create refuses title duplicates and existing assignees without overwriting", () => {
+  const base = resetCreateState();
+  base.issues.push({
+    number: 8,
+    id: 1008,
+    node_id: "ISSUE_8",
+    html_url: "https://github.com/Example/LunchTime/issues/8",
+    state: "open",
+    state_reason: null,
+    title: "개별 작업 이슈 생성 계약을 검증한다",
+    body: validBody(),
+    labels: [{ name: "status:todo" }],
+    assignees: [],
+    milestone: { number: 3, title: "MVP" },
+  });
+  base.nextIssueNumber = 9;
+  writeCreateState(base);
+  const duplicate = runCreateCli([...createArgs(), "--dry-run"]);
+  assert.equal(duplicate.status, 1);
+  assert.match(duplicate.stderr, /same normalized title/);
+  assert.equal(readCreateState().writes.length, 0);
+
+  resetCreateState();
+  const args = createArgs();
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  const token = JSON.parse(dryRun.stdout).planToken;
+  const created = runCreateCli([...args, "--confirm-plan", token]);
+  assert.equal(created.status, 0, created.stderr);
+  const assigned = readCreateState();
+  assigned.issues[1].assignees = [{ login: "someone-else" }];
+  writeCreateState(assigned);
+  const conflict = runCreateCli([...args, "--dry-run"]);
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stderr, /assignees are/);
+  assert.deepEqual(readCreateState().issues[1].assignees, [
+    { login: "someone-else" },
+  ]);
+});
+
+test("create rejects duplicate markers but ignores unrelated malformed markers", () => {
+  const duplicateMarkers = resetCreateState();
+  const marker =
+    "<!-- lunchtime-work-item:create key=docs-harness-create project=none -->";
+  duplicateMarkers.issues.push(
+    {
+      ...duplicateMarkers.issues[0],
+      number: 8,
+      id: 1008,
+      node_id: "ISSUE_8",
+      title: "First marker",
+      body: `${marker}\n\n${validBody()}`,
+    },
+    {
+      ...duplicateMarkers.issues[0],
+      number: 9,
+      id: 1009,
+      node_id: "ISSUE_9",
+      title: "Second marker",
+      body: `${marker}\n\n${validBody()}`,
+    },
+  );
+  writeCreateState(duplicateMarkers);
+  const duplicate = runCreateCli([...createArgs(), "--dry-run"]);
+  assert.equal(duplicate.status, 1);
+  assert.match(duplicate.stderr, /appears on #8, #9/);
+
+  for (const body of [
+    `${marker}\n${marker}\n\n${validBody()}`,
+    `${marker}\n<!-- lunchtime-work-item:create broken -->\n\n${validBody()}`,
+    [
+      "<!-- lunchtime-work-item:create key=docs-harness-create broken -->",
+      validBody(),
+    ].join("\n\n"),
+  ]) {
+    const conflicted = resetCreateState();
+    conflicted.issues.push({
+      ...conflicted.issues[0],
+      number: 8,
+      id: 1008,
+      node_id: "ISSUE_8",
+      title: "Renamed marker owner",
+      body,
+    });
+    writeCreateState(conflicted);
+    const result = runCreateCli([...createArgs(), "--dry-run"]);
+    assert.equal(result.status, 1);
+    assert.match(
+      JSON.parse(result.stderr).error,
+      /idempotency key "docs-harness-create".*malformed or multiple.*#8/,
+    );
+    assert.equal(readCreateState().writes.length, 0);
+  }
+
+  const malformedState = resetCreateState();
+  malformedState.issues.push({
+    ...malformedState.issues[0],
+    number: 8,
+    id: 1008,
+    node_id: "ISSUE_8",
+    title: "Malformed marker",
+    body: `<!-- lunchtime-work-item:create broken -->\n\n${validBody()}`,
+  });
+  writeCreateState(malformedState);
+  const malformed = runCreateCli([...createArgs(), "--dry-run"]);
+  assert.equal(malformed.status, 0, malformed.stderr);
+  assert.match(
+    JSON.parse(malformed.stdout).planned.join("\n"),
+    /create unassigned/,
+  );
+  assert.equal(readCreateState().writes.length, 0);
 });
 
 test("validate-body accepts namespaced IDs with level-two headings", () => {
@@ -867,11 +1764,143 @@ test("validate-body accepts GitHub Issue Form level-three headings", () => {
 
 test("validate-body accepts namespaced requirement and rule IDs with three-digit suffixes", () => {
   const result = runCli(["validate-body", "-", "--json"], {
-    input: validBody("PRD-123-FR-456 POL-123-R-456"),
+    input: plannedBody(),
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).valid, true);
   assert.equal(result.mutations, "");
+});
+
+test("validate-body requires undefined planned IDs to own product document paths", () => {
+  const missingPlan = runCli(["validate-body", "-", "--json"], {
+    input: validBody("PRD-123-FR-456 POL-123-R-456"),
+  });
+  assert.equal(missingPlan.status, 1, missingPlan.stderr);
+  assert.match(
+    JSON.parse(missingPlan.stdout).errors.join("\n"),
+    /planned — 이 PR에서 정의/,
+  );
+
+  const forbiddenDocs = plannedBody().replace(
+    "## 변경 금지 경로\n- 애플리케이션 범위 밖 경로",
+    [
+      "## 변경 금지 경로",
+      "- docs/prd/**",
+      "- docs/policies/**",
+    ].join("\n"),
+  );
+  const conflict = runCli(["validate-body", "-", "--json"], {
+    input: forbiddenDocs,
+  });
+  assert.equal(conflict.status, 1, conflict.stderr);
+  assert.match(
+    JSON.parse(conflict.stdout).errors.join("\n"),
+    /정본 경로가 "변경 금지 경로"의 상위·동일·하위 범위와 충돌/,
+  );
+
+  for (const parentPath of ["docs/**", "./docs/**"]) {
+    const parentForbidden = plannedBody().replace(
+      "## 변경 금지 경로\n- 애플리케이션 범위 밖 경로",
+      `## 변경 금지 경로\n- ${parentPath}`,
+    );
+    const parentConflict = runCli(["validate-body", "-", "--json"], {
+      input: parentForbidden,
+    });
+    assert.equal(parentConflict.status, 1, parentConflict.stderr);
+    assert.match(
+      JSON.parse(parentConflict.stdout).errors.join("\n"),
+      /상위·동일·하위 범위와 충돌/,
+      parentPath,
+    );
+  }
+
+  for (const allowedExclusion of [
+    [
+      "## 변경 금지 경로",
+      "- docs/prd/other.md",
+      "- docs/policies/other.md",
+    ].join("\n"),
+    [
+      "## 변경 금지 경로",
+      "- docs/prd-old/**",
+      "- docs/policies-old/**",
+    ].join("\n"),
+  ]) {
+    const nonOverlapping = plannedBody().replace(
+      "## 변경 금지 경로\n- 애플리케이션 범위 밖 경로",
+      allowedExclusion,
+    );
+    const result = runCli(["validate-body", "-", "--json"], {
+      input: nonOverlapping,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  const dotRelativeOwned = plannedBody()
+    .replace("- docs/prd/123_fixture.md", "- ./docs/prd/123_fixture.md")
+    .replace(
+      "- docs/policies/123_fixture.md",
+      "- ./docs/policies/123_fixture.md",
+    );
+  const dotRelativeResult = runCli(["validate-body", "-", "--json"], {
+    input: dotRelativeOwned,
+  });
+  assert.equal(dotRelativeResult.status, 0, dotRelativeResult.stderr);
+
+  for (const invalidPath of [
+    "docs/prd/README.md",
+    "docs/prd/**",
+    "docs/prd/999_fixture.md",
+  ]) {
+    const invalidDefinitionPath = plannedBody()
+      .replace("docs/prd/123_fixture.md", invalidPath);
+    const result = runCli(["validate-body", "-", "--json"], {
+      input: invalidDefinitionPath,
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      /구체적 docs\/prd\/NN_\*\.md 정본 파일/,
+      invalidPath,
+    );
+  }
+
+  const splitImpactOwnership = plannedBody().replace(
+    "- PRD-123-FR-456: docs/prd/123_fixture.md에서 정의",
+    [
+      "- PRD-123-FR-456 정의",
+      "- docs/prd/123_fixture.md 변경",
+    ].join("\n"),
+  );
+  const splitImpactResult = runCli(["validate-body", "-", "--json"], {
+    input: splitImpactOwnership,
+  });
+  assert.equal(splitImpactResult.status, 1, splitImpactResult.stderr);
+  assert.match(
+    JSON.parse(splitImpactResult.stdout).errors.join("\n"),
+    /"문서 영향"의 같은 항목/,
+  );
+});
+
+test("validate-body requires the exact planned declaration phrase", () => {
+  for (const replacement of [
+    "planned - 이 PR에서 정의",
+    "Planned — 이 PR에서 정의",
+    "planned—이 PR에서 정의",
+    "planned — 이 PR에서 정의하지 않음",
+  ]) {
+    const result = runCli(["validate-body", "-", "--json"], {
+      input: plannedBody().replaceAll(
+        "planned — 이 PR에서 정의",
+        replacement,
+      ),
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      /"planned — 이 PR에서 정의"로 선언/,
+    );
+  }
 });
 
 test("validate-body rejects bare IDs", () => {
@@ -881,6 +1910,62 @@ test("validate-body rejects bare IDs", () => {
   assert.equal(result.status, 1, result.stderr);
   assert.equal(JSON.parse(result.stdout).valid, false);
   assert.equal(result.mutations, "");
+});
+
+test("validate-body rejects trace IDs that exist only in comments or fences", () => {
+  const cases = [
+    "제품 요구사항을 연결합니다. <!-- PRD-01-FR-01 -->",
+    "제품 요구사항을 연결합니다. <!-- PRD-01-FR-01",
+    [
+      "제품 요구사항을 연결합니다.",
+      "```text",
+      "PRD-01-FR-01",
+      "```",
+    ].join("\n"),
+    "[정본 링크](https://example.com/PRD-01-FR-01)",
+    [
+      "제품 요구사항을 연결합니다.",
+      "[정본]: https://example.com/PRD-01-FR-01",
+      "[연결][정본]",
+    ].join("\n"),
+    '<a href="https://example.com/PRD-01-FR-01">정본 링크</a>',
+  ];
+
+  for (const traceability of cases) {
+    const result = runCli(["validate-body", "-", "--json"], {
+      input: validBody(traceability),
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      /"추적성" 섹션에는 전역 네임스페이스가 있는 PRD 또는 정책 ID/,
+    );
+    assert.equal(result.mutations, "");
+  }
+});
+
+test("validate-body ignores bare IDs and required headings hidden in comments", () => {
+  const bareComment = runCli(["validate-body", "-", "--json"], {
+    input: validBody(
+      "제품 요구사항을 연결합니다. <!-- FR-01 -->",
+    ),
+  });
+  assert.equal(bareComment.status, 1, bareComment.stderr);
+  assert.doesNotMatch(
+    JSON.parse(bareComment.stdout).errors.join("\n"),
+    /발견된 값: FR-01/,
+  );
+
+  const hiddenBody = runCli(["validate-body", "-", "--json"], {
+    input: ["<!--", validBody(), "-->"].join("\n"),
+  });
+  assert.equal(hiddenBody.status, 1, hiddenBody.stderr);
+  assert.match(
+    JSON.parse(hiddenBody.stdout).errors.join("\n"),
+    /"## 개요" 또는 "### 개요" 제목이 하나여야 하지만 0개/,
+  );
+  assert.equal(bareComment.mutations, "");
+  assert.equal(hiddenBody.mutations, "");
 });
 
 test("validate-body rejects fenced headings and one-character placeholders", () => {
@@ -1037,6 +2122,8 @@ test("complete dry-run verifies merge and plans dependent release", () => {
       "1",
       "--pr",
       "9",
+      "--head",
+      mergedHead,
       "--config",
       "work-management.json",
       "--dry-run",
@@ -1069,6 +2156,8 @@ test("complete는 trunk가 아닌 base에 병합된 PR을 거부한다", () => {
       "1",
       "--pr",
       "9",
+      "--head",
+      mergedHead,
       "--config",
       "work-management.json",
       "--dry-run",
@@ -1088,6 +2177,8 @@ test("complete rejects a closed Issue whose state_reason is not completed", () =
       "1",
       "--pr",
       "9",
+      "--head",
+      mergedHead,
       "--config",
       "work-management.json",
       "--dry-run",
@@ -1098,6 +2189,77 @@ test("complete rejects a closed Issue whose state_reason is not completed", () =
   assert.equal(result.status, 1);
   assert.match(result.stderr, /state_reason=not_planned/);
   assert.equal(result.mutations, "");
+});
+
+test("complete requires the exact finalized 40-character head", () => {
+  for (const headValue of ["short", `${mergedHead}0`]) {
+    const result = runCli(
+      [
+        "complete",
+        "1",
+        "--pr",
+        "9",
+        "--head",
+        headValue,
+        "--config",
+        "work-management.json",
+        "--dry-run",
+        "--json",
+      ],
+      { mode: "active" },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /40-character-finalized-head/);
+    assert.equal(result.mutations, "");
+  }
+});
+
+test("complete rejects a merged PR whose head differs from finalized head", () => {
+  const result = runCli(
+    [
+      "complete",
+      "1",
+      "--pr",
+      "9",
+      "--head",
+      mergedHead,
+      "--config",
+      "work-management.json",
+      "--dry-run",
+      "--json",
+    ],
+    { mode: "head-mismatch" },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /expected finalized head/);
+  assert.equal(result.mutations, "");
+});
+
+test("complete rejects multiple workflow labels and native closing references", () => {
+  for (const mode of ["duplicate-status", "multiple-closing"]) {
+    const result = runCli(
+      [
+        "complete",
+        "1",
+        "--pr",
+        "9",
+        "--head",
+        mergedHead,
+        "--config",
+        "work-management.json",
+        "--dry-run",
+        "--json",
+      ],
+      { mode },
+    );
+    assert.equal(result.status, 1, mode);
+    assert.equal(result.mutations, "", mode);
+    if (mode === "duplicate-status") {
+      assert.match(result.stderr, /labels=\[status:in-progress, status:done\]/);
+    } else {
+      assert.match(result.stderr, /must natively close exactly Issue #1/);
+    }
+  }
 });
 
 test("release dry-run plans a bounded abandon transition", () => {
@@ -1213,6 +2375,8 @@ test("stateful start and merge-auto-close completion are idempotent and preserve
     "1",
     "--pr",
     "9",
+    "--head",
+    mergedHead,
     "--config",
     "work-management.json",
     "--json",

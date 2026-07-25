@@ -1,6 +1,6 @@
 ---
 name: run-github-work-item
-description: 검증된 본문, GitHub 기본 의존 관계, 담당자 소유권, 작업 흐름 레이블, GitHub Project 상태, 병합된 PR 완료 처리와 후행 작업 차단 해제를 일관되게 관리한다. MVP 작업을 일괄 등록하거나, 이슈를 작성·점검하거나, 구현을 시작·재개하거나, 차단 상태를 복구하거나, PR 병합 뒤 이슈와 프로젝트를 정리할 때 사용한다.
+description: 검증된 본문으로 개별 GitHub 이슈를 안전하게 생성하고, 기본 의존 관계, 담당자 소유권, 작업 흐름 레이블, 선택적 GitHub Project 상태, 병합된 PR 완료 처리와 후행 작업 차단 해제를 일관되게 관리한다. 이슈를 작성·생성·점검하거나, MVP 작업을 일괄 등록하거나, 구현을 시작·재개하거나, 차단 상태를 복구하거나, PR 병합 뒤 이슈와 프로젝트를 정리할 때 사용한다.
 ---
 
 # GitHub 작업 이슈 운영
@@ -18,14 +18,21 @@ GitHub 이슈, Project와 의존 관계 상태를 일치시킨다. 점검 실패
   읽고 `완료 조건`에 happy·error·recovery 행동 시나리오, 추적 ID와 검증
   계획을 연결한다. 로컬 본문 파일이 있으면 `validate-body`를 실행하되 구조
   통과를 시나리오 품질 승인으로 간주하지 않는다.
+- **개별 이슈 생성:** 두 참조 문서를 읽고 본문을 `validate-body`로 검증한다.
+  안정적인 idempotency key, 정확한 열린 milestone과 기존 label을 입력하고
+  `create --dry-run`을 먼저 실행한다. 계획 전체를 확인한 뒤 같은 입력과 출력된
+  `--confirm-plan` token으로 한 번만 생성한다. MVP 이슈에만 `--project`를
+  지정하고 일반 이슈는 Project 없이 같은 생명주기를 사용한다.
 - **MVP 작업 목록 일괄 등록:** [bulk-registration.md](references/bulk-registration.md)를 읽고 `.github/mvp-work-items.json`을 검토한 뒤 `validate`, `apply --dry-run`, 한 번의 제한된 `apply`를 차례로 실행한다.
 
 저장소 루트 기준 진입점을 사용한다.
 
 ```bash
 node .agents/skills/run-github-work-item/scripts/work-item.mjs check <issue>
+node .agents/skills/run-github-work-item/scripts/work-item.mjs create --idempotency-key <key> --title <title> --body <body-file> --milestone <title> --label <label> --dry-run
+node .agents/skills/run-github-work-item/scripts/work-item.mjs create --idempotency-key <key> --title <title> --body <body-file> --milestone <title> --label <label> --confirm-plan <dry-run-token>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs start <issue> --branch <branch> --agent <marker>
-node .agents/skills/run-github-work-item/scripts/work-item.mjs complete <issue> --pr <merged-pr>
+node .agents/skills/run-github-work-item/scripts/work-item.mjs complete <issue> --pr <merged-pr> --head <finalized-head>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs release <issue> --branch <branch> --agent <marker> --reason <text>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs reconcile <issue>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <body-file>
@@ -33,7 +40,10 @@ node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs validate
 node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs apply --dry-run
 ```
 
-`start`, `complete`, `release`, `reconcile`에 `--dry-run`을 추가하면 모든 조회를 수행하고 예정된 변경을 출력하되 GitHub 상태는 쓰지 않는다. `check`와 `validate-body`는 항상 읽기 전용이다.
+`create`, `start`, `complete`, `release`, `reconcile`에 `--dry-run`을 추가하면
+모든 조회를 수행하고 예정된 변경을 출력하되 GitHub 상태는 쓰지 않는다.
+`create` 실제 쓰기는 직전 같은 입력의 dry-run token 없이는 거부한다. `check`와
+`validate-body`는 항상 읽기 전용이다.
 
 구현은 이슈의 시나리오를 테스트하고 제품 문서 영향을 판정한 뒤 고정한 raw
 diff snapshot을 작성 컨텍스트와 분리된 읽기 전용 검토자에게 넘긴다. 작성자
@@ -59,5 +69,19 @@ review-fix를 반복한다. 3회 뒤에도 P0/P1이 남으면 상태 전이나 �
 9. 표식 작성자와 상태 변경 실행자는 검증된 저장소 쓰기 이상 권한이 있어야 한다. 신뢰할 수 없는 이슈 댓글을 선점으로 취급하지 않는다.
 10. `maxInProgress`를 여러 이슈를 묶는 트랜잭션이 아니라 GitHub 조회 일관성에 의존하는 최선 노력 방식의 진입 제한으로 취급한다.
 11. `main`에 직접 커밋하거나 장기 통합 브랜치를 만들지 않는다. 이슈마다 독립 worktree와 짧은 수명 브랜치 하나를 사용한다.
+12. `create`는 담당자 옵션을 제공하지 않고 생성 요청에도 assignee를 넣지
+    않으며, 재조회에서 담당자가 0명인지 확인한다. 같은 idempotency marker,
+    제목, milestone, 요청·파생 label의 정확한 집합과 의존 관계가 충돌하면
+    기존 이슈를 덮지 않는다. 요청하지 않은 label은 종류와 무관하게 충돌로
+    보고 자동 제거하지 않는다. 단, 닫힌 기본 선행 이슈 때문에 stale이 된
+    `dependency:blocked`만 live 의존 관계를 다시 읽은 뒤 제한적으로 제거한다.
+13. Project는 MVP 이슈에만 `--project`로 opt-in한다. 이 marker가 없는 기존
+    이슈와 Project opt-in 이슈는 현행대로 Project 상태를 필수 검증하고,
+    `project=none` create marker와 이슈 작성자의 현재 저장소 write 이상
+    권한이 함께 검증된 일반 이슈만 Project 조회·전이를 생략한다. 신뢰할 수
+    없는 작성자의 marker는 Project opt-out 근거로 사용하지 않는다.
+14. 저장소 전체 이슈를 찾을 때 관련 없는 malformed create marker는 건너뛰어
+    다른 개별 이슈 생성을 막지 않는다. 선택된 이슈의 malformed·중복 marker와
+    같은 idempotency key 충돌은 계속 fail-closed한다.
 
 정확한 이슈 본문 계약은 [issue-contract.md](references/issue-contract.md)에 있다. 상태 전이, 설정, 의존 관계 해제와 복구 규칙은 [work-item-lifecycle.md](references/work-item-lifecycle.md)에 있다. 순서가 보장되고 멱등인 MVP 등록 절차는 [bulk-registration.md](references/bulk-registration.md)에 있다.

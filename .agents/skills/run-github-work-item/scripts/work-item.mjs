@@ -5,12 +5,22 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
+import {
+  definedProductContractIds,
+  referencedContractIds,
+  visibleContractMarkdown,
+} from "../../update-product-docs/scripts/product-contract-ids.mjs";
+
 const DEFAULT_CONFIG_PATH = ".github/work-management.json";
 const MAX_PAGES = 20;
 const PAGE_SIZE = 100;
 const STATUS_PREFIX = "status:";
 const CHILD_PROCESS_TIMEOUT_MS = 30_000;
 const WRITE_OR_HIGHER_PERMISSIONS = new Set(["write", "admin"]);
+const CREATE_MARKER_PREFIX = "<!-- lunchtime-work-item:create";
+const CREATE_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{2,79}$/;
+const CREATE_PLAN_PATTERN = /^[a-f0-9]{64}$/;
+const MAX_ISSUE_BODY_BYTES = 65_536;
 const collaboratorPermissionCache = new Map();
 const API_HEADERS = [
   "-H",
@@ -31,14 +41,17 @@ class WorkItemError extends Error {
 function usage() {
   return `사용법:
   work-item.mjs check <issue-number-or-url> [--repo OWNER/REPO] [--config PATH] [--json]
+  work-item.mjs create --idempotency-key KEY --title TITLE --body FILE --milestone TITLE --label LABEL [--label LABEL...] [--blocked-by ISSUE...] [--project] [--repo OWNER/REPO] [--config PATH] --dry-run [--json]
+  work-item.mjs create --idempotency-key KEY --title TITLE --body FILE --milestone TITLE --label LABEL [--label LABEL...] [--blocked-by ISSUE...] [--project] [--repo OWNER/REPO] [--config PATH] --confirm-plan TOKEN [--json]
   work-item.mjs start <issue-number-or-url> --branch NAME --agent MARKER [--repo OWNER/REPO] [--config PATH] [--dry-run] [--json]
-  work-item.mjs complete <issue-number-or-url> --pr <pr-number-or-url> [--repo OWNER/REPO] [--config PATH] [--dry-run] [--json]
+  work-item.mjs complete <issue-number-or-url> --pr <pr-number-or-url> --head SHA [--repo OWNER/REPO] [--config PATH] [--dry-run] [--json]
   work-item.mjs release <issue-number-or-url> --branch NAME --agent MARKER --reason TEXT [--repo OWNER/REPO] [--config PATH] [--dry-run] [--json]
   work-item.mjs reconcile <issue-number-or-url> [--repo OWNER/REPO] [--config PATH] [--dry-run] [--json]
   work-item.mjs validate-body <file-or-> [--json]
 
 명령:
   check          준비 상태를 읽기 전용으로 확인합니다.
+  create         검증된 개별 이슈를 미할당 Todo로 생성하거나 안전하게 재개합니다.
   start          준비된 이슈를 선점하고 In Progress로 옮깁니다.
   complete       풀 리퀘스트가 병합된 이슈를 완료 처리합니다.
   release        소유 중이며 병합되지 않은 선점을 Todo로 돌립니다.
@@ -49,14 +62,23 @@ function usage() {
   --branch NAME  시작 댓글에 기록할 작업 브랜치입니다.
   --agent VALUE  댓글에 기록할 안정적인 Codex/Claude 작업자 표식입니다.
   --pr VALUE     병합된 풀 리퀘스트 번호 또는 URL입니다.
+  --head SHA     finalize가 검증한 정확한 40자리 PR head commit입니다.
   --reason TEXT  한 줄로 작성하는 필수 선점 해제 사유입니다.
+  --idempotency-key KEY  개별 생성과 부분 실패 복구를 식별할 안정적인 키입니다.
+  --title TEXT    생성할 이슈 제목입니다.
+  --body PATH     생성 전 검증할 이슈 본문 파일입니다.
+  --milestone TITLE  정확히 일치해야 하는 열린 milestone 제목입니다.
+  --label NAME    추가할 type·area 등 비-workflow label입니다. 반복할 수 있습니다.
+  --blocked-by ISSUE  연결할 GitHub 기본 선행 이슈입니다. 반복할 수 있습니다.
+  --project       설정된 Project에 추가하고 Status를 Todo로 맞춥니다.
+  --confirm-plan TOKEN  직전 dry-run이 출력한 create plan token입니다.
   --repo VALUE   저장소 탐색 결과 대신 사용할 OWNER/REPO입니다.
   --config PATH  설정 경로입니다. 기본값: ${DEFAULT_CONFIG_PATH}
   --dry-run      변경하지 않고 읽기와 예정된 쓰기만 출력합니다.
   --json         기계가 읽을 수 있는 JSON을 출력합니다.
   -h, --help     이 도움말을 표시합니다.
 
-어떤 명령도 실패한 API 호출을 자동 재시도하지 않습니다. start, complete, release에는 유효한 프로젝트 설정이 필요합니다.`;
+어떤 명령도 실패한 API 호출을 자동 재시도하지 않습니다. create 실제 쓰기에는 같은 입력의 dry-run token이 필요합니다. Project가 필요한 이슈의 start, complete, release에는 유효한 프로젝트 설정이 필요합니다.`;
 }
 
 function parseArgs(argv) {
@@ -67,6 +89,9 @@ function parseArgs(argv) {
       config: DEFAULT_CONFIG_PATH,
       dryRun: false,
       json: false,
+      labels: [],
+      blockedBy: [],
+      project: false,
     },
   };
 
@@ -80,25 +105,41 @@ function parseArgs(argv) {
     ["--branch", "branch"],
     ["--agent", "agent"],
     ["--pr", "pr"],
+    ["--head", "head"],
     ["--reason", "reason"],
+    ["--idempotency-key", "idempotencyKey"],
+    ["--title", "title"],
+    ["--body", "body"],
+    ["--milestone", "milestone"],
+    ["--confirm-plan", "confirmPlan"],
     ["--repo", "repo"],
     ["--config", "config"],
+  ]);
+  const repeatedValueOptions = new Map([
+    ["--label", "labels"],
+    ["--blocked-by", "blockedBy"],
   ]);
 
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--dry-run") {
       result.options.dryRun = true;
+    } else if (token === "--project") {
+      result.options.project = true;
     } else if (token === "--json") {
       result.options.json = true;
     } else if (token === "--help" || token === "-h") {
       result.options.help = true;
-    } else if (valueOptions.has(token)) {
+    } else if (valueOptions.has(token) || repeatedValueOptions.has(token)) {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) {
         throw new WorkItemError(`${token} requires a value.`);
       }
-      result.options[valueOptions.get(token)] = value;
+      if (repeatedValueOptions.has(token)) {
+        result.options[repeatedValueOptions.get(token)].push(value);
+      } else {
+        result.options[valueOptions.get(token)] = value;
+      }
       index += 1;
     } else if (token.startsWith("--")) {
       throw new WorkItemError(`Unknown option: ${token}`);
@@ -410,6 +451,94 @@ function parseNumberOrUrl(value, kind, repository) {
   return Number(match[1]);
 }
 
+function createMarker(key, projectRequired) {
+  return `${CREATE_MARKER_PREFIX} key=${key} project=${projectRequired ? "required" : "none"} -->`;
+}
+
+function inspectCreateMarkers(body) {
+  const source = body || "";
+  const records = [];
+  const pattern =
+    /^<!-- lunchtime-work-item:create key=([a-z0-9][a-z0-9-]{2,79}) project=(required|none) -->$/gm;
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    records.push({
+      key: match[1],
+      projectRequired: match[2] === "required",
+      marker: match[0],
+    });
+  }
+  const reservedCount = source.split(CREATE_MARKER_PREFIX).length - 1;
+  return {
+    records,
+    reservedCount,
+    malformed: reservedCount !== records.length,
+  };
+}
+
+function createMarkerRecords(body) {
+  const inspected = inspectCreateMarkers(body);
+  if (inspected.malformed) {
+    throw new WorkItemError("Issue body contains a malformed create marker.", {
+      repair: [
+        "Do not edit or infer a malformed idempotency marker automatically.",
+        "Inspect the Issue body and resolve the marker conflict manually.",
+      ],
+    });
+  }
+  if (inspected.records.length > 1) {
+    throw new WorkItemError("Issue body contains multiple create markers.", {
+      repair: [
+        "Keep exactly one trusted create marker only after confirming Issue identity.",
+      ],
+    });
+  }
+  return inspected.records;
+}
+
+function creationMetadata(issue) {
+  return createMarkerRecords(issue?.body || "")[0] || null;
+}
+
+function markerMentionsKey(body, key) {
+  const markerPrefix = escapeRegex(CREATE_MARKER_PREFIX);
+  const targetKey = escapeRegex(key);
+  return new RegExp(
+    `${markerPrefix}[^\\r\\n]*\\bkey=${targetKey}(?=\\s|-->)`,
+  ).test(body || "");
+}
+
+function creationMetadataForKey(issue, key) {
+  const body = issue?.body || "";
+  const inspected = inspectCreateMarkers(body);
+  const targetRecords = inspected.records.filter(
+    (record) => record.key === key,
+  );
+  const targetMentioned =
+    targetRecords.length > 0 || markerMentionsKey(body, key);
+
+  if (!targetMentioned) return null;
+  if (
+    inspected.malformed ||
+    inspected.records.length !== 1 ||
+    targetRecords.length !== 1
+  ) {
+    throw createConflict(
+      `idempotency key "${key}" has malformed or multiple create markers on #${issue.number}`,
+    );
+  }
+  return targetRecords[0];
+}
+
+function trustedProjectOptOut(repository, issue, metadata) {
+  if (metadata?.projectRequired !== false) return false;
+  const creator = issue?.user?.login;
+  return (
+    nonEmpty(creator) &&
+    collaboratorPermission(repository, creator).writeOrHigher
+  );
+}
+
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -512,6 +641,24 @@ function getPaged(repository, issueNumber, suffix) {
         "Reduce or inspect the unusually large GitHub collection before rerunning.",
       ],
     },
+  );
+}
+
+function getRepositoryPaged(repository, suffix, label) {
+  const records = [];
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const separator = suffix.includes("?") ? "&" : "?";
+    const response = ghApi(
+      `repos/${repository.owner}/${repository.name}/${suffix}${separator}per_page=${PAGE_SIZE}&page=${page}`,
+    );
+    if (!Array.isArray(response)) {
+      throw new WorkItemError(`Expected a list while reading ${label}.`);
+    }
+    records.push(...response);
+    if (response.length < PAGE_SIZE) return records;
+  }
+  throw new WorkItemError(
+    `${label} pagination exceeded the safety limit of ${MAX_PAGES} pages.`,
   );
 }
 
@@ -632,6 +779,114 @@ const PROJECT_ITEMS_QUERY = `
     }
   }
 `;
+
+const CREATE_PROJECT_QUERY = `
+  query WorkItemCreateProject(
+    $projectOwner: String!,
+    $projectNumber: Int!
+  ) {
+    repositoryOwner(login: $projectOwner) {
+      ... on Organization {
+        projectV2(number: $projectNumber) { ...CreateProjectData }
+      }
+      ... on User {
+        projectV2(number: $projectNumber) { ...CreateProjectData }
+      }
+    }
+  }
+
+  fragment CreateProjectData on ProjectV2 {
+    id
+    title
+    fields(first: 100) {
+      nodes {
+        ... on ProjectV2SingleSelectField {
+          id
+          name
+          options { id name }
+        }
+      }
+    }
+  }
+`;
+
+function projectDefinition(project, config) {
+  if (!project) {
+    throw new WorkItemError(
+      `Expected one Project ${config.project.owner}#${config.project.number}, found 0.`,
+    );
+  }
+  const statusFields = project.fields.nodes.filter(
+    (field) => field?.name === config.project.statusField,
+  );
+  if (statusFields.length !== 1) {
+    throw new WorkItemError(
+      `Expected one single-select field named "${config.project.statusField}", found ${statusFields.length}.`,
+    );
+  }
+  const statusField = statusFields[0];
+  const optionIds = {};
+  for (const key of ["todo", "inProgress", "done"]) {
+    const expectedName = config.project.statusOptions[key];
+    const matches = statusField.options.filter(
+      (option) => option.name === expectedName,
+    );
+    if (matches.length !== 1) {
+      throw new WorkItemError(
+        `Expected one Project status option "${expectedName}", found ${matches.length}.`,
+      );
+    }
+    optionIds[key] = matches[0].id;
+  }
+  return {
+    id: project.id,
+    title: project.title,
+    statusFieldId: statusField.id,
+    optionIds,
+  };
+}
+
+function resolveCreateProject(config, repository, issueNumber = null) {
+  if (issueNumber === null) {
+    const data = ghGraphql(CREATE_PROJECT_QUERY, {
+      projectOwner: config.project.owner,
+      projectNumber: config.project.number,
+    })?.data;
+    return {
+      ...projectDefinition(data?.repositoryOwner?.projectV2, config),
+      itemId: null,
+      itemStatus: null,
+    };
+  }
+
+  const data = ghGraphql(PROJECT_QUERY, {
+    projectOwner: config.project.owner,
+    projectNumber: config.project.number,
+    repositoryOwner: repository.owner,
+    repositoryName: repository.name,
+    issueNumber,
+    statusField: config.project.statusField,
+    after: null,
+  })?.data;
+  const definition = projectDefinition(
+    data?.repositoryOwner?.projectV2,
+    config,
+  );
+  const issueItems = data?.repository?.issue?.projectItems?.nodes || [];
+  const matchingItems = issueItems.filter(
+    (item) => item.project?.id === definition.id,
+  );
+  if (matchingItems.length > 1) {
+    throw new WorkItemError(
+      `Issue #${issueNumber} appears more than once in Project "${definition.title}".`,
+    );
+  }
+  return {
+    ...definition,
+    itemId: matchingItems[0]?.id || null,
+    itemStatus: matchingItems[0]?.fieldValueByName?.name || null,
+  };
+}
 
 function resolveProject(config, repository, issueNumber) {
   const variables = {
@@ -797,12 +1052,12 @@ function collectReadiness({
     );
   }
 
-  if (project.itemStatus !== config.project.statusOptions.todo) {
+  if (project && project.itemStatus !== config.project.statusOptions.todo) {
     failures.push(
       `Project Status is "${project.itemStatus}", expected "${config.project.statusOptions.todo}".`,
     );
   }
-  if (project.inProgressCount >= config.maxInProgress) {
+  if (project && project.inProgressCount >= config.maxInProgress) {
     failures.push(
       `Project has ${project.inProgressCount} In Progress item(s); limit is ${config.maxInProgress}.`,
     );
@@ -818,12 +1073,26 @@ function collectReadiness({
 
 function readContext(options, issueValue, { requireProject = true } = {}) {
   const configInfo = loadConfig(options.config);
-  const config = validateConfig(configInfo, { requireProject });
-  const repository = discoverRepository(options.repo, config);
+  const baseConfig = validateConfig(configInfo, { requireProject: false });
+  if (!baseConfig) {
+    throw new WorkItemError(`Missing workflow config: ${configInfo.path}`);
+  }
+  const repository = discoverRepository(options.repo, baseConfig);
   const issueNumber = parseNumberOrUrl(issueValue, "issue", repository);
   const issue = getIssue(repository, issueNumber);
+  const metadata = creationMetadata(issue);
+  const projectOptOutTrusted = trustedProjectOptOut(
+    repository,
+    issue,
+    metadata,
+  );
+  const projectRequired =
+    requireProject && !projectOptOutTrusted;
+  const config = projectRequired
+    ? validateConfig(configInfo, { requireProject: true })
+    : baseConfig;
   const blockers = getBlockers(repository, issueNumber);
-  const project = config
+  const project = projectRequired
     ? resolveProject(config, repository, issueNumber)
     : null;
   return {
@@ -834,6 +1103,10 @@ function readContext(options, issueValue, { requireProject = true } = {}) {
     issue,
     blockers,
     project,
+    projectRequired,
+    creation: metadata
+      ? { ...metadata, projectOptOutTrusted }
+      : null,
   };
 }
 
@@ -870,12 +1143,21 @@ function readinessOutput(context) {
           token: claimState.winner.token,
         }
       : null,
-    project: {
-      title: context.project.title,
-      status: context.project.itemStatus,
-      inProgress: context.project.inProgressCount,
-      maxInProgress: context.config.maxInProgress,
-    },
+    project: context.project
+      ? {
+          required: true,
+          title: context.project.title,
+          status: context.project.itemStatus,
+          inProgress: context.project.inProgressCount,
+          maxInProgress: context.config.maxInProgress,
+        }
+      : {
+          required: false,
+          title: null,
+          status: null,
+          inProgress: null,
+          maxInProgress: context.config.maxInProgress,
+        },
   };
 }
 
@@ -928,10 +1210,12 @@ function ensureStartable(context, login, token, branch, agent) {
     context.config.labels.todo,
     context.config.labels.inProgress,
   ]);
-  const allowedProjectStatuses = new Set([
-    context.config.project.statusOptions.todo,
-    context.config.project.statusOptions.inProgress,
-  ]);
+  const allowedProjectStatuses = context.project
+    ? new Set([
+        context.config.project.statusOptions.todo,
+        context.config.project.statusOptions.inProgress,
+      ])
+    : null;
 
   if (context.issue.state !== "open") {
     failures.push(`Issue is ${context.issue.state}, expected open.`);
@@ -961,17 +1245,22 @@ function ensureStartable(context, login, token, branch, agent) {
   if (issueLabels(context.issue).includes(context.config.labels.blocked)) {
     failures.push(`Derived blocked label ${context.config.labels.blocked} is present.`);
   }
-  if (!allowedProjectStatuses.has(context.project.itemStatus)) {
+  if (
+    context.project &&
+    !allowedProjectStatuses.has(context.project.itemStatus)
+  ) {
     failures.push(
       `Project Status is "${context.project.itemStatus}", expected Todo or In Progress recovery state.`,
     );
   }
   const itemAlreadyInProgress =
-    context.project.itemStatus ===
-    context.config.project.statusOptions.inProgress;
-  const wouldExceedLimit = itemAlreadyInProgress
-    ? context.project.inProgressCount > context.config.maxInProgress
-    : context.project.inProgressCount >= context.config.maxInProgress;
+    context.project?.itemStatus ===
+    context.config.project?.statusOptions?.inProgress;
+  const wouldExceedLimit =
+    context.project &&
+    (itemAlreadyInProgress
+      ? context.project.inProgressCount > context.config.maxInProgress
+      : context.project.inProgressCount >= context.config.maxInProgress);
   if (wouldExceedLimit) {
     failures.push(
       `Project has ${context.project.inProgressCount} In Progress item(s); limit is ${context.config.maxInProgress}.`,
@@ -1070,6 +1359,34 @@ function updateProjectStatus(project, optionId) {
     itemId: project.itemId,
     fieldId: project.statusFieldId,
     optionId,
+  });
+}
+
+function addIssueToProject(project, issueNodeId) {
+  const mutation = `
+    mutation AddWorkItemToProject($projectId: ID!, $contentId: ID!) {
+      addProjectV2ItemById(
+        input: { projectId: $projectId, contentId: $contentId }
+      ) {
+        item { id }
+      }
+    }
+  `;
+  const response = ghGraphql(mutation, {
+    projectId: project.id,
+    contentId: issueNodeId,
+  });
+  const itemId = response?.data?.addProjectV2ItemById?.item?.id;
+  if (!nonEmpty(itemId)) {
+    throw new WorkItemError("Project add mutation did not return an item ID.");
+  }
+  return itemId;
+}
+
+function addNativeBlocker(repository, issueNumber, blockerId) {
+  ghApi(issueEndpoint(repository, issueNumber, "/dependencies/blocked_by"), {
+    method: "POST",
+    body: { issue_id: blockerId },
   });
 }
 
@@ -1294,6 +1611,619 @@ function mutateOrPlan({
   completed.push(description);
 }
 
+function requireCreateOption(options, name) {
+  const value = options[name];
+  if (!nonEmpty(value)) {
+    const flag = name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+    throw new WorkItemError(`create requires --${flag} VALUE.`);
+  }
+  return value.trim();
+}
+
+function normalizeIssueTitle(value) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function readCreateInput(parsed) {
+  if (parsed.positionals.length > 0) {
+    throw new WorkItemError(
+      `create does not accept positional arguments: ${parsed.positionals[0]}`,
+    );
+  }
+  const key = requireCreateOption(parsed.options, "idempotencyKey");
+  if (!CREATE_KEY_PATTERN.test(key)) {
+    throw new WorkItemError(
+      "--idempotency-key must be 3-80 lowercase letters, numbers, or hyphens and start with a letter or number.",
+    );
+  }
+  const title = requireCreateOption(parsed.options, "title");
+  if (
+    title.length < 4 ||
+    title.length > 160 ||
+    /[\r\n]/.test(title) ||
+    title.includes(CREATE_MARKER_PREFIX)
+  ) {
+    throw new WorkItemError(
+      "--title must be one meaningful line of 4-160 characters without a create marker.",
+    );
+  }
+  const source = requireCreateOption(parsed.options, "body");
+  let rawBody;
+  try {
+    rawBody = readFileSync(resolve(process.cwd(), source), "utf8");
+  } catch (error) {
+    throw new WorkItemError(`Cannot read Issue body ${source}: ${error.message}`);
+  }
+  if (rawBody.includes(CREATE_MARKER_PREFIX)) {
+    throw new WorkItemError(
+      "The input body must not contain a reserved create marker.",
+    );
+  }
+  const validation = validateIssueBody(rawBody, source);
+  if (validation.errors.length > 0) {
+    throw new WorkItemError(
+      `Issue body validation failed:\n- ${validation.errors.join("\n- ")}`,
+    );
+  }
+  const milestone = requireCreateOption(parsed.options, "milestone");
+  if (milestone.length > 100 || /[\r\n]/.test(milestone)) {
+    throw new WorkItemError(
+      "--milestone must be one exact title no longer than 100 characters.",
+    );
+  }
+  const labels = parsed.options.labels.map((label) => label.trim());
+  if (labels.length === 0) {
+    throw new WorkItemError("create requires at least one --label NAME.");
+  }
+  if (labels.length > 50 || new Set(labels).size !== labels.length) {
+    throw new WorkItemError(
+      "--label values must be unique and no more than 50.",
+    );
+  }
+  for (const label of labels) {
+    if (
+      !nonEmpty(label) ||
+      label.length > 100 ||
+      /[\r\n]/.test(label) ||
+      label.startsWith(STATUS_PREFIX) ||
+      label === "dependency:blocked"
+    ) {
+      throw new WorkItemError(
+        `Invalid --label "${label}". Workflow and dependency labels are derived by create.`,
+      );
+    }
+  }
+  const blockedBy = parsed.options.blockedBy.map((value) => value.trim());
+  if (
+    blockedBy.length > 50 ||
+    new Set(blockedBy).size !== blockedBy.length
+  ) {
+    throw new WorkItemError(
+      "--blocked-by values must be unique and no more than 50.",
+    );
+  }
+  if (parsed.options.dryRun && parsed.options.confirmPlan) {
+    throw new WorkItemError(
+      "--confirm-plan is not valid with --dry-run; use the token printed by dry-run in a new create command.",
+    );
+  }
+  if (
+    !parsed.options.dryRun &&
+    !CREATE_PLAN_PATTERN.test(parsed.options.confirmPlan || "")
+  ) {
+    throw new WorkItemError(
+      "create mutation requires --confirm-plan TOKEN from a fresh create --dry-run.",
+      {
+        repair: [
+          "Run the same create command with --dry-run and inspect every planned write.",
+          "Invoke one new create command with the returned plan token.",
+        ],
+      },
+    );
+  }
+  const marker = createMarker(key, parsed.options.project);
+  const body = `${marker}\n\n${rawBody.trim()}`;
+  if (Buffer.byteLength(body, "utf8") > MAX_ISSUE_BODY_BYTES) {
+    throw new WorkItemError(
+      `Rendered Issue body exceeds GitHub's ${MAX_ISSUE_BODY_BYTES}-byte limit.`,
+    );
+  }
+  return {
+    key,
+    title,
+    source,
+    rawBody,
+    body,
+    bodyHash: createHash("sha256").update(body).digest("hex"),
+    milestone,
+    labels,
+    blockedBy,
+    projectRequested: parsed.options.project,
+  };
+}
+
+function createConflict(message) {
+  return new WorkItemError(`Create preflight conflict: ${message}`, {
+    repair: [
+      "Do not overwrite or delete the existing Issue or managed state automatically.",
+      "Inspect the exact Issue, marker, labels, milestone, dependencies, and Project state.",
+      "After resolving the conflict, run one new create --dry-run.",
+    ],
+  });
+}
+
+function resolveCreateState(parsed, input) {
+  const configInfo = loadConfig(parsed.options.config);
+  const config = validateConfig(configInfo, {
+    requireProject: input.projectRequested,
+  });
+  if (!config) {
+    throw new WorkItemError(`Missing workflow config: ${configInfo.path}`);
+  }
+  const repository = discoverRepository(parsed.options.repo, config);
+  const login = currentLogin();
+  ensureWriteOrHigher(repository, login, "create");
+
+  const repositoryLabels = new Set(
+    getRepositoryPaged(repository, "labels", "repository labels").map(
+      (label) => label.name,
+    ),
+  );
+  const blockerIssues = input.blockedBy.map((value) => {
+    const number = parseNumberOrUrl(value, "issue", repository);
+    const issue = getIssue(repository, number);
+    if (!Number.isInteger(issue?.id)) {
+      throw createConflict(`blocker #${number} lacks a stable REST Issue id`);
+    }
+    return issue;
+  });
+  const blockerNumbers = blockerIssues.map((issue) => issue.number);
+  if (new Set(blockerNumbers).size !== blockerNumbers.length) {
+    throw new WorkItemError(
+      "--blocked-by values resolve to duplicate Issue numbers.",
+    );
+  }
+  const hasOpenBlocker = blockerIssues.some((issue) => issue.state === "open");
+  const desiredLabels = [
+    config.labels.todo,
+    ...input.labels,
+    ...(hasOpenBlocker ? [config.labels.blocked] : []),
+  ].sort();
+  const missingRepositoryLabels = desiredLabels.filter(
+    (label) => !repositoryLabels.has(label),
+  );
+  if (missingRepositoryLabels.length > 0) {
+    throw new WorkItemError(
+      `Missing repository label(s): ${missingRepositoryLabels.join(", ")}.`,
+      {
+        repair: [
+          "Create or correct label metadata separately; create does not guess labels.",
+        ],
+      },
+    );
+  }
+
+  const milestones = getRepositoryPaged(
+    repository,
+    "milestones?state=open",
+    "open milestones",
+  ).filter((milestone) => milestone.title === input.milestone);
+  if (milestones.length !== 1) {
+    throw new WorkItemError(
+      `Expected exactly one open milestone "${input.milestone}", found ${milestones.length}.`,
+    );
+  }
+  const milestone = milestones[0];
+
+  const issues = getRepositoryPaged(
+    repository,
+    "issues?state=all",
+    "repository Issues",
+  ).filter((issue) => !issue.pull_request);
+  const matches = [];
+  for (const issue of issues) {
+    const metadata = creationMetadataForKey(issue, input.key);
+    if (metadata?.key === input.key) matches.push(issue);
+  }
+  if (matches.length > 1) {
+    throw createConflict(
+      `idempotency key "${input.key}" appears on ${matches
+        .map((issue) => `#${issue.number}`)
+        .join(", ")}`,
+    );
+  }
+  let issue = matches[0] || null;
+  if (!issue) {
+    const titleMatches = issues.filter(
+      (candidate) =>
+        normalizeIssueTitle(candidate.title || "") ===
+        normalizeIssueTitle(input.title),
+    );
+    if (titleMatches.length > 0) {
+      throw createConflict(
+        `the same normalized title already exists on ${titleMatches
+          .map((candidate) => `#${candidate.number}`)
+          .join(", ")} without this idempotency key`,
+      );
+    }
+  }
+
+  const missingLabels = [];
+  const staleDerivedLabels = [];
+  let missingMilestone = false;
+  let existingBlockerNumbers = [];
+  const missingBlockers = [];
+  let project = null;
+  let projectMissing = false;
+  let projectStatusMissing = false;
+
+  if (issue) {
+    const metadata = creationMetadata(issue);
+    const conflicts = [];
+    const creator = issue.user?.login;
+    if (
+      !nonEmpty(creator) ||
+      !collaboratorPermission(repository, creator).writeOrHigher
+    ) {
+      conflicts.push(
+        "Issue create marker author does not have repository write permission",
+      );
+    }
+    if (metadata?.projectRequired !== input.projectRequested) {
+      conflicts.push("create marker Project mode differs");
+    }
+    if (issue.state !== "open") conflicts.push(`state is ${issue.state}`);
+    if (issue.title !== input.title) conflicts.push("title differs");
+    if (issue.body !== input.body) conflicts.push("body differs");
+    if (assigneeLogins(issue).length !== 0) {
+      conflicts.push(
+        `assignees are [${assigneeLogins(issue).join(", ")}], expected none`,
+      );
+    }
+    if (issue.milestone?.number === milestone.number) {
+      // Exact.
+    } else if (issue.milestone == null) {
+      missingMilestone = true;
+    } else {
+      conflicts.push(
+        `milestone is #${issue.milestone.number}, expected #${milestone.number}`,
+      );
+    }
+    const existingLabels = issueLabels(issue);
+    const desired = new Set(desiredLabels);
+    const unexpectedLabels = existingLabels.filter(
+      (label) => !desired.has(label),
+    );
+    const staleBlocked = unexpectedLabels.includes(config.labels.blocked)
+      ? [config.labels.blocked]
+      : [];
+    staleDerivedLabels.push(...staleBlocked);
+    const conflictingLabels = unexpectedLabels.filter(
+      (label) => !staleBlocked.includes(label),
+    );
+    if (conflictingLabels.length > 0) {
+      conflicts.push(
+        `unexpected label(s) differ from the exact request: ${conflictingLabels.join(", ")}`,
+      );
+    }
+    missingLabels.push(
+      ...desiredLabels.filter((label) => !existingLabels.includes(label)),
+    );
+
+    const currentBlockers = getBlockers(repository, issue.number);
+    existingBlockerNumbers = currentBlockers
+      .map((blocker) => blocker.number)
+      .sort((left, right) => left - right);
+    const expectedBlockerNumbers = [...blockerNumbers].sort(
+      (left, right) => left - right,
+    );
+    const extraBlockers = existingBlockerNumbers.filter(
+      (number) => !expectedBlockerNumbers.includes(number),
+    );
+    if (extraBlockers.length > 0) {
+      conflicts.push(
+        `native blocked-by contains unexpected Issue(s) ${extraBlockers
+          .map((number) => `#${number}`)
+          .join(", ")}`,
+      );
+    }
+    missingBlockers.push(
+      ...expectedBlockerNumbers.filter(
+        (number) => !existingBlockerNumbers.includes(number),
+      ),
+    );
+    if (input.projectRequested) {
+      project = resolveCreateProject(config, repository, issue.number);
+      if (!project.itemId) {
+        projectMissing = true;
+        projectStatusMissing = true;
+      } else if (project.itemStatus == null) {
+        projectStatusMissing = true;
+      } else if (
+        project.itemStatus !== config.project.statusOptions.todo
+      ) {
+        conflicts.push(
+          `Project Status is "${project.itemStatus}", expected "${config.project.statusOptions.todo}"`,
+        );
+      }
+    }
+    if (conflicts.length > 0) {
+      throw createConflict(
+        `Issue #${issue.number} differs from the requested target: ${conflicts.join("; ")}`,
+      );
+    }
+  } else if (input.projectRequested) {
+    project = resolveCreateProject(config, repository);
+    projectMissing = true;
+    projectStatusMissing = true;
+    missingBlockers.push(...blockerNumbers);
+  } else {
+    missingBlockers.push(...blockerNumbers);
+  }
+
+  const planned = [];
+  if (!issue) {
+    planned.push(
+      `create unassigned Issue with milestone "${milestone.title}" and labels [${desiredLabels.join(", ")}]`,
+    );
+  } else {
+    if (missingLabels.length > 0) {
+      planned.push(
+        `add missing labels to Issue #${issue.number}: ${missingLabels.join(", ")}`,
+      );
+    }
+    if (missingMilestone) {
+      planned.push(
+        `set Issue #${issue.number} milestone to "${milestone.title}"`,
+      );
+    }
+    if (staleDerivedLabels.length > 0) {
+      planned.push(
+        `remove stale derived labels from Issue #${issue.number}: ${staleDerivedLabels.join(", ")}`,
+      );
+    }
+  }
+  if (input.projectRequested && projectMissing) {
+    planned.push(`add Issue to Project "${project.title}"`);
+  }
+  if (input.projectRequested && projectStatusMissing) {
+    planned.push(
+      `set Project "${project.title}" Status to ${config.project.statusOptions.todo}`,
+    );
+  }
+  for (const number of missingBlockers) {
+    planned.push(`link Issue blocked by #${number}`);
+  }
+  if (planned.length === 0) {
+    planned.push(`skip Issue #${issue.number}; exact create state already exists`);
+  }
+
+  const planToken = createHash("sha256")
+    .update(
+      JSON.stringify({
+        repository: repository.nameWithOwner.toLowerCase(),
+        key: input.key,
+        title: input.title,
+        bodyHash: input.bodyHash,
+        milestone: milestone.number,
+        labels: desiredLabels,
+        blockerNumbers: [...blockerNumbers].sort(
+          (left, right) => left - right,
+        ),
+        projectRequested: input.projectRequested,
+        issueNumber: issue?.number || null,
+        planned,
+      }),
+    )
+    .digest("hex");
+
+  return {
+    config,
+    repository,
+    login,
+    input,
+    milestone,
+    desiredLabels,
+    blockerIssues,
+    blockerNumbers,
+    issue,
+    missingLabels,
+    staleDerivedLabels,
+    missingMilestone,
+    missingBlockers,
+    project,
+    projectMissing,
+    projectStatusMissing,
+    planned,
+    planToken,
+  };
+}
+
+function createMutationError(error, completed, state) {
+  const normalized =
+    error instanceof WorkItemError
+      ? error
+      : new WorkItemError(error?.message || String(error));
+  const issueReference = state.issue?.number
+    ? `Issue #${state.issue.number}`
+    : `create key "${state.input.key}"`;
+  return new WorkItemError(normalized.message, {
+    completed: [...completed, ...normalized.completed],
+    repair: [
+      ...normalized.repair,
+      `Inspect ${issueReference} and live label, milestone, dependency, assignee, and Project state.`,
+      "Do not retry automatically and do not delete or overwrite a partially created Issue.",
+      "After correcting the cause, run one new create --dry-run with the same idempotency key.",
+    ],
+  });
+}
+
+function createCommand(parsed) {
+  const input = readCreateInput(parsed);
+  const state = resolveCreateState(parsed, input);
+  if (parsed.options.dryRun) {
+    return {
+      command: "create",
+      dryRun: true,
+      repository: state.repository.nameWithOwner,
+      actor: state.login,
+      idempotencyKey: input.key,
+      bodyHash: input.bodyHash,
+      milestone: state.milestone.title,
+      labels: state.desiredLabels,
+      blockedBy: state.blockerNumbers,
+      project: input.projectRequested ? state.project.title : null,
+      existingIssue: state.issue?.number || null,
+      planToken: state.planToken,
+      planned: state.planned,
+      writes: 0,
+    };
+  }
+  if (parsed.options.confirmPlan !== state.planToken) {
+    throw new WorkItemError(
+      "Create plan changed after dry-run or --confirm-plan does not match.",
+      {
+        repair: [
+          "Do not use a stale token.",
+          "Run one new create --dry-run, inspect the live plan, and use its token once.",
+        ],
+      },
+    );
+  }
+
+  const completed = [];
+  let issue = state.issue;
+  try {
+    if (!issue) {
+      issue = ghApi(
+        `repos/${state.repository.owner}/${state.repository.name}/issues`,
+        {
+          method: "POST",
+          body: {
+            title: input.title,
+            body: input.body,
+            milestone: state.milestone.number,
+            labels: state.desiredLabels,
+          },
+        },
+      );
+      if (
+        !Number.isInteger(issue?.number) ||
+        !Number.isInteger(issue?.id) ||
+        !nonEmpty(issue?.node_id) ||
+        issue.title !== input.title ||
+        issue.body !== input.body ||
+        assigneeLogins(issue).length !== 0
+      ) {
+        throw new WorkItemError(
+          "Create response lacks the exact unassigned Issue identity, title, or body.",
+        );
+      }
+      state.issue = issue;
+      completed.push(`created Issue #${issue.number} without assignees`);
+    } else {
+      if (state.staleDerivedLabels.length > 0) {
+        const liveBlockers = getBlockers(state.repository, issue.number);
+        if (liveBlockers.some((blocker) => blocker.state === "open")) {
+          throw new WorkItemError(
+            "Native blocker state changed after create dry-run; stale derived labels were not removed.",
+          );
+        }
+        for (const label of state.staleDerivedLabels) {
+          removeLabel(state.repository, issue.number, label);
+        }
+        completed.push(
+          `removed stale derived labels: ${state.staleDerivedLabels.join(", ")}`,
+        );
+      }
+      if (state.missingLabels.length > 0) {
+        ghApi(issueEndpoint(state.repository, issue.number, "/labels"), {
+          method: "POST",
+          body: { labels: state.missingLabels },
+        });
+        completed.push(
+          `added missing labels: ${state.missingLabels.join(", ")}`,
+        );
+      }
+      if (state.missingMilestone) {
+        updateIssue(state.repository, issue.number, {
+          milestone: state.milestone.number,
+        });
+        completed.push(`set milestone to "${state.milestone.title}"`);
+      }
+    }
+
+    let project = state.project;
+    if (input.projectRequested) {
+      if (state.projectMissing) {
+        const itemId = addIssueToProject(project, issue.node_id);
+        project = { ...project, itemId, itemStatus: null };
+        completed.push(`added Issue #${issue.number} to Project "${project.title}"`);
+      }
+      if (state.projectStatusMissing) {
+        updateProjectStatus(project, project.optionIds.todo);
+        completed.push(
+          `set Project "${project.title}" Status to ${state.config.project.statusOptions.todo}`,
+        );
+      }
+    }
+    for (const blockerNumber of state.missingBlockers) {
+      const blocker = state.blockerIssues.find(
+        (candidate) => candidate.number === blockerNumber,
+      );
+      addNativeBlocker(state.repository, issue.number, blocker.id);
+      completed.push(`linked Issue #${issue.number} blocked by #${blockerNumber}`);
+    }
+  } catch (error) {
+    throw createMutationError(error, completed, state);
+  }
+
+  let verified;
+  try {
+    verified = resolveCreateState(parsed, input);
+  } catch (error) {
+    throw createMutationError(error, completed, state);
+  }
+  const residual = verified.planned.filter(
+    (entry) => !entry.startsWith(`skip Issue #${issue.number};`),
+  );
+  if (
+    verified.issue?.number !== issue.number ||
+    residual.length > 0 ||
+    assigneeLogins(verified.issue).length !== 0
+  ) {
+    throw new WorkItemError(
+      `Create post-verification found incomplete state${
+        residual.length > 0 ? `: ${residual.join("; ")}` : "."
+      }`,
+      {
+        completed,
+        repair: [
+          "Inspect the exact Issue and every managed state before one new dry-run.",
+          "Do not automatically retry, delete, assign, or overwrite the Issue.",
+        ],
+      },
+    );
+  }
+  completed.push(
+    `re-read and verified exact Issue, assignee, label, milestone, dependency${
+      input.projectRequested ? ", and Project" : ""
+    } state`,
+  );
+  return {
+    command: "create",
+    dryRun: false,
+    repository: state.repository.nameWithOwner,
+    issue: issue.number,
+    url: issue.html_url,
+    actor: state.login,
+    idempotencyKey: input.key,
+    project: input.projectRequested ? verified.project.title : null,
+    completed,
+    verified: true,
+  };
+}
+
 function startCommand(parsed) {
   const issueValue = requirePositional(parsed, 0, "start requires an Issue.");
   if (!nonEmpty(parsed.options.branch)) {
@@ -1420,27 +2350,29 @@ function startCommand(parsed) {
         );
       },
     });
-    mutateOrPlan({
-      dryRun: parsed.options.dryRun,
-      planned,
-      completed,
-      description: `set Project Status to ${context.config.project.statusOptions.inProgress}`,
-      alreadyDone:
-        context.project.itemStatus ===
-        context.config.project.statusOptions.inProgress,
-      action: () => {
-        assertWinningClaim(context.repository, context.issueNumber, {
-          token,
-          branch: parsed.options.branch,
-          agent: parsed.options.agent,
-          login,
-        });
-        updateProjectStatus(
-          context.project,
-          context.project.optionIds.inProgress,
-        );
-      },
-    });
+    if (context.project) {
+      mutateOrPlan({
+        dryRun: parsed.options.dryRun,
+        planned,
+        completed,
+        description: `set Project Status to ${context.config.project.statusOptions.inProgress}`,
+        alreadyDone:
+          context.project.itemStatus ===
+          context.config.project.statusOptions.inProgress,
+        action: () => {
+          assertWinningClaim(context.repository, context.issueNumber, {
+            token,
+            branch: parsed.options.branch,
+            agent: parsed.options.agent,
+            login,
+          });
+          updateProjectStatus(
+            context.project,
+            context.project.optionIds.inProgress,
+          );
+        },
+      });
+    }
   } catch (error) {
     throw enrichMutationError(error, completed, context, "start");
   }
@@ -1482,14 +2414,18 @@ function startCommand(parsed) {
     );
   }
   if (
+    verified.project &&
     verified.project.itemStatus !==
-    context.config.project.statusOptions.inProgress
+      context.config.project.statusOptions.inProgress
   ) {
     verificationFailures.push(
       `Project Status is "${verified.project.itemStatus}".`,
     );
   }
-  if (verified.project.inProgressCount > context.config.maxInProgress) {
+  if (
+    verified.project &&
+    verified.project.inProgressCount > context.config.maxInProgress
+  ) {
     verificationFailures.push(
       `Project In Progress count is ${verified.project.inProgressCount}; limit is ${context.config.maxInProgress}.`,
     );
@@ -1557,6 +2493,7 @@ const CLOSING_ISSUES_QUERY = `
             number
             repository { nameWithOwner }
           }
+          pageInfo { hasNextPage }
         }
       }
     }
@@ -1569,20 +2506,22 @@ function verifyPullClosesIssue(repository, prNumber, issueNumber) {
     name: repository.name,
     number: prNumber,
   });
-  const references =
-    response?.data?.repository?.pullRequest?.closingIssuesReferences?.nodes || [];
-  const matches = references.some(
-    (issue) =>
-      issue.number === issueNumber &&
-      issue.repository?.nameWithOwner?.toLowerCase() ===
-        repository.nameWithOwner.toLowerCase(),
-  );
-  if (!matches) {
+  const connection =
+    response?.data?.repository?.pullRequest?.closingIssuesReferences;
+  const references = connection?.nodes;
+  const exactMatch =
+    Array.isArray(references) &&
+    references.length === 1 &&
+    references[0]?.number === issueNumber &&
+    references[0]?.repository?.nameWithOwner?.toLowerCase() ===
+      repository.nameWithOwner.toLowerCase() &&
+    connection?.pageInfo?.hasNextPage === false;
+  if (!exactMatch) {
     throw new WorkItemError(
-      `Pull request #${prNumber} does not natively close Issue #${issueNumber}.`,
+      `Pull request #${prNumber} must natively close exactly Issue #${issueNumber} in ${repository.nameWithOwner}.`,
       {
         repair: [
-          `Add a GitHub closing reference such as "Closes #${issueNumber}" to the PR and confirm GitHub recognizes it.`,
+          `Keep exactly one GitHub closing reference such as "Closes #${issueNumber}" and confirm GitHub recognizes it.`,
         ],
       },
     );
@@ -1602,15 +2541,18 @@ function validateCompletionPreconditions(context, login) {
     context.issue.state === "open" ||
     (context.issue.state === "closed" &&
       context.issue.state_reason === "completed");
-  const recoverable =
-    recoverableState &&
-    statuses.length > 0 &&
-    statuses.every((status) => allowedStatuses.has(status)) &&
-    ownedByLogin &&
+  const projectRecoverable =
+    !context.project ||
     [
       context.config.project.statusOptions.inProgress,
       context.config.project.statusOptions.done,
     ].includes(context.project.itemStatus);
+  const recoverable =
+    recoverableState &&
+    statuses.length === 1 &&
+    allowedStatuses.has(statuses[0]) &&
+    ownedByLogin &&
+    projectRecoverable;
 
   if (!recoverable) {
     throw new WorkItemError(
@@ -1620,7 +2562,7 @@ function validateCompletionPreconditions(context, login) {
         `state_reason=${context.issue.state_reason}`,
         `labels=[${statuses.join(", ")}]`,
         `assignees=[${assignees.join(", ")}]`,
-        `project=${context.project.itemStatus}`,
+        `project=${context.project?.itemStatus ?? "not-managed"}`,
       ].join(" "),
       {
         repair: [
@@ -1655,6 +2597,12 @@ function completeCommand(parsed) {
   if (!nonEmpty(parsed.options.pr)) {
     throw new WorkItemError("complete requires --pr <merged-pr>.");
   }
+  if (!/^[0-9a-f]{40}$/i.test(parsed.options.head ?? "")) {
+    throw new WorkItemError(
+      "complete requires --head <40-character-finalized-head>.",
+    );
+  }
+  const expectedHead = parsed.options.head.toLowerCase();
 
   const context = readContext(parsed.options, issueValue);
   const login = currentLogin();
@@ -1699,6 +2647,19 @@ function completeCommand(parsed) {
       `Pull request #${prNumber} head branch is "${pull.head?.ref}", expected recorded branch "${winningClaim.branch}".`,
       {
         repair: ["Pass the merged PR created from the recorded work branch."],
+      },
+    );
+  }
+  if (
+    !/^[0-9a-f]{40}$/i.test(String(pull.head?.sha ?? "")) ||
+    pull.head.sha.toLowerCase() !== expectedHead
+  ) {
+    throw new WorkItemError(
+      `Pull request #${prNumber} head commit is "${pull.head?.sha ?? "missing"}", expected finalized head "${expectedHead}".`,
+      {
+        repair: [
+          "Use the exact head emitted by the successful finalize snapshot.",
+        ],
       },
     );
   }
@@ -1776,22 +2737,24 @@ function completeCommand(parsed) {
         );
       },
     });
-    mutateOrPlan({
-      dryRun: parsed.options.dryRun,
-      planned,
-      completed,
-      description: `set Project Status to ${context.config.project.statusOptions.done}`,
-      alreadyDone:
-        context.project.itemStatus === context.config.project.statusOptions.done,
-      action: () => {
-        assertWinningClaim(
-          context.repository,
-          context.issueNumber,
-          winningClaim,
-        );
-        updateProjectStatus(context.project, context.project.optionIds.done);
-      },
-    });
+    if (context.project) {
+      mutateOrPlan({
+        dryRun: parsed.options.dryRun,
+        planned,
+        completed,
+        description: `set Project Status to ${context.config.project.statusOptions.done}`,
+        alreadyDone:
+          context.project.itemStatus === context.config.project.statusOptions.done,
+        action: () => {
+          assertWinningClaim(
+            context.repository,
+            context.issueNumber,
+            winningClaim,
+          );
+          updateProjectStatus(context.project, context.project.optionIds.done);
+        },
+      });
+    }
     mutateOrPlan({
       dryRun: parsed.options.dryRun,
       planned,
@@ -2010,6 +2973,7 @@ function completeCommand(parsed) {
     failures.push(`Workflow labels are [${statuses.join(", ")}].`);
   }
   if (
+    verified.project &&
     verified.project.itemStatus !== context.config.project.statusOptions.done
   ) {
     failures.push(`Project Status is "${verified.project.itemStatus}".`);
@@ -2118,7 +3082,8 @@ function releaseCommand(parsed) {
     statusLabels(context.issue).length === 1 &&
     statusLabels(context.issue)[0] === context.config.labels.todo &&
     assigneeLogins(context.issue).length === 0 &&
-    context.project.itemStatus === context.config.project.statusOptions.todo;
+    (!context.project ||
+      context.project.itemStatus === context.config.project.statusOptions.todo);
   const matchingPriorRelease = [...claimState.releases]
     .reverse()
     .find(
@@ -2218,6 +3183,7 @@ function releaseCommand(parsed) {
     failures.push(`Assignees are [${assignees.join(", ")}], expected @${login} or none.`);
   }
   if (
+    context.project &&
     ![
       context.config.project.statusOptions.inProgress,
       context.config.project.statusOptions.todo,
@@ -2294,18 +3260,20 @@ function releaseCommand(parsed) {
         });
       },
     });
-    mutateOrPlan({
-      dryRun: parsed.options.dryRun,
-      planned,
-      completed,
-      description: `set Project Status to ${context.config.project.statusOptions.todo}`,
-      alreadyDone:
-        context.project.itemStatus === context.config.project.statusOptions.todo,
-      action: () => {
-        assertWinningClaim(context.repository, context.issueNumber, claim);
-        updateProjectStatus(context.project, context.project.optionIds.todo);
-      },
-    });
+    if (context.project) {
+      mutateOrPlan({
+        dryRun: parsed.options.dryRun,
+        planned,
+        completed,
+        description: `set Project Status to ${context.config.project.statusOptions.todo}`,
+        alreadyDone:
+          context.project.itemStatus === context.config.project.statusOptions.todo,
+        action: () => {
+          assertWinningClaim(context.repository, context.issueNumber, claim);
+          updateProjectStatus(context.project, context.project.optionIds.todo);
+        },
+      });
+    }
     mutateOrPlan({
       dryRun: parsed.options.dryRun,
       planned,
@@ -2345,7 +3313,8 @@ function releaseCommand(parsed) {
     verifiedStatuses.length !== 1 ||
     verifiedStatuses[0] !== context.config.labels.todo ||
     assigneeLogins(verified.issue).length !== 0 ||
-    verified.project.itemStatus !== context.config.project.statusOptions.todo
+    (verified.project &&
+      verified.project.itemStatus !== context.config.project.statusOptions.todo)
   ) {
     verificationFailures.push(
       "Issue, assignee, workflow label, and Project did not return to the Todo state.",
@@ -2407,7 +3376,10 @@ function reconcileCommand(parsed) {
   if (assigneeLogins(context.issue).length !== 0) {
     failures.push("Issue must be unassigned before dependency reconciliation.");
   }
-  if (context.project.itemStatus !== context.config.project.statusOptions.todo) {
+  if (
+    context.project &&
+    context.project.itemStatus !== context.config.project.statusOptions.todo
+  ) {
     failures.push(
       `Project Status is "${context.project.itemStatus}", expected "${context.config.project.statusOptions.todo}".`,
     );
@@ -2455,7 +3427,8 @@ function reconcileCommand(parsed) {
           statusLabels(current).length !== 1 ||
           statusLabels(current)[0] !== context.config.labels.todo ||
           assigneeLogins(current).length !== 0 ||
-          live.project.itemStatus !== context.config.project.statusOptions.todo ||
+          (live.project &&
+            live.project.itemStatus !== context.config.project.statusOptions.todo) ||
           liveClaim.winner
         ) {
           throw new WorkItemError(
@@ -2503,7 +3476,8 @@ function reconcileCommand(parsed) {
     statusLabels(verified.issue).length !== 1 ||
     statusLabels(verified.issue)[0] !== verified.config.labels.todo ||
     assigneeLogins(verified.issue).length !== 0 ||
-    verified.project.itemStatus !== verified.config.project.statusOptions.todo
+    (verified.project &&
+      verified.project.itemStatus !== verified.config.project.statusOptions.todo)
   ) {
     verificationFailures.push(
       "Issue, assignee, workflow label, or Project changed during dependency reconciliation.",
@@ -2545,7 +3519,9 @@ function enrichMutationError(error, completed, context, operation) {
 
 function mutationRepair(context, operation) {
   return [
-    `Inspect https://github.com/${context.repository.nameWithOwner}/issues/${context.issueNumber} and the configured Project.`,
+    `Inspect https://github.com/${context.repository.nameWithOwner}/issues/${context.issueNumber}${
+      context.project ? " and the configured Project" : ""
+    }.`,
     `Run check, reconcile the partial ${operation} state, then rerun one ${operation} command.`,
     "Do not add an automatic retry loop.",
   ];
@@ -2592,7 +3568,8 @@ function validateBodyCommand(parsed) {
 }
 
 function validateIssueBody(body, source) {
-  const parsed = parseIssueBody(body);
+  const visibleBody = visibleContractMarkdown(body);
+  const parsed = parseIssueBody(visibleBody);
   const headings = parsed.headings.map(({ name }) => name);
   const errors = [];
   for (const heading of REQUIRED_BODY_HEADINGS) {
@@ -2633,7 +3610,7 @@ function validateIssueBody(body, source) {
       );
     }
   }
-  const bareTraceIds = findBareTraceabilityIds(body);
+  const bareTraceIds = findBareTraceabilityIds(visibleBody);
   if (bareTraceIds.length > 0) {
     errors.push(
       `추적성 ID에는 전역 네임스페이스가 필요합니다. 발견된 값: ${bareTraceIds.join(
@@ -2642,19 +3619,155 @@ function validateIssueBody(body, source) {
     );
   }
   const traceability = parsed.sections.get("추적성") || "";
-  if (
-    !/\b(?:PRD-\d{2,}-(?:FR|AC|SP)-\d{2,}|POL-\d{2,}-R-\d{2,})\b/.test(
-      traceability,
-    )
-  ) {
+  if (referencedContractIds(traceability).size === 0) {
     errors.push(
       '"추적성" 섹션에는 전역 네임스페이스가 있는 PRD 또는 정책 ID가 하나 이상 필요합니다.',
     );
   }
+  validatePlannedTraceability(parsed, errors);
   return {
     source,
     errors,
   };
+}
+
+function validatePlannedTraceability(parsed, errors) {
+  const traceability = visibleContractMarkdown(
+    parsed.sections.get("추적성") || "",
+  );
+  const allowedPaths = visibleContractMarkdown(
+    parsed.sections.get("변경 허용 경로") || "",
+  );
+  const forbiddenPaths = visibleContractMarkdown(
+    parsed.sections.get("변경 금지 경로") || "",
+  );
+  const documentImpact = visibleContractMarkdown(
+    parsed.sections.get("문서 영향") || "",
+  );
+  const allowedPathScopes = productPathScopes(allowedPaths);
+  const forbiddenPathScopes = productPathScopes(forbiddenPaths);
+  const documentImpactScopes = productPathScopes(documentImpact);
+
+  let definedIds;
+  try {
+    definedIds = definedProductContractIds(process.cwd());
+  } catch (error) {
+    errors.push(`제품 정본 ID를 확인할 수 없습니다: ${error.message}`);
+    return;
+  }
+
+  for (const id of referencedContractIds(traceability)) {
+    const line =
+      traceability
+        .split(/\r?\n/)
+        .find((candidate) => candidate.includes(id)) ?? "";
+    const planned = new RegExp(
+      `${escapeRegex(id)} planned — 이 PR에서 정의(?![A-Za-z0-9가-힣_-])`,
+    ).test(line);
+    const directory = id.startsWith("PRD-")
+      ? "docs/prd"
+      : "docs/policies";
+    const ownedScopes = allowedPathScopes.filter((scope) =>
+      isCanonicalContractDefinitionScope(scope, id, directory),
+    );
+    const impactOwnsDefinition = documentImpact
+      .split(/\r?\n/)
+      .some((impactLine) => {
+        if (!referencedContractIds(impactLine).has(id)) return false;
+        return productPathScopes(impactLine).some((scope) =>
+          isCanonicalContractDefinitionScope(scope, id, directory),
+        );
+      });
+
+    if (definedIds.has(id)) {
+      if (planned) {
+        errors.push(
+          `이미 정본에 정의된 ${id}에는 planned 표식을 사용할 수 없습니다.`,
+        );
+      }
+      continue;
+    }
+
+    if (!planned) {
+      errors.push(
+        `정본에 아직 없는 ${id}는 "planned — 이 PR에서 정의"로 선언해야 합니다.`,
+      );
+    }
+    if (ownedScopes.length === 0) {
+      errors.push(
+        `${id} planned 정의에는 "변경 허용 경로"의 namespace가 일치하는 구체적 ${directory}/NN_*.md 정본 파일이 필요합니다.`,
+      );
+    }
+    if (
+      ownedScopes.some((owned) =>
+        forbiddenPathScopes.some((forbidden) =>
+          pathScopesOverlap(owned, forbidden),
+        ),
+      )
+    ) {
+      errors.push(
+        `${id} planned 정의의 ${directory}/ 정본 경로가 "변경 금지 경로"의 상위·동일·하위 범위와 충돌합니다.`,
+      );
+    }
+    if (
+      !impactOwnsDefinition
+    ) {
+      errors.push(
+        `${id} planned 정의는 "문서 영향"의 같은 항목에서 ID와 namespace가 일치하는 구체적 ${directory}/NN_*.md 정본 파일을 함께 소유해야 합니다.`,
+      );
+    }
+  }
+}
+
+function isCanonicalContractDefinitionScope(scope, id, directory) {
+  if (
+    scope.recursive ||
+    !scope.path.startsWith(`${directory}/`) ||
+    !scope.path.endsWith(".md")
+  ) {
+    return false;
+  }
+  const namespace = id.match(/^(?:PRD|POL)-(\d{2,})-/)?.[1];
+  const filename = scope.path.split("/").at(-1) ?? "";
+  return Boolean(namespace) && new RegExp(`^${namespace}_.+\\.md$`).test(filename);
+}
+
+function productPathScopes(markdown) {
+  const scopes = [];
+  for (const line of String(markdown ?? "").split(/\r?\n/)) {
+    if (!/^ {0,3}[-+*][ \t]+\S/.test(line)) continue;
+    for (const match of line.matchAll(
+      /(?<![A-Za-z0-9._/-])((?:\.\/)?docs(?:\/(?:[A-Za-z0-9._-]+|\*\*))+\/?)(?![A-Za-z0-9._/-])/g,
+    )) {
+      const token = match[1].replace(/^\.\//, "");
+      if (token.includes("*") && !token.endsWith("/**")) continue;
+      const recursiveSuffix =
+        token.endsWith("/**") || token.endsWith("/");
+      const path = token
+        .replace(/\/\*\*$/, "")
+        .replace(/\/$/, "");
+      if (!path || path.split("/").includes("..")) continue;
+      scopes.push({
+        path,
+        recursive:
+          recursiveSuffix ||
+          ["docs", "docs/prd", "docs/policies"].includes(path),
+      });
+    }
+  }
+  return scopes;
+}
+
+function pathScopeContains(scope, candidate) {
+  return (
+    scope.path === candidate.path ||
+    (scope.recursive &&
+      candidate.path.startsWith(`${scope.path}/`))
+  );
+}
+
+function pathScopesOverlap(left, right) {
+  return pathScopeContains(left, right) || pathScopeContains(right, left);
 }
 
 function findBareTraceabilityIds(body) {
@@ -2766,6 +3879,15 @@ function printResult(result, json) {
     return;
   }
 
+  if (result.command === "create" && result.dryRun) {
+    console.log(
+      `DRY RUN CREATE ${result.repository} key=${result.idempotencyKey}`,
+    );
+    console.log(`Plan token: ${result.planToken}`);
+    for (const entry of result.planned) console.log(`- ${entry}`);
+    return;
+  }
+
   console.log(
     `${result.dryRun ? "DRY RUN" : "VERIFIED"} ${result.command.toUpperCase()} ${result.repository}#${result.issue}`,
   );
@@ -2820,6 +3942,8 @@ async function main() {
         "check requires an Issue.",
       );
       result = readinessOutput(readContext(parsed.options, issueValue));
+    } else if (parsed.command === "create") {
+      result = createCommand(parsed);
     } else if (parsed.command === "start") {
       result = startCommand(parsed);
     } else if (parsed.command === "complete") {

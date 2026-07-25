@@ -1,8 +1,9 @@
 # LunchTime 개발 하네스 가이드
 
-이 문서는 대화 이력이 없는 작업자가 GitHub 이슈를 확인한 순간부터 병합 뒤
-완료 처리까지 같은 계약으로 진행하는 짧은 실행 가이드다. 세부 명령과 필드
-형식은 연결된 Skill·템플릿이 소유하며, 이 문서는 단계와 중단 판단을 연결한다.
+이 문서는 Claude Code와 Codex가 대화 이력 없이도 같은 요청을 같은 계약으로
+분류하고, GitHub 이슈 확인부터 병합 뒤 완료 처리까지 연결하는 단일
+orchestrator 인덱스다. 세부 명령과 필드 형식은 연결된 Skill·템플릿이
+소유하며, 이 문서는 요청 라우팅, 단계와 중단 판단만 연결한다.
 
 ## 한눈에 보기
 
@@ -30,14 +31,41 @@ flowchart TD
 - GitHub 상태 변경과 자동 반복은 각 Skill이 정한 유한한 경계 안에서만
   수행한다.
 
+## 요청 라우팅
+
+| 요청 유형 | 첫 정본 입력 | 실행 Skill·소유자 | 종료·인계 지점 |
+|---|---|---|---|
+| 새 이슈 작성·감사 | 승인된 PRD·Policy·결정, 이슈 양식 | [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md)의 이슈 작성·`create` | 검증된 이슈·Project 등록 상태를 인계한다. 이 on-demand 이슈 생성은 아래 11단계 밖의 준비 작업이다. |
+| 기존 이슈 구현·재개 | 이슈 본문, 정본 ID, 기본 의존 관계, 허용·금지 경로 | `run-github-work-item check`·`start` 뒤 STEP 01~09 소유 Skill | 검증된 commit을 PR 단계에 인계한다. |
+| 제품 문서 작성·변경 | 승인된 결정, PRD·Policy 인덱스, 관련 이슈 경로 계약 | [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 실제 정의된 ID와 구현·테스트 추적성을 같은 변경에 인계한다. |
+| commit 작성 | 이슈 범위, raw diff, 테스트·리뷰·문서 영향 증거 | [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) | push하지 않은 원자적 commit을 인계한다. |
+| PR 생성·갱신만 | clean issue branch, PR 본문 계약, 검증 증거 | [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md)의 PR 모드 | PR 생성·갱신과 재조회에서 멈추고 병합하지 않는다. |
+| 작업 완료·병합 | Ready PR, 현재 head·CI·review snapshot, 명시적인 완료 요청 | `open-pull-request`의 finalize 모드와 `run-github-work-item complete` | 한 번의 squash merge·원격 branch 삭제·완료 전이 뒤 안전한 로컬 정리 결과를 인계한다. |
+| 실패·부분 응답 복구 | 마지막 성공 단계와 현재 GitHub·Git 상태 | 쓰기를 소유한 Skill의 재조회·복구 계약 | 현재 상태를 재조회하고 중복 쓰기 없이 새로 실행할 한 단계만 인계한다. |
+
+## 규칙 소유와 링크
+
+한 규칙에는 세부 정본 소유자를 하나만 둔다. 이 인덱스와 루트 문서는 규칙을
+복사하지 않고 소유 정본을 링크하며, 소유 정본이 바뀌면 링크와 validator를
+같은 변경에서 맞춘다.
+
+| 규칙 | 단일 소유 정본 | 이 인덱스의 역할 |
+|---|---|---|
+| 사용자 결과·수용 동작 | [PRD](../prd/README.md) | STEP 입력으로 연결 |
+| 상태·권한·실패·복구·보존·보안 | [Policy](../policies/README.md) | STEP 입력으로 연결 |
+| 작업 범위·경로·행동 시나리오·검증 계획 | [MVP 작업 이슈 양식](../../.github/ISSUE_TEMPLATE/work-item.yml)과 생성된 이슈 | 구현·리뷰 입력으로 연결 |
+| 상태 전이·GitHub 쓰기·재조회·복구 명령 | 해당 [운영 Skill](../../.agents/skills/run-github-work-item/SKILL.md)과 그 reference·script | 요청을 Skill owner로 라우팅 |
+| PR의 고정 필드 | [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md)과 [PR 본문 계약](../../.agents/skills/open-pull-request/references/pr-body-contract.md) | STEP 10·11 입력으로 연결 |
+| CI의 결정적 증거 | [`validate` workflow](../../.github/workflows/validate-harness.yml) | 현재 head 게이트로 연결 |
+
 ## 구성요소와 책임
 
 | 구성요소 | 이 흐름에서 맡는 책임 |
 |---|---|
-| [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈 계약 확인, `check`·`start`, 병합 뒤 `complete`, Project·레이블·담당자 상태 일치 |
+| [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md) | on-demand 이슈 작성·`create`, 이슈 계약 확인, `check`·`start`, 병합 뒤 `complete`, Project·레이블·담당자 상태 일치 |
 | [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 구현 전후 PRD·Policy·제품 정의 영향과 정본 충돌 확인 |
 | [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) | 범위·검증·문서 영향을 대조한 explicit staging과 원자적 commit |
-| [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md) | 전체 branch 검증, push, Draft·Ready PR 생성과 생성 결과 재확인 |
+| [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md) | 전체 branch 검증, push, Draft·Ready PR 생성·재확인, 명시적 완료 요청의 exact-head finalize |
 | [MVP 작업 이슈 양식](../../.github/ISSUE_TEMPLATE/work-item.yml) | 11개 기존 본문 구역과 행동 시나리오를 담는 `완료 조건` |
 | [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md) | 다섯 H2 안에서 변경 결과·추적성·검증·문서 영향 인계 |
 | [MVP Project](https://github.com/orgs/GoCalendar/projects/1) · [보드](https://github.com/orgs/GoCalendar/projects/1/views/2) | `Todo`·`In Progress`·`Done` 작업 상태 관측 |
@@ -51,29 +79,29 @@ flowchart TD
 
 - **목적:** 구현할 결과 하나와 그 결과를 지배하는 제품·경로 계약을 대화 이력 없이 복원한다.
 
-- **핵심 입력:** GitHub 이슈의 11개 본문 구역, [PRD](../prd/README.md), [Policy](../policies/README.md), 결정 이력, 기본 의존 관계와 변경 허용·금지 경로다.
+- **핵심 입력:** GitHub 이슈의 11개 본문 구역, [PRD](../prd/README.md), [Policy](../policies/README.md), 결정 이력, 기본 의존 관계와 변경 허용·금지 경로이며 새 ID는 승인된 결정과 이 이슈의 planned ID·namespace 번호가 일치하는 구체적 `NN_*.md` 정본 파일·인덱스·구현·테스트 경로 소유 선언이 필요하다. README나 재귀 glob만으로는 정의 파일을 소유하지 않는다.
 
-- **완료 조건:** 목표·범위·추적 ID·선행 작업·행동 중심 `완료 조건`·검증·문서 영향을 설명할 수 있고, 누락된 제품 결정이 없다.
+- **완료 조건:** 목표·범위·기존 또는 planned 추적 ID·선행 작업·행동 중심 `완료 조건`·검증·문서 영향을 설명할 수 있고, 누락된 제품 결정이 없다.
 
-- **대표 실패·중단 조건:** 이슈 계약이 불완전하거나 정본끼리 충돌하거나 제품 결정을 추측해야 하거나 작업 경로가 다른 진행 중 이슈와 겹친다.
+- **대표 실패·중단 조건:** 이슈 계약이 불완전하거나 정본끼리 충돌하거나 제품 결정을 추측해야 하거나 planned ID의 승인·경로 소유가 없거나 작업 경로가 다른 진행 중 이슈와 겹친다.
 
 ## STEP 02. `check`로 준비 상태 검증
 
 - **목적:** GitHub 상태를 바꾸기 전에 이슈가 실제로 선점 가능한지 읽기 전용으로 확인한다.
 
-- **핵심 입력:** 이슈 번호와 [`run-github-work-item`의 `check`](../../.agents/skills/run-github-work-item/SKILL.md), 담당자·레이블·기본 의존 관계·Project 상태·동시 작업 한도다.
+- **핵심 입력:** 이슈 번호와 [`run-github-work-item`의 `check`](../../.agents/skills/run-github-work-item/SKILL.md), 담당자·레이블·기본 의존 관계, Project 관리 이슈의 Project 상태·동시 작업 한도다.
 
-- **완료 조건:** `check`가 열린 `Todo`, 담당자 없음, 선행 이슈 종료, Project `Todo`, 진입 한도 충족을 모두 확인한다.
+- **완료 조건:** `check`가 열린 `Todo`, 담당자 없음과 선행 이슈 종료를 확인하고, Project 관리 이슈인 경우에만 Project `Todo`와 진입 한도 충족도 확인한다.
 
-- **대표 실패·중단 조건:** 이슈가 이미 선점됐거나 차단됐거나 Project·레이블 상태가 어긋나거나 GitHub 관계를 신뢰성 있게 읽을 수 없다.
+- **대표 실패·중단 조건:** 이슈가 이미 선점됐거나 차단됐거나 레이블 또는 해당되는 Project 상태가 어긋나거나 GitHub 관계를 신뢰성 있게 읽을 수 없다.
 
 ## STEP 03. `start`로 작업 선점
 
-- **목적:** 구현 직전에 이슈·담당자·레이블·Project와 작업 branch 소유권을 하나의 검증된 시작 상태로 맞춘다.
+- **목적:** 구현 직전에 이슈·담당자·레이블, 해당되는 Project와 작업 branch 소유권을 하나의 검증된 시작 상태로 맞춘다.
 
 - **핵심 입력:** `work/issue-<번호>-<slug>` branch 이름, 안정적인 agent marker와 [`run-github-work-item`의 `start`](../../.agents/skills/run-github-work-item/SKILL.md)다.
 
-- **완료 조건:** 승리한 선점 표식, 현재 담당자, `status:in-progress`, Project `In Progress`와 기록된 branch가 재조회에서 모두 일치한다.
+- **완료 조건:** 승리한 선점 표식, 현재 담당자, `status:in-progress`와 기록된 branch가 일치하고, Project 관리 이슈인 경우에만 Project `In Progress`도 재조회에서 일치한다.
 
 - **대표 실패·중단 조건:** 경합에서 다른 선점이 승리했거나 branch 형식·권한·상태 전이·사후 검증 중 하나라도 실패한다.
 
@@ -111,11 +139,11 @@ flowchart TD
 
 - **목적:** 구현이 사용자 결과나 상태·권한·실패·복구·보존·보안 계약을 바꾸는지 commit 전에 판정한다.
 
-- **핵심 입력:** 전체 raw diff, 이슈 추적 ID와 [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md)의 구현 영향 확인 절차다.
+- **핵심 입력:** 전체 raw diff, 이슈의 기존·planned 추적 ID와 문서·구현·테스트 허용 경로, [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md)의 구현 영향 확인 절차다.
 
-- **완료 조건:** 영향을 받는 PRD·Policy·결정 문서를 같은 변경에서 갱신했거나, 제품 동작이 바뀌지 않는 구체적인 근거를 기록했다.
+- **완료 조건:** 영향을 받는 정본을 같은 branch와 PR에서 갱신하고 planned ID를 실제 정의·validator·구현·테스트·PR에 양방향 연결했거나, 제품 동작이 바뀌지 않는 구체적인 근거를 기록했다.
 
-- **대표 실패·중단 조건:** 정본 갱신이 필요한데 허용 경로 밖이거나 정본 충돌·미결정 제품 선택이 있거나 validator 통과만으로 의미상 정확성을 단정한다.
+- **대표 실패·중단 조건:** 정본 갱신이 허용 경로 밖이거나 Ready 전에도 planned ID가 정의되지 않았거나 정본 충돌·미결정 제품 선택이 있거나 validator 통과만으로 의미상 정확성을 단정한다.
 
 ## STEP 08. 독립 리뷰
 
@@ -139,23 +167,23 @@ flowchart TD
 
 ## STEP 10. PR 작성과 CI
 
-- **목적:** 전체 branch 결과를 다음 작업자가 재구성할 수 있는 Draft 또는 Ready PR로 게시하고 원격 게이트를 확인한다.
+- **목적:** 전체 branch 결과를 다음 작업자가 재구성할 수 있는 Draft 또는 Ready PR로 게시하고 원격 게이트를 확인하며 PR 생성·갱신만 요청한 경우 여기서 멈춘다.
 
 - **핵심 입력:** commit된 clean branch, [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md), [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md), base `main`과 `validate` workflow다.
 
-- **완료 조건:** `Closes #N`, 다섯 H2, 실제 추적·문서 영향·검증 증거와 정확히 하나의 `독립 리뷰` 검증 행을 가진 PR이 생성되고, Ready이면 모든 행과 최신 `main` 기준 CI가 통과한다.
+- **완료 조건:** `Closes #N`, 다섯 H2, 실제 추적·문서 영향·검증 증거와 정확히 하나의 `독립 리뷰` 행을 가진 PR이 생성·재조회되고, Ready이면 리뷰 증거가 현재 head를 가리키며 모든 행과 최신 `main` 기준 CI가 통과한다.
 
-- **대표 실패·중단 조건:** dirty·뒤처진 branch, 중복 PR, 미실행·실패·결정 필요를 숨긴 Ready, 독립 리뷰 행 누락·중복·실패, CI 실패 또는 생성 뒤 재조회 불일치다.
+- **대표 실패·중단 조건:** dirty·뒤처진 branch, 중복 PR, 미실행·실패·결정 필요를 숨긴 Ready, stale review snapshot, CI 실패 또는 생성 뒤 재조회 불일치이며 PR-only 요청을 임의로 finalize하지 않는다.
 
 ## STEP 11. Squash merge와 `complete`
 
-- **목적:** 검증된 PR 결과 하나를 `main`에 남기고 이슈·Project·후행 의존 관계를 병합 사실과 일치시킨다.
+- **목적:** 사용자가 완료·병합 또는 end-to-end 진행을 명시했을 때 검증된 PR 결과 하나를 `main`에 남기고 원격·이슈·Project·로컬 상태를 병합 사실과 일치시킨다.
 
-- **핵심 입력:** 최신 `main` 기준 통과한 Ready PR, squash 제목, 병합 결과와 [`run-github-work-item`의 `complete`](../../.agents/skills/run-github-work-item/SKILL.md)다.
+- **핵심 입력:** base `main`인 Ready PR의 정확한 current base/head Git object와 head tree, 같은 head의 독립 리뷰 snapshot, 같은 PR `statusCheckRollup`에 귀속된 필수 CI, repo·PR·base·head·`updatedAt`가 일치하며 미해결 0개인 review thread 응답, 검증된 제목·본문·`Closes #N`, 원격 branch의 현재 OID, [`open-pull-request` finalize](../../.agents/skills/open-pull-request/SKILL.md)와 [`run-github-work-item complete`](../../.agents/skills/run-github-work-item/SKILL.md)다.
 
-- **완료 조건:** squash merge와 원격 branch 삭제 뒤 `complete`가 이슈 `Done`·Project `Done`·종료 상태와 후행 차단 해제를 재검증하고, 최종 `main`·로컬 상태를 확인한다.
+- **완료 조건:** exact-head squash merge를 한 번만 실행하고 원격 branch OID가 검증한 head와 같을 때만 lease/CAS 삭제해 ref 부재·병합 결과를 재조회한 뒤 `complete`가 성공한다. 중단 뒤에는 `MERGED`·`mergedAt`·merge commit·exact head와 종료 참조뿐 아니라 merge의 유일한 parent=PR base, merge tree=head tree, 제목·actor와 `origin/main` first-parent 포함을 recovery mode로 재검증하되 병합 전용 CI·review thread를 다시 판정하지 않는다. `complete --dry-run --head`가 선점·담당자·PR 연결을 확인한 뒤 merge를 반복하지 않고 남은 단계만 수행하며, issue worktree가 이미 없으면 clean `main` worktree에서 재개한다. 그 뒤에만 worktree HEAD와 local ref가 검증한 head와 같고 tracked·untracked·ignored 경로가 모두 없는 정확한 worktree를 제거할 대상이 아닌 main worktree cwd에서 제거하고 old-OID `git -C <main-worktree> update-ref -d` CAS로 branch를 정리해 최신 clean `main`을 확인한다.
 
-- **대표 실패·중단 조건:** PR 미병합, 종료 참조·base/head 불일치, CI·리뷰 미완료, 병합 전에 `complete` 실행, 일부 GitHub 전이 실패 뒤 자동 반복이다.
+- **대표 실패·중단 조건:** Draft·base/head·제목·본문·종료 참조 불일치, 다른 PR/head에 귀속된 CI·thread, stale review, 실패·대기 CI, 미해결 thread, `OPEN`과 `merged-recovery` mode 혼용, squash topology·tree·actor 불일치, merge 응답 불명확 상태의 재시도, 이동·재생성돼 OID가 다른 remote branch 삭제, `complete` 전 정리, 검증한 head와 다른 local OID, `.omc` 같은 ignored 상태, dirty·사용자 소유 로컬 변경 또는 추측한 worktree·branch 삭제다.
 
 ## 독립 리뷰 표준
 

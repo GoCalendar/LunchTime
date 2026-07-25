@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -16,8 +24,9 @@ const template = await readFile(
   resolve(repositoryRoot, ".github/PULL_REQUEST_TEMPLATE.md"),
   "utf8",
 );
+const currentHead = "1234567890abcdef1234567890abcdef12345678";
 const independentReviewRow =
-  "| 독립 리뷰 | 원본 요구사항·raw diff·테스트 결과를 분리된 reviewer가 확인 | 통과 | reviewer 1명, P0~P2 발견 없음, review pass 1 |";
+  `| 독립 리뷰 | 원본 요구사항·raw diff·테스트 결과를 분리된 reviewer가 확인 | 통과 | review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1 |`;
 
 function readyBody() {
   return `<!-- lunchtime-pr:v1 -->
@@ -80,6 +89,7 @@ function validate(overrides = {}) {
     title: "feat: LT-017 - 메뉴 누락 차단 상태를 추가한다",
     issueNumber: 17,
     branch: "work/issue-17-menu-ack",
+    expectedHead: currentHead,
     ...overrides,
   });
 }
@@ -307,7 +317,7 @@ test("Draft의 독립 리뷰는 실패와 미실행을 사실대로 남길 수 �
     const body = readyBody().replace(
       independentReviewRow,
       independentReviewRow.replace(
-        "| 통과 | reviewer 1명, P0~P2 발견 없음, review pass 1 |",
+        `| 통과 | review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1 |`,
         `| ${result} | ${evidence} |`,
       ),
     );
@@ -324,7 +334,7 @@ test("Ready의 독립 리뷰 실패와 미실행은 구체적으로 거부한다
     const body = readyBody().replace(
       independentReviewRow,
       independentReviewRow.replace(
-        "| 통과 | reviewer 1명, P0~P2 발견 없음, review pass 1 |",
+        `| 통과 | review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1 |`,
         `| ${result} | ${evidence} |`,
       ),
     );
@@ -338,7 +348,7 @@ test("Ready의 독립 리뷰 실패와 미실행은 구체적으로 거부한다
 test("Ready의 독립 리뷰에는 non-placeholder 증거가 필요하다", () => {
   for (const evidence of ["<독립 리뷰 증거>", "TODO", ""]) {
     const body = readyBody().replace(
-      "reviewer 1명, P0~P2 발견 없음, review pass 1",
+      `review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1`,
       evidence,
     );
     assert.match(
@@ -346,6 +356,119 @@ test("Ready의 독립 리뷰에는 non-placeholder 증거가 필요하다", () =
       /Ready PR의 `독립 리뷰`에는 placeholder가 아닌 증거가 필요합니다/,
     );
   }
+});
+
+test("Ready의 독립 리뷰 snapshot은 현재 head SHA와 일치해야 한다", () => {
+  assert.deepEqual(validate(), []);
+  assert.deepEqual(
+    validate({ expectedHead: `${currentHead.slice(0, 7)}${currentHead.slice(7)}` }),
+    [],
+  );
+  assert.match(
+    joined(
+      validate({
+        expectedHead: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      }),
+    ),
+    /현재 head commit SHA와 일치하지 않습니다/,
+  );
+  assert.match(
+    joined(validate({ expectedHead: "1234567" })),
+    /40자리 commit SHA/,
+  );
+});
+
+test("Ready의 독립 리뷰에는 구조화된 40자리 review-head를 정확히 하나 요구한다", () => {
+  const short = readyBody().replace(currentHead, currentHead.slice(0, 7));
+  assert.match(
+    joined(validate({ body: short })),
+    /review-head=<40자리 SHA>.*정확히 하나/,
+  );
+
+  const duplicated = readyBody().replace(
+    `review-head=${currentHead}`,
+    `review-head=${currentHead}, review-head=${currentHead}`,
+  );
+  assert.match(
+    joined(validate({ body: duplicated })),
+    /review-head=<40자리 SHA>.*정확히 하나/,
+  );
+
+  const stale = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+  const unrelatedCurrent = readyBody().replace(
+    `review-head=${currentHead}`,
+    `review-head=${stale}, CI 대상 ${currentHead}`,
+  );
+  assert.match(
+    joined(validate({ body: unrelatedCurrent })),
+    /현재 head commit SHA와 일치하지 않습니다/,
+  );
+
+  const malformedAndValid = readyBody().replace(
+    `review-head=${currentHead}`,
+    `review-head=short, review-head=${currentHead}`,
+  );
+  assert.match(
+    joined(validate({ body: malformedAndValid })),
+    /review-head=<40자리 SHA>.*정확히 하나/,
+  );
+
+  assert.match(
+    joined(validate({ expectedHead: undefined })),
+    /현재 head는 40자리 commit SHA/,
+  );
+});
+
+test("링크 destination과 HTML attribute에 숨긴 review-head를 증거로 인정하지 않는다", () => {
+  for (const hiddenEvidence of [
+    `[리뷰 증거](https://example.com/review-head=${currentHead})`,
+    `<a href="https://example.com/review-head=${currentHead}">리뷰 증거</a>`,
+    `![review-head=${currentHead}](review.png)`,
+    `<span hidden>review-head=${currentHead}</span>`,
+    `<span style="display: none">review-head=${currentHead}</span>`,
+    `<details><summary>리뷰 증거</summary>review-head=${currentHead}</details>`,
+  ]) {
+    const body = readyBody().replace(
+      `review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1`,
+      hiddenEvidence,
+    );
+    assert.match(
+      joined(validate({ body })),
+      /review-head=<40자리 SHA>.*정확히 하나/,
+    );
+  }
+});
+
+test("review-head SHA 뒤에 별도 token이 아닌 suffix를 허용하지 않는다", () => {
+  for (const suffix of [
+    "garbage",
+    "1",
+    "_suffix",
+    "-suffix",
+    "/garbage",
+    "@garbage",
+  ]) {
+    const body = readyBody().replace(
+      `review-head=${currentHead}`,
+      `review-head=${currentHead}${suffix}`,
+    );
+    assert.match(
+      joined(validate({ body })),
+      /review-head=<40자리 SHA>.*정확히 하나/,
+      suffix,
+    );
+  }
+});
+
+test("closed details 안의 PR 본문 구조를 실제 다섯 section으로 인정하지 않는다", () => {
+  const body = [
+    "<!-- lunchtime-pr:v1 -->",
+    "<details>",
+    "<summary>접힌 PR 계약</summary>",
+    readyBody().replace("<!-- lunchtime-pr:v1 -->\n\n", ""),
+    "</details>",
+  ].join("\n");
+  assert.match(joined(validate({ body })), /H2는 다음 다섯 개/);
 });
 
 test("Draft는 실패·미실행과 결정 필요를 허용한다", () => {
@@ -379,9 +502,138 @@ test("추적 ID가 없으면 구체적인 미적용 근거를 요구한다", () 
   assert.match(joined(validate({ body: invalid })), /요구사항|구체적인 근거/);
 });
 
-test("더 긴 문자열에 포함된 추적 ID 일부를 인정하지 않는다", () => {
+test("완전한 3자리 ID가 미정의이면 일부 2자리 ID로 인정하지 않는다", () => {
   const invalid = readyBody().replace("PRD-01-FR-06", "PRD-01-FR-060");
-  assert.match(joined(validate({ body: invalid })), /요구사항/);
+  assert.match(
+    joined(validate({ body: invalid })),
+    /PRD-01-FR-060.*정의되어 있지 않습니다/,
+  );
+});
+
+test("세 자리 PRD·Policy·Spike 추적 ID를 허용한다", () => {
+  const body = readyBody()
+    .replace("PRD-01-FR-06", "PRD-100-FR-100")
+    .replace("PRD-01-AC-02", "PRD-100-AC-100")
+    .replace("POL-02-R-04", "POL-100-R-100")
+    .replace(
+      "해당 없음 — 이미 확정된 누락 방지 규칙의 구현입니다.",
+      "`PRD-100-SP-100`",
+    );
+  const definedContractIds = new Set([
+    "PRD-100-FR-100",
+    "PRD-100-AC-100",
+    "POL-100-R-100",
+    "PRD-100-SP-100",
+  ]);
+
+  assert.deepEqual(validate({ body, definedContractIds }), []);
+});
+
+test("Ready 추적 ID는 현재 branch의 제품 정본에 실제로 정의되어야 한다", () => {
+  const undefinedIds = readyBody()
+    .replace("PRD-01-FR-06", "PRD-99-FR-99")
+    .replace("PRD-01-AC-02", "PRD-99-AC-99")
+    .replace("POL-02-R-04", "POL-99-R-99");
+
+  const errors = joined(validate({ body: undefinedIds }));
+  assert.match(errors, /PRD-99-FR-99.*정의되어 있지 않습니다/);
+  assert.match(errors, /PRD-99-AC-99.*정의되어 있지 않습니다/);
+  assert.match(errors, /POL-99-R-99.*정의되어 있지 않습니다/);
+
+  assert.doesNotMatch(
+    joined(validate({ body: undefinedIds, draft: true })),
+    /정의되어 있지 않습니다/,
+  );
+});
+
+test("Ready 추적 ID는 dirty working tree가 아니라 exact head Git tree에서 확인한다", (context) => {
+  const root = mkdtempSync(join(tmpdir(), "lunchtime-pr-head-ids-"));
+  context.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "docs/prd"), { recursive: true });
+  mkdirSync(join(root, "docs/policies"), { recursive: true });
+  writeFileSync(
+    join(root, "docs/prd/01_fixture.md"),
+    [
+      "# PRD-01. fixture",
+      "## PRD-01-FR-06. exact 요구사항",
+      "## PRD-01-AC-02. exact 수용 기준",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(root, "docs/policies/02_fixture.md"),
+    ["# POL-02. fixture", "## POL-02-R-04. exact 정책", ""].join("\n"),
+  );
+  const git = (arguments_) => {
+    const result = spawnSync("git", arguments_, {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-q"]);
+  git(["config", "user.name", "Fixture"]);
+  git(["config", "user.email", "fixture@example.com"]);
+  git(["add", "--", "docs/prd/01_fixture.md", "docs/policies/02_fixture.md"]);
+  git(["commit", "-q", "-m", "docs: #17 - exact ID를 추가한다"]);
+  const exactHead = git(["rev-parse", "HEAD"]);
+
+  writeFileSync(
+    join(root, "docs/prd/01_fixture.md"),
+    [
+      "# PRD-01. fixture",
+      "## PRD-01-FR-99. dirty 요구사항",
+      "## PRD-01-AC-02. exact 수용 기준",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    validate({
+      definitionsRef: exactHead,
+      repositoryRoot: root,
+    }),
+    [],
+  );
+  const dirtyOnly = readyBody().replace(
+    "PRD-01-FR-06",
+    "PRD-01-FR-99",
+  );
+  assert.match(
+    joined(
+      validate({
+        body: dirtyOnly,
+        definitionsRef: exactHead,
+        repositoryRoot: root,
+      }),
+    ),
+    /PRD-01-FR-99.*정의되어 있지 않습니다/,
+  );
+});
+
+test("링크 destination·reference 정의·HTML attribute의 ID를 Ready 추적으로 인정하지 않는다", () => {
+  const body = readyBody()
+    .replace(
+      "`PRD-01-FR-06`",
+      "[요구사항 링크](https://example.com/PRD-01-FR-06)",
+    )
+    .replace("`PRD-01-AC-02`", "[수용 기준][ac-link]")
+    .replace(
+      "`POL-02-R-04`",
+      '<a href="https://example.com/POL-02-R-04">정책 링크</a>',
+    )
+    .replace(
+      "<!-- pr:traceability:end -->",
+      [
+        "[ac-link]: https://example.com/PRD-01-AC-02",
+        "<!-- pr:traceability:end -->",
+      ].join("\n"),
+    );
+  const errors = joined(validate({ body }));
+
+  assert.match(errors, /`요구사항`에는 완전한 ID/);
+  assert.match(errors, /`수용 기준`에는 완전한 ID/);
+  assert.match(errors, /`정책 규칙`에는 완전한 ID/);
 });
 
 test("Markdown URL과 이메일 autolink를 placeholder로 오인하지 않는다", () => {
@@ -485,9 +737,22 @@ test("GitHub pull_request event를 안전한 입력으로 변환한다", () => {
       title: "feat: LT-017 - 메뉴 누락 차단 상태를 추가한다",
       body: readyBody(),
       draft: false,
-      head: { ref: "work/issue-17-menu-ack" },
+      head: {
+        ref: "work/issue-17-menu-ack",
+        sha: currentHead,
+      },
       base: { ref: "main" },
     },
   };
-  assert.deepEqual(validatePullRequest(pullRequestFromEvent(event)), []);
+  assert.deepEqual(
+    validatePullRequest({
+      ...pullRequestFromEvent(event),
+      definedContractIds: new Set([
+        "PRD-01-FR-06",
+        "PRD-01-AC-02",
+        "POL-02-R-04",
+      ]),
+    }),
+    [],
+  );
 });

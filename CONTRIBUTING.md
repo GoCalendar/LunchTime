@@ -17,6 +17,10 @@
 
 ## 2. 전체 작업 흐름
 
+새 이슈 작성·감사는 `run-github-work-item`의 on-demand `create` 흐름이며 아래
+11단계 밖에서 수행합니다. 요청 유형별 첫 정본 입력, Skill owner와 종료 지점은
+[개발 하네스 가이드](docs/development/01_harness_guide.md)를 따릅니다.
+
 1. 이슈와 관련 제품 정본의 맥락, 목표, 완료 조건, 추적 ID, 선행 작업과 변경
    경로를 읽습니다.
 2. `run-github-work-item check`로 준비 상태를 확인합니다.
@@ -28,7 +32,11 @@
 8. 작성 컨텍스트와 분리된 읽기 전용 독립 리뷰를 통과합니다.
 9. `commit-work-item`으로 의도한 경로만 stage해 원자적으로 커밋합니다.
 10. `open-pull-request`로 검증된 본문을 만들고 PR과 필수 CI를 통과합니다.
-11. squash merge 뒤 `run-github-work-item complete`로 이슈와 Project를 정리합니다.
+    PR 생성·갱신만 요청받았다면 여기서 멈춥니다.
+11. 완료·병합 요청에서는 같은 Skill의 exact-head finalize로 squash merge한
+    뒤 `run-github-work-item complete`로 이슈와 Project를 정리하고, 성공 뒤
+    HEAD·local ref OID가 검증한 head와 같은 clean worktree와 local branch만
+    old-OID CAS로 정리합니다.
 
 어느 단계든 사전 조건이나 검증이 실패하면 다음 단계로 넘어가지 않습니다.
 실패한 명령을 반복 실행하지 않고 실제 상태와 복구 안내를 먼저 확인합니다.
@@ -93,6 +101,12 @@ work/issue-17-menu-ack
 
 구현 중 제품 결정이 새로 필요해지면 코드에 임의의 기본값을 넣지 않습니다.
 결정 기록과 PRD·정책을 먼저 갱신하거나 작업을 중단하고 결정을 요청합니다.
+이미 승인된 결정에 필요한 새 ID라면 구현 이슈가 planned ID, namespace
+번호가 일치하는 구체적 `NN_*.md` 정본 파일·인덱스·구현·테스트 경로를
+명시적으로 소유할 때 별도 문서 이슈 없이 같은 branch와 PR에서 정의할 수
+있습니다. README나 재귀 glob만으로는 정의 파일 소유가 되지 않습니다. Ready
+전에는 exact head Git tree에서 새 ID의 실제 정의와 validator,
+구현·테스트·PR의 양방향 추적을 확인합니다.
 
 ## 5. 테스트와 독립 리뷰
 
@@ -161,16 +175,41 @@ diff와 실제 테스트 결과를 제공해 수행합니다. 기대 답을 주�
 
 ## 8. 병합과 정리
 
-- 필수 검증이 통과하고 풀 리퀘스트 본문이 실제 상태와 일치할 때만 병합합니다.
+- PR 생성·갱신만 요청받았으면 병합하지 않습니다. 완료·병합 또는 end-to-end
+  요청에만 `open-pull-request`의 finalize 계약을 사용합니다.
+- base `main`인 Ready PR의 정확한 현재 head가 독립 리뷰 snapshot과 일치하고,
+  필수 CI가 통과하며 미해결 review thread가 0개이고 제목·본문·종료 참조가
+  재검증된 경우에만 병합합니다. required check는 같은 PR head의
+  `statusCheckRollup` run에, thread 응답은 같은 repo·PR·base·head·
+  `updatedAt`에 귀속되어야 합니다.
 - GitHub의 필수 `validate` 상태 검사는 최신 `main`을 기준으로 통과해야
   합니다. base가 앞서가면 변경을 다시 검증한 뒤에만 병합합니다.
 - 필수 승인 수는 1인 운영을 막지 않도록 0으로 두지만, 생성된 리뷰 대화는
   모두 해결해야 합니다.
 - `main`에는 squash merge만 사용해 이슈당 하나의 결과가 남게 합니다.
 - squash 제목은 풀 리퀘스트 제목의 커밋 컨벤션을 유지합니다.
-- 병합된 원격 브랜치는 삭제합니다.
-- 병합 뒤에만 이슈를 `Done`으로 만들고 후행 이슈의 차단 상태를 갱신합니다.
-- 작업 트리와 로컬 브랜치 정리는 병합 및 원격 상태를 확인한 뒤 수행합니다.
+- 검증한 exact head에 대해 squash merge를 한 번만 실행하고, 응답 실패나
+  불명확 상태에서는 재시도하기 전에 PR·원격 branch 상태를 재조회합니다.
+- 이미 `MERGED`인 PR에서 재개할 때는 `mergedAt`·merge commit·exact
+  head/branch·review-head·Ready 본문·종료 참조를 recovery mode로 검증하고,
+  merge commit의 단일 parent가 PR base이고 tree가 exact head와 같으며 제목·
+  actor·`origin/main` first-parent 포함이 일치하는 squash topology도
+  검증합니다. 병합 전용 CI·review thread 입력은 다시 판정하지 않습니다. exact head를
+  입력한 `complete --dry-run`으로 선점·담당자·PR 연결을 확인한 뒤 merge를
+  반복하지 않은 채 원격 ref 확인부터 이어갑니다. GitHub auto-close로 이슈가
+  `completed` 종료된 상태는 다시 열지 않습니다. issue worktree가 이미 없으면
+  clean `main` worktree에서 재개할 수 있습니다.
+- 병합된 원격 브랜치는 현재 remote OID가 검증한 head와 같은 경우에만
+  lease/CAS로 삭제하고 ref 부재를 재조회합니다. branch가 이동·재생성됐으면
+  삭제하지 않습니다. 그 뒤에만 이슈를 `Done`으로 만들고 후행 이슈의 차단
+  상태를 갱신합니다.
+- `complete` 성공 뒤 정확한 대상 worktree와 local branch가 clean이고 둘의
+  OID가 검증한 head와 같으며 tracked·untracked·ignored 경로가 모두 없는
+  경우에만 worktree를 제거하고, 검증한 old OID의
+  `git -C <main-worktree> update-ref -d` CAS로 local branch를 정리합니다.
+  제거할 worktree를 cwd로 사용하지 않으며 `.omc` 같은 ignored 상태,
+  dirty·사용자 소유 변경, OID
+  불일치나 불명확한 대상은 삭제하지 않습니다.
 
 ## 9. 예외
 

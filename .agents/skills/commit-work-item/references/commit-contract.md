@@ -57,6 +57,12 @@ git ls-files --others --exclude-standard
 - 로컬 실행을 위한 임시 설정, 자격 증명과 환경별 값
 - 개인 데이터, 내부 네트워크 식별자와 로컬 절대 경로
 
+저장소 `.gitignore`는 `.omc`, OS 메타데이터와 명백한 편집기·IDE 개인 상태가
+일반 `git add`와 작업 트리 상태에 섞이지 않게 한다. ignore는 `git add -f`나
+이미 index에 들어온 경로에는 효력이 없으므로 커밋 안전 gate로 간주하지 않는다.
+공유 가능한 `.vscode` 설정과 JetBrains 코드 스타일·실행 설정까지 디렉터리
+단위로 숨기지 않는다.
+
 이미 index에 다른 작업의 변경이 있으면 `git restore --staged`, `git reset`
 등으로 임의 해제하지 않는다. 선택한 파일에 사용자 변경과 이슈 변경이 함께
 있어 안전하게 분리할 수 없으면 파일 전체를 스테이징하지 말고 중단한다.
@@ -135,11 +141,20 @@ git commit -a
 git diff --cached --name-status
 git diff --cached --stat
 git diff --cached
+node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs --index
 git diff --cached --check
 ```
 
+commit path gate는 staged diff만이 아니라 `git ls-files --cached -z`로 전체
+index를 검사한다. 따라서 ignore를 강제로 우회했거나 이전 commit에 들어간
+`.omc` 경로 구성요소, `.DS_Store`, AppleDouble `._*`, `Thumbs.db`,
+`Desktop.ini`, 편집기 swap·backup과 명백한 JetBrains 개인 상태도 차단한다.
+금지 경로의 삭제가 stage되어 index에서 사라진 정리 commit은 허용한다.
+
 예상하지 않은 경로, 이슈 범위 밖 hunk, 비밀, 개인 정보, 로컬 절대 경로,
-개인 설정 또는 우발적 바이너리가 있으면 커밋하지 않는다.
+개인 설정, commit path gate 실패 또는 우발적 바이너리가 있으면 커밋하지
+않는다. 실패한 경로를 자동 삭제하거나 unstage하지 않고 현재 index와 이유를
+보고한다.
 
 ## 7. 커밋 메시지
 
@@ -225,6 +240,7 @@ test -n "$(git config --get user.email)"
 ```bash
 git show -s --format='%H%n%s%n%b' HEAD
 git diff-tree --no-commit-id --name-status -r HEAD
+node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs --index
 git status --short --branch
 ```
 

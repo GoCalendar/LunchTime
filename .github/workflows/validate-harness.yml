@@ -34,22 +34,36 @@ jobs:
         run: |
           node --check .agents/skills/update-product-docs/scripts/validate-product-docs.mjs
           node --check .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
+          node --check .agents/skills/update-product-docs/scripts/product-contract-ids.mjs
+          node --check .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs
           node --check .agents/skills/run-github-work-item/scripts/work-item.mjs
           node --check .agents/skills/run-github-work-item/scripts/work-item.test.mjs
           node --check .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs
           node --check .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
           node --check .agents/skills/commit-work-item/scripts/validate-commit-message.mjs
           node --check .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
+          node --check .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs
+          node --check .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
           node --check .agents/skills/open-pull-request/scripts/validate-pr-body.mjs
           node --check .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
+          node --check .agents/skills/open-pull-request/scripts/validate-finalize.mjs
+          node --check .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs
 
       - name: 작업 도구 회귀 테스트 실행
         run: |
+          node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs
           node --test .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
           node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs
           node --test .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
           node --test .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
+          node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
           node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
+          node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs
+
+      - name: 커밋 경로 검증
+        run: |
+          node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs \
+            --index
 
       - name: PR 템플릿 검증
         run: |
