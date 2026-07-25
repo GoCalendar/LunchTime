@@ -89,6 +89,18 @@ section은 다음 형태로 감싼다.
 - Ready의 `독립 리뷰`는 `통과`여야 한다. 증거만으로 검토 snapshot(commit
   SHA 또는 base...head), 원본 요구사항 위치, raw diff, 테스트 결과,
   검토자 수·전문 관점과 P0~P2 발견·해소 결과를 재구성할 수 있어야 한다.
+- Ready의 snapshot은 `review-head=<40자리 SHA>`를 정확히 한 번 포함하고
+  현재 PR head와 완전히 일치해야 한다. 짧은 prefix나 CI 등 다른 용도의 SHA는
+  review-head를 대신하지 않는다. Ready validator와 finalize는 GitHub에서
+  다시 읽은 exact head에 이 증거를 대조하며, head가 바뀌면 이전 리뷰 증거를
+  재사용하지 않는다.
+- Ready의 추적 표에 적은 모든 PRD·Policy ID는 현재 branch의 제품 정본에서
+  FR·AC·Policy visible heading 또는 PRD 기술 스파이크 표의 첫 셀로 실제
+  정의되어 있어야 한다. planned 표식이나 이슈의 예상 ID만으로 Ready 증거를
+  대신하지 않는다. finalize와 CI는 working tree나 stale `main`이 아니라 exact
+  PR head Git tree의 일반 Markdown blob을 읽는다. image alt, raw HTML element,
+  닫힌 `<details>`, link destination과 주석 안 문자열은 visible 정의·추적
+  증거로 인정하지 않는다.
 
 독립 리뷰는 구현 테스트와 제품 문서 영향 판정이 끝난 snapshot을 작성
 컨텍스트와 분리된 읽기 전용 검토자가 확인하는 절차다. 작성자 자기 검토는

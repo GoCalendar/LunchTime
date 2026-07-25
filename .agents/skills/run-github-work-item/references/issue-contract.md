@@ -18,7 +18,7 @@
 10. `검증`
 11. `문서 영향`
 
-일괄 생성 전에 결정적 검증기를 실행한다.
+개별 생성과 일괄 생성 전에 결정적 검증기를 실행한다.
 
 ```bash
 node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <body-file>
@@ -36,6 +36,15 @@ node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <bo
 - `작업 범위`에 포함 작업과 제외 작업을 구체적으로 나열한다.
 - GitHub 기본 `blocked by` / `blocking` 관계를 의존 관계의 정본으로 사용한다. `선행 작업` 문장은 연결 이유를 설명할 뿐 기본 의존 관계를 대신하지 않는다.
 - `추적성`에 적용 가능한 정본 ID를 하나 이상 연결한다. `PRD-NN-FR-NN`, `PRD-NN-AC-NN`, `PRD-NN-SP-NN`, `POL-NN-R-NN`을 사용하며 각 숫자 부분은 두 자리 이상일 수 있다. `D-NN` 결정 ID와 `F-NN` 기능 원장 ID는 보조 이력으로 추가할 수 있지만 PRD 또는 정책 정본을 대신하지 않는다. 접두사 없는 `FR-NN`, `AC-NN`, `SP-NN`, `R-NN`은 사용하지 않는다.
+- 같은 이슈와 PR에서 새 PRD·Policy ID를 정의해야 한다면 `추적성`에 정확한
+  예상 ID와 `planned — 이 PR에서 정의`를 함께 적는다. 이 예외는 해당 정본
+  문서를 같은 변경에서 실제로 만드는 작업에만 사용한다. `변경 허용 경로`와
+  `문서 영향`의 같은 항목에는 ID namespace 번호와 파일 번호가 일치하는 구체적
+  `docs/prd/**/NN_*.md` 또는 `docs/policies/**/NN_*.md` 파일을 포함하고,
+  Ready 전 exact head 기준 제품 문서 validator가 새 ID를 정본에서 확인해야
+  한다. `README.md`, 인덱스 또는 재귀 glob만으로는 정의 파일 소유가 되지
+  않는다. 별도 구현 이슈가 아직 존재하지 않는 ID를 미리 참조하는 용도로
+  사용하지 않는다.
 - 경로 구역에는 저장소 상대 경로나 좁은 경로 패턴을 사용한다. 이슈가 실제로 저장소 전반의 변경을 소유하는 경우가 아니면 저장소 전체를 허용하지 않는다.
 - `검증`에는 완료 조건의 시나리오별 명령·관찰 방법과 남길 증거를 적는다.
   구현 테스트와 문서 영향 확인 뒤 수행할 독립 리뷰의 최소 인원과 전문 관점도
@@ -49,9 +58,49 @@ node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <bo
 
 - 작업 흐름 레이블은 `status:todo`, `status:in-progress`, `status:done` 중 정확히 하나만 허용한다.
 - `dependency:blocked`는 열려 있는 GitHub 기본 선행 이슈에서 파생한다. 기본 의존 관계 연결을 대신하지 않는다.
-- Project `Status`와 작업 흐름 레이블은 같은 단계를 나타내야 한다.
+- MVP·Project 관리 이슈에서는 Project `Status`와 작업 흐름 레이블이 같은
+  단계를 나타내야 한다. `project=none` create marker가 있는 일반 이슈는
+  Project 상태를 만들지 않고 작업 흐름 레이블을 생명주기 정본으로 사용한다.
 - 담당자가 없고 열린 선행 이슈도 없는 `Todo` 이슈만 선점할 수 있다.
 - 시작 전이에 작업 브랜치와 에이전트 표식을 기록한다.
 - PR은 `Closes #123` 같은 종료 참조로 이슈를 식별해야 한다.
+
+## 개별 생성 계약
+
+개별 이슈는 `work-item.mjs create`로 생성한다. 본문 파일을 먼저
+`validate-body`로 검증하고 다음 두 명령을 서로 다른 명시적 실행으로 사용한다.
+
+```bash
+node .agents/skills/run-github-work-item/scripts/work-item.mjs create \
+  --idempotency-key <stable-key> --title <title> --body <body-file> \
+  --milestone <exact-open-title> --label <existing-label> --dry-run
+node .agents/skills/run-github-work-item/scripts/work-item.mjs create \
+  --idempotency-key <stable-key> --title <title> --body <body-file> \
+  --milestone <exact-open-title> --label <existing-label> \
+  --confirm-plan <dry-run-token>
+```
+
+- 실제 쓰기 전에 같은 입력의 dry-run 계획 전체를 확인한다. stale token,
+  중복 marker·제목, 다른 본문·milestone·요청·파생 label의 정확한 집합·담당자
+  상태는 안전하게 실패한다. 요청하지 않은 label은 자동 삭제하지 않는다.
+- `status:todo`와 열린 기본 선행 이슈에 따른 `dependency:blocked`는 도구가
+  파생한다. type·area 같은 기존 label만 `--label`로 전달하고 선행 이슈는
+  `--blocked-by`로 연결한다.
+- assignee 입력은 제공하지 않고 생성 요청에도 assignee를 넣지 않는다. 생성
+  뒤 담당자 0명을 재조회한다.
+- MVP 이슈만 `--project`로 Project 추가와 `Status=Todo`를 요청한다. 일반
+  이슈는 Project 없이 생성한다. create marker가 `project=none`이고 이슈
+  작성자의 현재 저장소 권한이 write 이상인 경우에만 `check`·`start`와 후속
+  생명주기가 Project 조회·전이를 생략한다. 신뢰할 수 없는 작성자의 marker,
+  marker가 없는 기존 이슈와 Project opt-in 이슈는 기존 Project 계약을
+  유지한다.
+- 저장소 전체에서 같은 idempotency key를 찾을 때 관련 없는 malformed marker는
+  건너뛴다. 선택된 이슈의 malformed·중복 marker나 신뢰할 수 없는 작성자가
+  같은 key를 사용한 충돌은 자동 수정·덮어쓰기하지 않는다.
+- 일부 쓰기 뒤 실패하면 생성된 이슈를 자동 삭제·덮어쓰기·재시도하지 않는다.
+  완료 단계와 실제 상태를 확인하고 같은 idempotency key로 새 dry-run을 수행한
+  뒤 남은 안전한 단계만 별도 명령으로 재개한다. 그 사이 기본 선행 이슈가
+  닫혀 stale `dependency:blocked`가 남았다면 이 도구 소유 파생 label만
+  mutation 직전 live 의존 관계를 재확인하고 제거할 수 있다.
 
 공개 저장소 이슈에 비밀값, 내부 네트워크 식별자, 인증 정보 또는 개인 데이터를 넣지 않는다.

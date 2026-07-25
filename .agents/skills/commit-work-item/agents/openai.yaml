@@ -1,4 +1,4 @@
 interface:
   display_name: "작업 이슈 커밋"
-  short_description: "이슈 범위와 검증 증거를 확인해 원자적으로 커밋"
-  default_prompt: "$commit-work-item을 사용해 현재 이슈의 변경 범위와 검증 증거를 확인하고 안전한 원자적 커밋을 만들어 주세요."
+  short_description: "이슈 범위·검증·Git index 잔여물을 확인해 원자적으로 커밋"
+  default_prompt: "$commit-work-item을 사용해 현재 이슈의 범위와 검증 증거를 확인하고 Git index의 로컬 잔여물을 차단한 안전한 원자적 커밋을 만들어 주세요."

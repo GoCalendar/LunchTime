@@ -22,6 +22,11 @@
 
 ## 작업 시작
 
+새 이슈 작성·감사는 `run-github-work-item`의 on-demand `create` 계약을
+사용하며 아래 11단계 구현 흐름 밖의 준비 작업입니다. 요청 유형별 첫 입력과
+Skill owner는 [개발 하네스 가이드](docs/development/01_harness_guide.md)를
+따릅니다.
+
 1. 한 작업자는 한 번에 하나의 GitHub 이슈만 구현합니다.
 2. 이슈의 개요, 목표, 완료 조건, 추적 ID, 선행 작업과 변경 경로를 읽습니다.
 3. `run-github-work-item` 스킬의 `check`로 준비 상태를 확인합니다.
@@ -40,6 +45,12 @@
   추가하거나 소유 이슈가 병합될 때까지 기다립니다.
 - PRD 요구사항, 수용 기준, 정책 규칙 ID를 코드, 테스트와 PR에서 추적할 수
   있게 유지합니다.
+- 승인된 결정에 필요한 새 PRD·Policy ID는 이슈가 planned ID와 namespace
+  번호가 일치하는 구체적 `NN_*.md` 정본 파일·인덱스·구현·테스트 경로를
+  소유한 경우 같은 branch와 PR에서 정의할 수 있습니다. README나 재귀
+  glob만으로는 정의 파일 소유가 되지 않습니다. Ready 전에 exact head
+  Git tree의 실제 정의와 validator·구현·테스트·PR 추적성을 확인하며,
+  미결정 제품 선택은 여전히 중단 조건입니다.
 - 자동 재시도는 횟수와 시간 한도가 있는 경우에만 구현합니다. 무한 반복과
   무한 재시도를 추가해서는 안 됩니다.
 - 사용자 소유의 미추적 파일과 작업 범위 밖 변경은 수정하거나 스테이징하지
@@ -90,14 +101,20 @@
 - 다음 게이트를 통과합니다.
 
   ```bash
+  node --check .agents/skills/update-product-docs/scripts/product-contract-ids.mjs
+  node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs
   node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs
+  node --test .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
   node --check .agents/skills/run-github-work-item/scripts/work-item.mjs
   node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs
   node --test .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
   node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs validate
   node --test .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
+  node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
+  node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs --index
   node .agents/skills/open-pull-request/scripts/validate-pr-body.mjs --template .github/PULL_REQUEST_TEMPLATE.md
   node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
+  node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs
   git diff --check
   ```
 
@@ -109,11 +126,32 @@
 1. PR 본문 계약과 템플릿을 검증하고 `Closes #<issue>`가 GitHub에 인식되는지
    확인합니다.
 2. PR이 병합되기 전에는 이슈를 `Done`으로 바꾸거나 닫지 않습니다.
-3. 필수 검증과 검토가 끝나면 squash merge하고 원격 작업 브랜치를 삭제합니다.
-4. 병합 뒤 `run-github-work-item` 스킬의 `complete`를 실행합니다.
-5. 완료 전이는 이슈 라벨, 프로젝트 상태, 이슈 상태를 일치시키고 후행 이슈의
+3. PR 생성·갱신만 요청받았으면 사후 재조회에서 멈춥니다. 완료·병합 또는
+   end-to-end 진행을 명시한 경우에만 `open-pull-request`의 finalize 계약으로
+   현재 head·필수 CI·독립 리뷰 snapshot·미해결 review thread·Ready·base·
+   제목·본문·종료 참조를 다시 검증합니다. required check는 같은 PR
+   `statusCheckRollup`의 run에, review thread는 같은 repo·PR·base·head·
+   `updatedAt`에 귀속하고 exact head Git tree에서 제품 ID를 읽습니다.
+   이미 병합된 PR의 완료·정리 재개는 `MERGED`·`mergedAt`·merge commit과
+   같은 exact head의 증거, merge의 단일 base parent·head와 같은 tree·제목·
+   actor·`origin/main` first-parent 포함을 `merged-recovery`로 검증하되 병합
+   전용 CI·review thread를 다시 판정하지 않습니다. `complete --dry-run --head`로 현재
+   선점·담당자·PR 연결을 확인하고, issue worktree가 없으면 clean `main`
+   worktree에서 merge를 반복하지 않은 채 재개합니다.
+4. exact-head squash merge를 한 번만 실행합니다. 원격 작업 브랜치는 현재
+   remote OID가 검증한 head와 같은 경우에만 lease/CAS로 삭제하고 병합·ref
+   결과를 재조회합니다.
+5. 병합 뒤 `run-github-work-item` 스킬의 `complete`를 실행합니다.
+6. 완료 전이는 이슈 라벨, 프로젝트 상태, 이슈 상태를 일치시키고 후행 이슈의
    GitHub 기본 의존성을 다시 확인합니다.
-6. 선행 작업이 모두 끝난 후행 이슈에만 `blocked` 라벨을 제거하고 근거가 담긴
+7. `complete` 성공 뒤에만 worktree HEAD와 local ref가 검증한 head와 같고
+   대상이 정확하며 tracked·untracked·ignored 경로가 모두 없는 worktree를
+   제거한 뒤, 검증한 old OID를 사용한
+   `git -C <main-worktree> update-ref -d` CAS로 local branch를 정리합니다.
+   제거할 worktree를 cwd로 사용하지 않습니다. `.omc` 같은 ignored 상태,
+   dirty·사용자 소유 변경, OID
+   불일치나 불명확한 대상이 있으면 삭제하지 않고 중단합니다.
+8. 선행 작업이 모두 끝난 후행 이슈에만 `blocked` 라벨을 제거하고 근거가 담긴
    댓글을 남깁니다.
 
 프로젝트의 최대 `In Progress` 수 검사는 GitHub의 서로 다른 이슈를 하나의

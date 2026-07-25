@@ -36,6 +36,46 @@ const harnessFields = [
   "완료 조건",
   "대표 실패·중단 조건",
 ];
+const updateProductDocsFixtureContract = [
+  "승인된 결정과 planned ID가 있을 때 같은 이슈, branch와 PR에서 작성한다.",
+  "별도 문서 이슈나 PR을 만들 필요는 없다.",
+  "Ready 전 planned ID를 실제 ID 정의, README·하위 인덱스, validator와 구현·테스트에 연결한다.",
+  "namespace에 맞는 `NN_*.md` concrete planned definition file을 소유하며 README와 재귀 glob만으로는 정의하지 않는다.",
+  "exact PR head Git tree에서 정의를 읽고 image alt, raw HTML과 <details>를 제외한다.",
+  "미결정 제품 선택이 남으면 중단한다.",
+];
+const runGithubWorkItemFixtureContract = [
+  "요청·파생 label의 정확한 집합을 요구하며 요청하지 않은 label은 보존한다.",
+  "stale `dependency:blocked`는 live 의존 관계를 재확인한 뒤 제한적으로 복구한다.",
+];
+const openPullRequestFixtureContract = [
+  "PR 생성·갱신만 요청은 재조회에서 멈춘다.",
+  "완료·병합·end-to-end 요청에서만 finalize한다.",
+  "validate-finalize.mjs로 required check, review thread와 closingIssuesReferences를 검증한다.",
+  "required check는 `statusCheckRollup`의 유일한 성공 run에 귀속한다.",
+  "review thread 응답의 repo·PR node·number·URL·`updatedAt`와 base/head가 일치해야 한다.",
+  "exact head Git tree에서 추적 ID를 검증한다.",
+  "--merged-recovery는 `MERGED`, `mergedAt`, `mergeCommit.oid`를 검증하고 merge 명령은 실행하지 않고 원격 ref 확인부터 재개한다.",
+  "병합 전에만 의미가 있는 required check·review thread는 다시 판정하지 않고 복구한다.",
+  "merge commit의 유일한 parent는 `baseRefOid`이고 merge tree는 exact head tree이며 origin/main first-parent에 포함된다.",
+  "complete <issue> --pr <pr> --head <validated-head> --dry-run",
+  "issue worktree가 이미 없으면 clean `main` worktree에서 재개한다.",
+  "review-head=<40자리 SHA>를 정확히 한 번 기록하고 현재 head와 완전히 일치시킨다.",
+  "FR·AC·Policy visible heading 또는 PRD 기술 스파이크 표의 첫 셀로 실제 정의한다.",
+  "gh pr merge <pr> --squash --match-head-commit <head>",
+  "`--delete-branch`는 사용하지 않는다.",
+  "병합 재조회가 성공한 뒤에만 exact remote ref를 읽는다.",
+  "git ls-remote --heads origin refs/heads/<validated-branch>",
+  "OID가 다르면 삭제하지 않고 중단한다.",
+  "--force-with-lease=refs/heads/<validated-branch>:<validated-head>",
+  "불명확한 응답이면 다시 실행하지 않는다.",
+  "`complete` 성공과 사후 검증 전에는 worktree나 local branch를 삭제하지 않는다.",
+  "git -C <issue-worktree> rev-parse HEAD와 git -C <main-worktree> rev-parse refs/heads/<validated-branch>를 <validated-head>와 확인한다.",
+  "git -C <main-worktree> worktree remove -- <issue-worktree>",
+  "git status --porcelain=v1 --untracked-files=all --ignored=matching --ignore-submodules=none 뒤 git ls-files --others --ignored를 확인한다.",
+  "git -C <main-worktree> update-ref -d refs/heads/<validated-branch> <validated-head>",
+  "dirty·staged·untracked 사용자 변경이면 중단한다.",
+];
 
 function write(root, relativePath, content) {
   const target = path.join(root, relativePath);
@@ -166,21 +206,60 @@ function createFixture() {
     "- 실패 조건에서는 다음 단계로 진행하지 않는다.",
     "",
   ];
+  const harnessRouting = [
+    "## 요청 라우팅",
+    "",
+    "| 요청 유형 | 첫 정본 입력 | 실행 Skill·소유자 | 종료·인계 지점 |",
+    "|---|---|---|---|",
+    "| 새 이슈 작성·감사 | 승인된 정본 | run-github-work-item create | on-demand 이슈 생성은 11단계 밖에서 인계한다. |",
+    "| 기존 이슈 구현·재개 | 이슈 본문 | run-github-work-item check·start | 검증된 commit을 인계한다. |",
+    "| 제품 문서 작성·변경 | 승인된 결정 | update-product-docs | 실제 ID 정의를 인계한다. |",
+    "| commit 작성 | raw diff | commit-work-item | push하지 않은 commit을 인계한다. |",
+    "| PR 생성·갱신만 | clean branch | open-pull-request | 재조회에서 멈추고 병합하지 않는다. |",
+    "| 작업 완료·병합 | 현재 head·CI·review snapshot | open-pull-request와 run-github-work-item | squash merge와 complete 결과를 인계한다. |",
+    "| 실패·부분 응답 복구 | 현재 상태 | 쓰기를 소유한 Skill | 재조회 뒤 중복 쓰기 없이 인계한다. |",
+    "",
+  ];
+  const harnessOwnership = [
+    "## 규칙 소유와 링크",
+    "",
+    "한 규칙에는 세부 정본 소유자를 하나만 둔다.",
+    "",
+    "| 규칙 | 단일 소유 정본 | 이 인덱스의 역할 |",
+    "|---|---|---|",
+    "| 사용자 결과·수용 동작 | PRD | STEP 입력으로 연결 |",
+    "| 상태·권한·실패·복구·보존·보안 | Policy | STEP 입력으로 연결 |",
+    "| 작업 범위·경로·행동 시나리오·검증 계획 | GitHub 이슈 | 구현 입력으로 연결 |",
+    "| 상태 전이·GitHub 쓰기·재조회·복구 명령 | 운영 Skill | Skill owner로 라우팅 |",
+    "| PR의 고정 필드 | PR 템플릿과 본문 계약 | STEP 10·11 입력으로 연결 |",
+    "| CI의 결정적 증거 | validate workflow | 현재 head gate로 연결 |",
+    "",
+  ];
   write(
     root,
     developmentFiles[0],
     [
       "# 개발 하네스 가이드",
       "",
+      "Claude Code와 Codex가 공유하는 단일 orchestrator 인덱스다.",
+      "",
       ...developmentOverview,
+      ...harnessRouting,
+      ...harnessOwnership,
       ...Array.from({ length: 11 }, (_, index) => {
         const number = String(index + 1).padStart(2, "0");
+        const projectCondition =
+          number === "02"
+            ? " Project 관리 이슈인 경우 Project 상태 Todo도 확인한다."
+            : number === "03"
+              ? " Project 관리 이슈인 경우 Project 상태 In Progress도 확인한다."
+              : "";
         return [
           `## STEP ${number}. 작업 단계`,
           "",
           `- **목적:** ${number}단계의 목적을 확인한다.`,
           `- **핵심 입력:** ${number}단계 입력 계약`,
-          `- **완료 조건:** ${number}단계 증거가 남는다.`,
+          `- **완료 조건:** ${number}단계 증거가 남는다.${projectCondition}`,
           `- **대표 실패·중단 조건:** ${number}단계 입력이나 증거가 없다.`,
           "",
         ].join("\n");
@@ -202,6 +281,15 @@ function createFixture() {
   );
 
   for (const [index, skillDirectory] of skillDirectories.entries()) {
+    const skillName = path.basename(skillDirectory);
+    const contract =
+      skillName === "update-product-docs"
+        ? updateProductDocsFixtureContract
+        : skillName === "run-github-work-item"
+          ? runGithubWorkItemFixtureContract
+        : skillName === "open-pull-request"
+          ? openPullRequestFixtureContract
+          : [];
     write(
       root,
       `${skillDirectory}/SKILL.md`,
@@ -212,6 +300,8 @@ function createFixture() {
         "---",
         "",
         `# 검증용 Skill ${index + 1}`,
+        "",
+        ...contract,
         "",
       ].join("\n"),
     );
@@ -227,6 +317,47 @@ function createFixture() {
       ].join("\n"),
     );
   }
+  write(
+    root,
+    ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
+    "export const fixture = true;\n",
+  );
+  write(
+    root,
+    ".agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
+    "import test from \"node:test\";\ntest(\"fixture\", () => {});\n",
+  );
+  write(
+    root,
+    ".agents/skills/open-pull-request/scripts/validate-finalize.mjs",
+    "#!/usr/bin/env node\n",
+  );
+  write(
+    root,
+    ".agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
+    "import test from \"node:test\";\ntest(\"fixture\", () => {});\n",
+  );
+  write(
+    root,
+    ".github/workflows/validate-harness.yml",
+    [
+      "name: fixture",
+      "jobs:",
+      "  validate:",
+      "    steps:",
+      "      - run: |",
+      "          node --check .agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
+      "          node --check .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
+      "          node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
+      "          node --check .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs",
+      "          node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs",
+      "          node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs \\",
+      "            --index",
+      "          node --check .agents/skills/open-pull-request/scripts/validate-finalize.mjs",
+      "          node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
+      "",
+    ].join("\n"),
+  );
 
   write(
     root,
@@ -614,6 +745,214 @@ test("parent list가 없는 1~3칸 들여쓰기 STEP bullet은 top-level로 허�
   });
 });
 
+test("하네스 가이드는 요청 라우팅과 단일 규칙 소유 인덱스를 요구한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, developmentFiles[0]);
+    fs.writeFileSync(
+      target,
+      fs
+        .readFileSync(target, "utf8")
+        .replace("## 요청 라우팅", "## 요청 분류"),
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /'## 요청 라우팅' 섹션이 정확히 하나/);
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, developmentFiles[0]);
+    fs.writeFileSync(
+      target,
+      fs
+        .readFileSync(target, "utf8")
+        .replace("on-demand 이슈 생성은 11단계 밖", "이슈 생성"),
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /on-demand 11단계 밖 작업/);
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, developmentFiles[0]);
+    fs.writeFileSync(
+      target,
+      fs
+        .readFileSync(target, "utf8")
+        .replace(
+          "한 규칙에는 세부 정본 소유자를 하나만 둔다.",
+          "규칙을 여러 문서에 적는다.",
+        ),
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /세부 정본 소유자를 하나만/);
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, developmentFiles[0]);
+    fs.writeFileSync(
+      target,
+      fs
+        .readFileSync(target, "utf8")
+        .replace(
+          "Project 관리 이슈인 경우 Project 상태 Todo도 확인한다.",
+          "모든 이슈에서 Project 상태 Todo를 확인한다.",
+        ),
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /STEP 02은 Project 상태 Todo를.*조건부/);
+  });
+});
+
+test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", () => {
+  const cases = [
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      source: "승인된 결정",
+      replacement: "정의된 내용",
+      message: /하네스 수명주기 계약이 없습니다: 승인된 결정/,
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      source: "exact PR head Git tree",
+      replacement: "현재 문서 폴더",
+      message:
+        /하네스 수명주기 계약이 없습니다: exact-head product definitions/,
+    },
+    {
+      file: ".agents/skills/run-github-work-item/SKILL.md",
+      source: "요청·파생 label의 정확한 집합",
+      replacement: "일부 관리 label",
+      message: /하네스 수명주기 계약이 없습니다: exact create labels/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "--match-head-commit",
+      replacement: "--head",
+      message: /하네스 수명주기 계약이 없습니다: exact-head guard/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "`statusCheckRollup`",
+      replacement: "별도 check 목록",
+      message:
+        /하네스 수명주기 계약이 없습니다: identity-bound required CI/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "--ignored=matching",
+      replacement: "--ignored=no",
+      message:
+        /하네스 수명주기 계약이 없습니다: ignored worktree preflight/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "review-head=<40자리 SHA>",
+      replacement: "임의 SHA",
+      message:
+        /하네스 수명주기 계약이 없습니다: structured exact review head/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "--merged-recovery",
+      replacement: "--retry-merge",
+      message: /하네스 수명주기 계약이 없습니다: MERGED recovery/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source:
+        "병합 전에만 의미가 있는 required check·review thread",
+      replacement: "병합된 상태의 게이트",
+      message:
+        /하네스 수명주기 계약이 없습니다: recovery OPEN gate 분리/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source:
+        "complete <issue> --pr <pr> --head <validated-head> --dry-run",
+      replacement: "complete <issue> --pr <pr>",
+      message:
+        /하네스 수명주기 계약이 없습니다: recovery ownership dry-run/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source:
+        "issue worktree가 이미 없으면",
+      replacement: "issue worktree가 반드시 있으면",
+      message: /하네스 수명주기 계약이 없습니다: recovery main cwd/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source:
+        "git -C <main-worktree> update-ref -d",
+      replacement: "git branch -d <validated-branch>",
+      message: /하네스 수명주기 계약이 없습니다: CAS local 삭제/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source:
+        "FR·AC·Policy visible heading 또는 PRD 기술 스파이크",
+      replacement: "모든 ID는 visible heading",
+      message: /하네스 수명주기 계약이 없습니다: Ready ID 정의 형식/,
+    },
+    {
+      file: ".github/workflows/validate-harness.yml",
+      source:
+        "node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
+      replacement:
+        "node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs",
+      message: /하네스 수명주기 계약이 없습니다: CI finalize 회귀 테스트/,
+    },
+    {
+      file: ".github/workflows/validate-harness.yml",
+      source:
+        "node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
+      replacement:
+        "node --test .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs",
+      message:
+        /하네스 수명주기 계약이 없습니다: CI product contract ID 회귀 테스트/,
+    },
+  ];
+
+  for (const { file, source, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      fs.writeFileSync(
+        target,
+        fs.readFileSync(target, "utf8").replace(source, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+
+  withFixture((root) => {
+    const file =
+      ".agents/skills/open-pull-request/scripts/validate-finalize.test.mjs";
+    fs.unlinkSync(path.join(root, file));
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.ok(
+      result.stderr.includes(`필수 하네스 검증 파일이 없습니다: ${file}`),
+      result.stderr,
+    );
+  });
+
+  withFixture((root) => {
+    const file =
+      ".agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs";
+    fs.unlinkSync(path.join(root, file));
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.ok(
+      result.stderr.includes(`필수 하네스 검증 파일이 없습니다: ${file}`),
+      result.stderr,
+    );
+  });
+});
+
 test("README는 두 개발 표준 문서를 visible link로 연결해야 한다", () => {
   for (const file of developmentFiles) {
     withFixture((root) => {
@@ -855,6 +1194,8 @@ test("Skill frontmatter는 malformed·non-string scalar 우회를 거부한다",
           "",
           "# 검증용 Skill",
           "",
+          ...updateProductDocsFixtureContract,
+          "",
         ].join("\n"),
       );
       const result = runValidator(root);
@@ -889,6 +1230,8 @@ test("Skill frontmatter는 합법적인 quoted·unquoted description을 허용�
           "---",
           "",
           "# 검증용 Skill",
+          "",
+          ...updateProductDocsFixtureContract,
           "",
         ].join("\n"),
       );

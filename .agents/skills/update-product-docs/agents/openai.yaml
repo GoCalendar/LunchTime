@@ -1,4 +1,4 @@
 interface:
   display_name: "제품 문서 갱신"
-  short_description: "사람과 AI가 읽기 좋은 PRD·정책을 작성하고 검증"
-  default_prompt: "$update-product-docs를 사용해 LunchTime PRD 또는 정책을 작성하거나 검토하고 구현 전에 추적성을 유지해 줘."
+  short_description: "PRD·정책과 planned ID 추적성을 작성하고 검증"
+  default_prompt: "$update-product-docs를 사용해 LunchTime PRD·정책 영향을 검토하고 planned ID를 승인된 결정, concrete 정본 파일과 같은 이슈·PR의 exact-head 구현 증거에 연결해 줘."

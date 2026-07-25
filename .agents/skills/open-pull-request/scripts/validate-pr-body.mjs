@@ -3,6 +3,13 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
+import {
+  definedProductContractIds,
+  definedProductContractIdsAtGitRef,
+  referencedContractIds,
+  visibleContractMarkdown,
+} from "../../update-product-docs/scripts/product-contract-ids.mjs";
+
 const SECTIONS = [
   { heading: "연결된 이슈", marker: "issues" },
   { heading: "변경 요약", marker: "summary" },
@@ -151,7 +158,7 @@ function validateStructure(body) {
     errors.push("`<!-- lunchtime-pr:v1 -->` marker가 정확히 하나 필요합니다.");
   }
 
-  const visibleBody = maskInvisibleMarkdown(body);
+  const visibleBody = visibleContractMarkdown(body);
   const headingMatches = occurrences(visibleBody, /^## (.+)$/gm);
   const headings = headingMatches.map((match) => match[1].trim());
   const expected = SECTIONS.map((section) => section.heading);
@@ -347,8 +354,12 @@ function validateTitle(title, { issueNumber, workKey } = {}) {
   return errors;
 }
 
-function validateTraceability(content, errors, { template }) {
-  content = visibleMarkdown(content);
+function validateTraceability(
+  content,
+  errors,
+  { template, definedIds, enforceDefinitions = false },
+) {
+  content = visibleContractMarkdown(content);
   for (const label of ["요구사항", "수용 기준", "정책 규칙", "기술 스파이크"]) {
     if (
       occurrences(
@@ -363,10 +374,22 @@ function validateTraceability(content, errors, { template }) {
   if (template) return;
 
   const rowRules = [
-    ["요구사항", /\bPRD-[0-9]{2}-FR-[0-9]{2}\b/],
-    ["수용 기준", /\bPRD-[0-9]{2}-AC-[0-9]{2}\b/],
-    ["정책 규칙", /\bPOL-[0-9]{2}-R-[0-9]{2}\b/],
-    ["기술 스파이크", /\bPRD-[0-9]{2}-SP-[0-9]{2}\b/],
+    [
+      "요구사항",
+      /(?<![A-Za-z0-9_-])PRD-[0-9]{2,}-FR-[0-9]{2,}(?![A-Za-z0-9_-])/,
+    ],
+    [
+      "수용 기준",
+      /(?<![A-Za-z0-9_-])PRD-[0-9]{2,}-AC-[0-9]{2,}(?![A-Za-z0-9_-])/,
+    ],
+    [
+      "정책 규칙",
+      /(?<![A-Za-z0-9_-])POL-[0-9]{2,}-R-[0-9]{2,}(?![A-Za-z0-9_-])/,
+    ],
+    [
+      "기술 스파이크",
+      /(?<![A-Za-z0-9_-])PRD-[0-9]{2,}-SP-[0-9]{2,}(?![A-Za-z0-9_-])/,
+    ],
   ];
   for (const [label, idPattern] of rowRules) {
     const row = content
@@ -378,6 +401,16 @@ function validateTraceability(content, errors, { template }) {
       !/해당 없음\s+[—-]\s+\S+/.test(row)
     ) {
       errors.push(`추적성의 \`${label}\`에는 완전한 ID 또는 적용되지 않는 근거가 필요합니다.`);
+    }
+  }
+
+  if (enforceDefinitions && definedIds) {
+    for (const id of referencedContractIds(content)) {
+      if (!definedIds.has(id)) {
+        errors.push(
+          `Ready PR의 추적 ID ${id}가 현재 branch의 PRD·Policy 정본에 정의되어 있지 않습니다.`,
+        );
+      }
     }
   }
 }
@@ -406,8 +439,12 @@ function splitMarkdownRow(line) {
   return cells;
 }
 
-function validateVerification(content, errors, { template, draft }) {
-  content = visibleMarkdown(content);
+function validateVerification(
+  content,
+  errors,
+  { template, draft, expectedHead },
+) {
+  content = visibleContractMarkdown(content);
   const lines = content.split("\n").map((line) => line.trim());
   const headerPattern =
     /^\|\s*대상\s*\|\s*명령·확인\s*\|\s*결과\s*\|\s*증거\s*\|$/;
@@ -487,6 +524,35 @@ function validateVerification(content, errors, { template, draft }) {
       "Ready PR의 `독립 리뷰`에는 placeholder가 아닌 증거가 필요합니다.",
     );
   }
+  if (!draft) {
+    const normalizedHead = String(expectedHead).toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(normalizedHead)) {
+      errors.push("Ready PR의 현재 head는 40자리 commit SHA여야 합니다.");
+    } else if (independentReview?.length === 4) {
+      const reviewHeadMarkers = [
+        ...independentReview[3].matchAll(
+          /(?<![A-Za-z0-9_-])review-head=/gi,
+        ),
+      ];
+      const reviewHeads = [
+        ...independentReview[3].matchAll(
+          /(?<![A-Za-z0-9_-])review-head=([0-9a-f]{40})(?=$|[\s,;])/gi,
+        ),
+      ].map((match) => match[1].toLowerCase());
+      if (
+        reviewHeadMarkers.length !== 1 ||
+        reviewHeads.length !== 1
+      ) {
+        errors.push(
+          "Ready PR의 `독립 리뷰` 증거에는 `review-head=<40자리 SHA>`가 정확히 하나 필요합니다.",
+        );
+      } else if (reviewHeads[0] !== normalizedHead) {
+        errors.push(
+          "Ready PR의 `독립 리뷰` 증거가 현재 head commit SHA와 일치하지 않습니다.",
+        );
+      }
+    }
+  }
 }
 
 function validateDocsImpact(content, errors, { template, draft }) {
@@ -529,8 +595,26 @@ export function validatePullRequest({
   issueNumber,
   branch,
   base = "main",
+  expectedHead,
+  definedContractIds,
+  definitionsRef,
+  repositoryRoot = process.cwd(),
 }) {
   const errors = validateStructure(body);
+  let definedIds = definedContractIds;
+  const traceabilityContent = sectionContent(body, "traceability");
+  const referencedIds = referencedContractIds(traceabilityContent);
+  if (!draft && definedIds === undefined && referencedIds.size === 0) {
+    definedIds = new Set();
+  } else if (!draft && definedIds === undefined) {
+    try {
+      definedIds = definitionsRef
+        ? definedProductContractIdsAtGitRef(definitionsRef, repositoryRoot)
+        : definedProductContractIds(repositoryRoot);
+    } catch (error) {
+      errors.push(`Ready PR의 제품 정본 ID를 확인할 수 없습니다: ${error.message}`);
+    }
+  }
   const parsedIssue = parseIssue(body);
 
   if (
@@ -582,12 +666,15 @@ export function validatePullRequest({
     }
   }
 
-  validateTraceability(sectionContent(body, "traceability"), errors, {
+  validateTraceability(traceabilityContent, errors, {
     template: false,
+    definedIds,
+    enforceDefinitions: !draft,
   });
   validateVerification(sectionContent(body, "verification"), errors, {
     template: false,
     draft,
+    expectedHead,
   });
   validateDocsImpact(sectionContent(body, "docs-impact"), errors, {
     template: false,
@@ -614,6 +701,7 @@ function parseArguments(argv) {
     "--title",
     "--issue",
     "--branch",
+    "--head",
     "--event",
   ]);
 
@@ -640,6 +728,9 @@ function parseArguments(argv) {
   if (parsed.body && (!parsed.title || !parsed.issue || !parsed.branch)) {
     throw new Error("`--body` 모드에는 `--title`, `--issue`, `--branch`가 필요합니다.");
   }
+  if (parsed.body && !parsed.draft && !parsed.head) {
+    throw new Error("Ready `--body` 모드에는 현재 commit SHA인 `--head`가 필요합니다.");
+  }
   return parsed;
 }
 
@@ -662,6 +753,8 @@ export function pullRequestFromEvent(event) {
     body: pullRequest.body ?? "",
     draft: Boolean(pullRequest.draft),
     branch: pullRequest.head?.ref ?? "",
+    expectedHead: pullRequest.head?.sha ?? "",
+    definitionsRef: pullRequest.head?.sha ?? "",
     base: pullRequest.base?.ref ?? "",
   };
 }
@@ -690,6 +783,8 @@ async function main() {
         draft: args.draft,
         issueNumber: args.issue,
         branch: args.branch,
+        expectedHead: args.head,
+        definitionsRef: args.head,
       });
     }
 
