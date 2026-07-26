@@ -24,6 +24,42 @@ const developmentFiles = [
   "docs/development/01_harness_guide.md",
   "docs/development/02_testing_standard.md",
 ];
+const harnessRoutingDocuments = [
+  {
+    file: "AGENTS.md",
+    section: "PR과 작업 완료",
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "8. 병합과 정리",
+  },
+  {
+    file: developmentFiles[0],
+    section: "규칙 소유와 링크",
+  },
+];
+const harnessDetailOwners = [
+  {
+    name: "run-github-work-item",
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+  },
+  {
+    name: "open-pull-request",
+    file: ".agents/skills/open-pull-request/SKILL.md",
+  },
+];
+const forbiddenFinalizeDetailTokens = [
+  "snapshot-scratch",
+  "snapshot-attempt.json",
+  "pending.omc",
+  "current.omc",
+  "failed-empty",
+  "worktree-quarantine",
+  "beforeRefDelete",
+  "GIT_INDEX_FILE",
+  "statusCheckRollup",
+  "merged-recovery",
+];
 const skillDirectories = [
   ".agents/skills/update-product-docs",
   ".agents/skills/run-github-work-item",
@@ -75,6 +111,7 @@ const openPullRequestFixtureContract = [
   "finalize-local-cleanup.mjs --repo <validated-repository> --issue <issue> --pr <pr> --dry-run을 repository를 포함한 같은 일곱 identity로 실행한다.",
   "origin fetch와 push URL은 각각 정확히 하나인 credential 없는 canonical GitHub URL이어야 하며 raw URL은 출력하거나 plan·identity에 저장하지 않고 fingerprint는 plan token과 runtime canary에만 결속한다.",
   "archive key는 stable local locator identity로 유지하고 explicit repository만 durable core identity에 둔다. repository 변경은 core identity collision으로 중단하지만 같은 repository의 canonical URL 변경은 새 dry-run으로 기존 archive를 복구한다.",
+  "worktree-quarantine은 검증된 로컬 정리 상태만 소유한다.",
   "worktree root 전체와 metadata directory 전체를 atomic no-replace quarantine하고 `git worktree remove`나 `git worktree prune`은 호출하지 않는다.",
   "원본을 rename·삭제하지 않고 helper-owned 새 inode current.omc sealed snapshot을 만들고 source·payload `contentDigest`를 확인한다.",
   "이 단계는 copy fallback이 아니라 원본을 그대로 보존하는 primary snapshot이다.",
@@ -248,11 +285,39 @@ function createFixture() {
     "| 사용자 결과·수용 동작 | PRD | STEP 입력으로 연결 |",
     "| 상태·권한·실패·복구·보존·보안 | Policy | STEP 입력으로 연결 |",
     "| 작업 범위·경로·행동 시나리오·검증 계획 | GitHub 이슈 | 구현 입력으로 연결 |",
-    "| 상태 전이·GitHub 쓰기·재조회·복구 명령 | 운영 Skill | Skill owner로 라우팅 |",
+    "| 이슈·Project 상태 전이·재조회·복구 | [run-github-work-item](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈·Project 요청을 단일 owner로 라우팅 |",
+    "| PR 쓰기·exact-head finalize·원격·로컬 정리 | [open-pull-request](../../.agents/skills/open-pull-request/SKILL.md) | PR 수명주기 요청을 단일 owner로 라우팅 |",
     "| PR의 고정 필드 | PR 템플릿과 본문 계약 | STEP 10·11 입력으로 연결 |",
     "| CI의 결정적 증거 | validate workflow | 현재 head gate로 연결 |",
     "",
   ];
+  write(
+    root,
+    "AGENTS.md",
+    [
+      "# AI 작업 지침",
+      "",
+      "## PR과 작업 완료",
+      "",
+      "- PR finalize와 로컬 정리는 [open-pull-request](.agents/skills/open-pull-request/SKILL.md)가 소유한다.",
+      "- 이슈·Project 완료 전이는 [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)가 소유한다.",
+      "",
+    ].join("\n"),
+  );
+  write(
+    root,
+    "CONTRIBUTING.md",
+    [
+      "# 기여 지침",
+      "",
+      "## 8. 병합과 정리",
+      "",
+      "- PR finalize와 로컬 정리는 [open-pull-request](.agents/skills/open-pull-request/SKILL.md)가 소유한다.",
+      "- 이슈·Project 완료 전이는 [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)가 소유한다.",
+      "- 필수 승인 수는 1인 운영을 막지 않도록 0으로 유지합니다. 승인 수와 무관하게 생성된 리뷰 대화는 모두 해결해야 합니다.",
+      "",
+    ].join("\n"),
+  );
   write(
     root,
     developmentFiles[0],
@@ -502,6 +567,27 @@ function withFixture(run) {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+}
+
+function mutateH2Section(content, heading, mutate) {
+  const marker = `## ${heading}`;
+  const start = content.indexOf(marker);
+  assert.notEqual(start, -1, `fixture heading missing: ${heading}`);
+  const next = content.indexOf("\n## ", start + marker.length);
+  const end = next < 0 ? content.length : next + 1;
+  return (
+    content.slice(0, start) +
+    mutate(content.slice(start, end)) +
+    content.slice(end)
+  );
+}
+
+function canonicalOwnerLink(documentFile, owner) {
+  const target = path
+    .relative(path.dirname(documentFile), owner.file)
+    .split(path.sep)
+    .join("/");
+  return `[${owner.name}](${target})`;
 }
 
 function writeFeatureScope(root, values) {
@@ -833,6 +919,427 @@ test("하네스 가이드는 요청 라우팅과 단일 규칙 소유 인덱스�
     assert.equal(result.status, 1);
     assert.match(result.stderr, /STEP 02은 Project 상태 Todo를.*조건부/);
   });
+});
+
+test("라우팅 문서는 top-level 목록·표·fence와 inline code를 허용한다", () => {
+  for (const { file } of harnessRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      fs.appendFileSync(
+        target,
+        [
+          "",
+          "## strict 문법 허용 fixture",
+          "",
+          "- top-level 목록",
+          "",
+          "| 열 | 값 |",
+          "|---|---|",
+          "| inline code | `<span>안전한 예시</span>` |",
+          "",
+          "```html",
+          "<div>fenced example</div>",
+          "```",
+          "",
+        ].join("\n"),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 0, `${file}\n${result.stderr}`);
+    });
+  }
+});
+
+test("세 라우팅 문서는 모호하거나 숨길 수 있는 Markdown 문법을 fail-closed한다", () => {
+  const cases = [
+    {
+      block: "\r\nCR",
+      message: /CR line ending/,
+    },
+    {
+      block: "\tindented",
+      message: /tab/,
+    },
+    {
+      block: "> quote",
+      message: /raw HTML·autolink·blockquote/,
+    },
+    {
+      block: "- > nested quote",
+      message: /raw HTML·autolink·blockquote/,
+    },
+    {
+      block: "[owner]: README.md",
+      message: /reference 정의/,
+    },
+    {
+      block: "[owner][target]",
+      message: /reference-style·shortcut link/,
+    },
+    {
+      block: "[owner][]",
+      message: /reference-style·shortcut link/,
+    },
+    {
+      block: "[owner]",
+      message: /reference-style·shortcut link/,
+    },
+    {
+      block: "setext heading\n---",
+      message: /setext heading·thematic break/,
+    },
+    {
+      block: "<span>raw HTML</span>",
+      message: /raw HTML·autolink·blockquote/,
+    },
+    {
+      block: "<!-- hidden contract -->",
+      message: /raw HTML·autolink·blockquote/,
+    },
+    {
+      block: "`unclosed inline code",
+      message: /inline code span이 종결되지 않았습니다/,
+    },
+    {
+      block: "\\`<span>escaped delimiter</span>\\`",
+      message: /escaped backtick/,
+    },
+    {
+      block: "`multi\nline inline code`",
+      message: /inline code span은 한 줄 안에서 종결/,
+    },
+    {
+      block: "```lang`invalid\ntext\n```",
+      message: /backtick fence info/,
+    },
+    {
+      block: "~~~text\nunclosed fence",
+      message: /fenced code block이 종결되지 않았습니다/,
+    },
+    {
+      block: "- ## nested heading",
+      message: /list container 안에 heading/,
+    },
+    {
+      block: '[link](README.md "title")',
+      message: /공백·괄호·title이 없는 한 줄 canonical target/,
+    },
+    {
+      block: "[link](README(1).md)",
+      message: /공백·괄호·title이 없는 한 줄 canonical target/,
+    },
+    {
+      block: "  ## indented heading",
+      message: /들여쓴 ATX heading/,
+    },
+    {
+      block: "## closing heading ##",
+      message: /closing # sequence/,
+    },
+  ];
+
+  for (const { file } of harnessRoutingDocuments) {
+    for (const { block, message } of cases) {
+      withFixture((root) => {
+        const target = path.join(root, file);
+        fs.appendFileSync(
+          target,
+          `\n## strict 문법 거부 fixture\n\n${block}\n`,
+        );
+
+        const result = runValidator(root);
+        assert.equal(result.status, 1, `${file}: ${block}`);
+        assert.match(result.stderr, message, `${file}: ${block}`);
+      });
+    }
+  }
+});
+
+test("세 라우팅 구역은 두 canonical inline owner 링크를 각각 하나만 요구한다", () => {
+  for (const document of harnessRoutingDocuments) {
+    for (const owner of harnessDetailOwners) {
+      const literal = canonicalOwnerLink(document.file, owner);
+      const mutations = [
+        () => "",
+        () => literal.replace(`[${owner.name}]`, "[wrong-owner]"),
+        () => literal.replace(/\([^)]+\)$/, "(README.md)"),
+        () => `${literal} ${literal}`,
+        () => `${literal} !${literal}`,
+      ];
+
+      for (const mutate of mutations) {
+        withFixture((root) => {
+          const target = path.join(root, document.file);
+          const content = fs.readFileSync(target, "utf8");
+          const changed = mutateH2Section(
+            content,
+            document.section,
+            (section) => {
+              assert.ok(
+                section.includes(literal),
+                `fixture owner link missing: ${literal}`,
+              );
+              return section.replace(literal, mutate());
+            },
+          );
+          fs.writeFileSync(target, changed);
+
+          const result = runValidator(root);
+          assert.equal(result.status, 1, result.stderr);
+          assert.match(
+            result.stderr,
+            /canonical inline owner 링크.*정확히 하나/,
+          );
+        });
+      }
+    }
+  }
+});
+
+test("owner Skill의 symlink alias도 canonical 링크 중복으로 거부한다", () => {
+  withFixture((root) => {
+    const owner = harnessDetailOwners[0];
+    const alias = "owner-alias.md";
+    fs.symlinkSync(owner.file, path.join(root, alias));
+    const target = path.join(root, "AGENTS.md");
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(
+      target,
+      mutateH2Section(
+        content,
+        "PR과 작업 완료",
+        (section) => `${section}\n[alias](${alias})\n`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /canonical inline owner 링크.*정확히 하나/,
+    );
+  });
+});
+
+test("세 owner 라우팅 H2는 top-level에 정확히 하나만 존재해야 한다", () => {
+  for (const document of harnessRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        content.replace(
+          `## ${document.section}`,
+          `## ${document.section} 변경됨`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /하네스 owner 라우팅 구역은.*정확히 하나/,
+      );
+    });
+
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      fs.appendFileSync(target, `\n## ${document.section}\n`);
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /하네스 owner 라우팅 구역은.*정확히 하나.*canonical 2개/,
+      );
+    });
+
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      fs.appendFileSync(
+        target,
+        `\n## **${document.section}**\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /하네스 owner 라우팅 구역은.*rendered 2개/,
+      );
+    });
+  }
+});
+
+test("entity·inline code로 꾸민 owner H2도 rendered 중복으로 계산한다", () => {
+  for (const heading of [
+    "&#80;R과 작업 완료",
+    "PR과 작업 `완료`",
+    "[PR과 작업 완료](README.md)",
+  ]) {
+    withFixture((root) => {
+      fs.appendFileSync(
+        path.join(root, "AGENTS.md"),
+        `\n## ${heading}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /하네스 owner 라우팅 구역은.*rendered 2개/,
+      );
+    });
+  }
+});
+
+test("CONTRIBUTING은 승인 수 0과 리뷰 대화 해결 문장을 각각 하나 요구한다", () => {
+  const approval =
+    "필수 승인 수는 1인 운영을 막지 않도록 0으로 유지합니다.";
+  const threads =
+    "승인 수와 무관하게 생성된 리뷰 대화는 모두 해결해야 합니다.";
+  const mutations = [
+    (section) => section.replace("0으로", "1로"),
+    (section) => section.replace(approval, ""),
+    (section) => section.replace(approval, `${approval} ${approval}`),
+    (section) => section.replace(threads, "리뷰 대화는 참고합니다."),
+    (section) =>
+      `${section}\n\`필수 승인 수는 1로 유지합니다.\`\n`,
+    (section) =>
+      section.replace(
+        `${approval} ${threads}`,
+        `[승인 설정](README.md "${approval} ${threads}")`,
+      ),
+  ];
+
+  for (const mutate of mutations) {
+    withFixture((root) => {
+      const target = path.join(root, "CONTRIBUTING.md");
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(content, "8. 병합과 정리", mutate),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /필수 승인 수 0과 생성된 리뷰 대화 해결 계약이 각각 정확히 하나/,
+      );
+    });
+  }
+});
+
+test("괄호가 든 link title에 승인 계약을 숨길 수 없다", () => {
+  withFixture((root) => {
+    const target = path.join(root, "CONTRIBUTING.md");
+    const approval =
+      "필수 승인 수는 1인 운영을 막지 않도록 0으로 유지합니다.";
+    const threads =
+      "승인 수와 무관하게 생성된 리뷰 대화는 모두 해결해야 합니다.";
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(
+      target,
+      mutateH2Section(content, "8. 병합과 정리", (section) =>
+        section.replace(
+          `${approval} ${threads}`,
+          `[승인 설정](README.md "dummy ) ${approval} ${threads}")`,
+        ),
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /공백·괄호·title이 없는 한 줄 canonical target/,
+    );
+  });
+});
+
+test("finalize 내부 토큰은 세 라우팅 문서의 prose·code·fence에 복제할 수 없다", () => {
+  const contexts = [
+    forbiddenFinalizeDetailTokens.join(" "),
+    forbiddenFinalizeDetailTokens
+      .map((token) => `\`${token}\``)
+      .join(" "),
+    [
+      "```text",
+      ...forbiddenFinalizeDetailTokens,
+      "```",
+    ].join("\n"),
+  ];
+
+  for (const { file } of harnessRoutingDocuments) {
+    for (const context of contexts) {
+      withFixture((root) => {
+        fs.appendFileSync(
+          path.join(root, file),
+          `\n## 금지 토큰 fixture\n\n${context}\n`,
+        );
+
+        const result = runValidator(root);
+        assert.equal(result.status, 1);
+        for (const token of forbiddenFinalizeDetailTokens) {
+          assert.ok(result.stderr.includes(`'${token}'`), result.stderr);
+        }
+      });
+    }
+  }
+});
+
+test("formatting·entity·hard wrap으로 분리한 finalize 토큰도 거부한다", () => {
+  withFixture((root) => {
+    fs.appendFileSync(
+      path.join(root, "AGENTS.md"),
+      [
+        "",
+        "## 분리 토큰 fixture",
+        "",
+        "snapshot&#x2d;scratch",
+        "snapshot-&Tab;scratch",
+        "[snapshot-](README.md)scratch",
+        '[snapshot-](README.md ")")scratch',
+        "GIT_**INDEX**_FILE",
+        "GIT&UnderBar;INDEX&UnderBar;FILE",
+        "merged-",
+        "recovery",
+        "",
+      ].join("\n"),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    for (const token of [
+      "snapshot-scratch",
+      "GIT_INDEX_FILE",
+      "merged-recovery",
+    ]) {
+      assert.ok(result.stderr.includes(`'${token}'`), result.stderr);
+    }
+  });
+});
+
+test("finalize 금지 토큰 목록은 open-pull-request 상세 owner와 대칭이다", () => {
+  for (const token of forbiddenFinalizeDetailTokens) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/open-pull-request/SKILL.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(token), `fixture token missing: ${token}`);
+      fs.writeFileSync(target, content.replaceAll(token, "removed-token"));
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.ok(
+        result.stderr.includes(`finalize 상세 owner 토큰 '${token}'`),
+        result.stderr,
+      );
+    });
+  }
 });
 
 test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", () => {
