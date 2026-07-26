@@ -1728,6 +1728,7 @@ function readWorktreeResidue(
       }),
     }),
 ) {
+  assertTrackedIndexFlagsSafe(gitRunner, "issue worktree");
   const ordinary = gitRunner([
     "status",
     "--porcelain=v1",
@@ -1824,6 +1825,34 @@ function readWorktreeResidue(
     stats,
     proof: null,
   };
+}
+
+function assertTrackedIndexFlagsSafe(gitRunner, label) {
+  const flagViews = [
+    {
+      option: "-v",
+      name: "assume-unchanged·skip-worktree",
+    },
+    {
+      option: "-f",
+      name: "fsmonitor-valid·skip-worktree",
+    },
+  ];
+  for (const view of flagViews) {
+    const entries = gitRunner([
+      "ls-files",
+      view.option,
+      "-z",
+      "--",
+    ]).stdout
+      .split("\0")
+      .filter(Boolean);
+    if (entries.some((entry) => !entry.startsWith("H "))) {
+      fail(
+        `${label} Git index의 ${view.name} flag는 로컬 cleanup에서 허용하지 않습니다.`,
+      );
+    }
+  }
 }
 
 function readQuarantinedWorktreeResidue(plan) {
@@ -1966,6 +1995,10 @@ function readQuarantinedWorktreeResidue(plan) {
       fail("post-move residue canary의 Git index plumbing이 exact metadata index와 다릅니다.");
     }
 
+    assertTrackedIndexFlagsSafe(
+      exactGit,
+      "post-move residue canary",
+    );
     const staged = exactGit(
       [
         "diff-index",

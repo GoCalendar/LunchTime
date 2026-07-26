@@ -2545,7 +2545,10 @@ test("완료 generation의 path·type·inode·mode·bytes drift는 계속 차단
     {
       name: "mode",
       mutate({ payload }) {
-        chmodSync(join(payload, "state.json"), 0o600);
+        const path = join(payload, "state.json");
+        const before = lstatSync(path).mode & 0o777;
+        chmodSync(path, before ^ 0o100);
+        assert.notEqual(lstatSync(path).mode & 0o777, before);
       },
     },
     {
@@ -3979,6 +3982,72 @@ test("stat-cache-only drift는 post-move canary가 index bytes를 바꾸지 않�
   );
   assertWorktreeAbsent(fixture);
   assert.equal(localRef(fixture), null);
+});
+
+test("tracked 변경을 숨기는 index flag는 post-move canary에서 fail-closed한다", async (t) => {
+  const cases = [
+    {
+      name: "assume-unchanged",
+      option: "--assume-unchanged",
+    },
+    {
+      name: "skip-worktree",
+      option: "--skip-worktree",
+    },
+    {
+      name: "fsmonitor-valid",
+      option: "--fsmonitor-valid",
+    },
+  ];
+
+  for (const flagCase of cases) {
+    await t.test(flagCase.name, (child) => {
+      const fixture = createFixture(child);
+      const initial = buildCleanupPlan(fixture);
+      const changed = join(
+        initial.quarantinePlan.rootDestination,
+        "README.md",
+      );
+
+      assert.throws(
+        () =>
+          executeLocalCleanup(
+            { ...fixture, planToken: initial.planToken },
+            {
+              hooks: {
+                afterWorktreeQuarantine({ plan }) {
+                  quarantinedGit(plan, [
+                    "update-index",
+                    flagCase.option,
+                    "--",
+                    "README.md",
+                  ]);
+                  writeFileSync(
+                    changed,
+                    `hidden by ${flagCase.name}\n`,
+                  );
+                },
+              },
+            },
+          ),
+        /Git index의 .*flag는 로컬 cleanup에서 허용하지 않습니다|tracked·staged 변경/,
+      );
+
+      assert.equal(
+        readFileSync(changed, "utf8"),
+        `hidden by ${flagCase.name}\n`,
+      );
+      assert.equal(
+        existsSync(initial.quarantinePlan.rootDestination),
+        true,
+      );
+      assert.equal(
+        existsSync(initial.quarantinePlan.metadataDestination),
+        false,
+      );
+      assert.equal(localRef(fixture), fixture.head);
+    });
+  }
 });
 
 test("late ordinary residue는 final pre-scan과 post-move root·metadata·receipt·ref canary에서 fail-closed하고 사용자 정리 뒤에만 재개한다", async (t) => {

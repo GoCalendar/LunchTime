@@ -444,7 +444,9 @@ git -C <main-worktree> rev-parse refs/heads/<validated-branch>
 일반 Git 상태는 비어 있어야 한다. ignored preflight는 아래 두 증거를 함께
 읽으며, 아무 ignored 경로도 없거나 `.gitignore`의 `.omc` 패턴에 귀속된 root
 `.omc` 하나만 허용한다. `.DS_Store`, IDE 파일과 다른 ignored·untracked
-경로는 자동 보존·삭제하지 않는다.
+경로는 자동 보존·삭제하지 않는다. tracked 검사를 생략하게 만드는
+`assume-unchanged`·`skip-worktree`·`fsmonitor-valid` index flag도 허용하지
+않으며 index를 자동 수정해 해제하지 않는다.
 
 ```bash
 git -C <issue-worktree> status --porcelain=v1 \
@@ -586,14 +588,16 @@ quarantined root, `GIT_INDEX_FILE`은 current metadata의 `index`로 명시한�
 `.omc` 또는 `.omc/`만 허용한 뒤 `.omc`가 실제 ignored root인지 별도로
 증명한다. 이 post-move residue canary는 root·metadata·receipt hook 뒤와
 local ref CAS 직전에 다시 실행한다.
-index와 exact head는 staged OID로 비교한다. worktree와 index는 stat-cache의
-ctime·mtime 추정값이나 `--quiet` 결과가 아니라 external diff·textconv를 끈
-binary full-index patch의 실제 출력이 비었는지 비교하며, 이 검사 전후 exact
-linked-worktree index identity와 bytes가 바뀌지 않아야 한다. pre-scan 뒤
-`.omc` 밖 residue가 생기면 root는 이미 quarantine됐을 수 있지만 metadata
-진행·local ref CAS·성공 반환을 중단하고 local ref와 residue를 그대로 둔다.
-복구는 사용자가 residue를 제거하거나 다른 곳으로 옮긴 뒤에만 재개하며
+pre-scan 뒤 `.omc` 밖 residue가 생기면 root는 이미 quarantine됐을 수 있지만
+metadata 진행·local ref CAS·성공 반환을 중단하고 local ref와 residue를 그대로
+둔다. 복구는 사용자가 residue를 제거하거나 다른 곳으로 옮긴 뒤에만 재개하며
 helper가 자동 삭제·이동·reset·stash하지 않는다.
+index의 `assume-unchanged`·`skip-worktree`·`fsmonitor-valid` flag가 하나라도
+있으면 먼저 fail-closed한다. index와 exact head는 staged OID로 비교한다.
+worktree와 index는 stat-cache의 ctime·mtime 추정값이나 `--quiet` 결과가 아니라
+external diff·textconv를 끈 binary full-index patch의 실제 출력이 비었는지
+비교하며, 이 검사 전후 exact linked-worktree index identity와 bytes가 바뀌지
+않아야 한다.
 
 이 scan과 atomic rename/CAS 사이에는 외부 writer를 동결하는 filesystem lease가
 없으므로 완전한 linearizable freeze를 보장하지 않는다. 각 scan은 그 bounded
