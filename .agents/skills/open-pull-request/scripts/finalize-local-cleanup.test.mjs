@@ -1360,48 +1360,55 @@ test("pending root ownership은 crash recovery와 foreign collision을 구분한
       writeFileSync(join(source, "state.json"), '{"state":"source"}\n');
       const initial = buildCleanupPlan(fixture);
       let replacementRoot;
+      let displacedRootDescriptor;
 
-      assert.throws(
-        () =>
-          executeLocalCleanup(
-            { ...fixture, planToken: initial.planToken },
-            {
-              hooks:
-                phase === "before-pending"
-                  ? {
-                      afterSnapshotAttemptPublished({ plan, attempt }) {
-                        const scratchRoot = join(
-                          plan.paths.snapshotScratchDirectory,
-                          attempt.scratch,
-                        );
-                        rmSync(scratchRoot, { recursive: true });
-                        mkdirSync(scratchRoot, { mode: 0o700 });
-                        replacementRoot = scratchRoot;
-                      },
-                    }
-                  : phase === "during-copy"
+      const replaceRootWithoutInodeReuse = (root) => {
+        displacedRootDescriptor = openSync(root, "r");
+        rmSync(root, { recursive: true });
+        mkdirSync(root, { mode: 0o700 });
+        replacementRoot = root;
+      };
+
+      try {
+        assert.throws(
+          () =>
+            executeLocalCleanup(
+              { ...fixture, planToken: initial.planToken },
+              {
+                hooks:
+                  phase === "before-pending"
                     ? {
-                        afterSnapshotPayloadStarted({
-                          pendingPayload,
-                        }) {
-                          rmSync(pendingPayload, {
-                            recursive: true,
-                          });
-                          mkdirSync(pendingPayload, { mode: 0o700 });
-                          replacementRoot = pendingPayload;
+                        afterSnapshotAttemptPublished({ plan, attempt }) {
+                          replaceRootWithoutInodeReuse(
+                            join(
+                              plan.paths.snapshotScratchDirectory,
+                              attempt.scratch,
+                            ),
+                          );
                         },
                       }
-                    : {
-                      afterPendingRootCreated({ pendingPayload }) {
-                        rmSync(pendingPayload, { recursive: true });
-                        mkdirSync(pendingPayload, { mode: 0o700 });
-                        replacementRoot = pendingPayload;
-                      },
-                    },
-            },
-          ),
-        /ownership|identity/,
-      );
+                    : phase === "during-copy"
+                      ? {
+                          afterSnapshotPayloadStarted({
+                            pendingPayload,
+                          }) {
+                            replaceRootWithoutInodeReuse(pendingPayload);
+                          },
+                        }
+                      : {
+                          afterPendingRootCreated({ pendingPayload }) {
+                            replaceRootWithoutInodeReuse(pendingPayload);
+                          },
+                        },
+              },
+            ),
+          /ownership|identity/,
+        );
+      } finally {
+        if (displacedRootDescriptor !== undefined) {
+          closeSync(displacedRootDescriptor);
+        }
+      }
       assert.throws(
         () => buildCleanupPlan(fixture),
         /root ownership|ownership|exact/,
