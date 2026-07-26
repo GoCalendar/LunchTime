@@ -400,7 +400,9 @@ git -C <main-worktree> merge --ff-only origin/main
 
 그 뒤 다음 읽기 전용 계획을 실행한다. 경로는 `git worktree list --porcelain`
 결과에서 검증한 branch와 정확히 연결된 단일 issue worktree와 단일 `main`
-worktree만 사용하며, 현재 cwd는 issue worktree 밖이어야 한다.
+worktree만 사용하며, 현재 cwd는 issue worktree 밖이어야 한다. helper는
+`rev-parse --path-format=absolute`와 `ls-files -f`를 지원하는 Git 2.31 이상을
+요구한다.
 
 ```bash
 node .agents/skills/open-pull-request/scripts/finalize-local-cleanup.mjs \
@@ -441,12 +443,12 @@ git -C <main-worktree> rev-parse refs/heads/<validated-branch>
 # 두 OID 모두 <validated-head>
 ```
 
-일반 Git 상태는 비어 있어야 한다. ignored preflight는 아래 두 증거를 함께
-읽으며, 아무 ignored 경로도 없거나 `.gitignore`의 `.omc` 패턴에 귀속된 root
-`.omc` 하나만 허용한다. `.DS_Store`, IDE 파일과 다른 ignored·untracked
-경로는 자동 보존·삭제하지 않는다. tracked 검사를 생략하게 만드는
-`assume-unchanged`·`skip-worktree`·`fsmonitor-valid` index flag도 허용하지
-않으며 index를 자동 수정해 해제하지 않는다.
+main과 issue의 일반 Git 상태는 비어 있어야 한다. ignored preflight는 아래 두
+증거를 함께 읽으며, 아무 ignored 경로도 없거나 `.gitignore`의 `.omc` 패턴에
+귀속된 root `.omc` 하나만 허용한다. `.DS_Store`, IDE 파일과 다른
+ignored·untracked 경로는 자동 보존·삭제하지 않는다. tracked 검사를 생략하게
+만드는 `assume-unchanged`·`skip-worktree`·`fsmonitor-valid` index flag도
+허용하지 않으며 index를 자동 수정해 해제하지 않는다.
 
 ```bash
 git -C <issue-worktree> status --porcelain=v1 \
@@ -456,10 +458,11 @@ git -C <issue-worktree> ls-files --others --ignored \
 ```
 
 실제 `.omc/`가 있으면 그 아래가 symlink·special file·다른 filesystem·
-external hardlink 없이 일반 파일과 디렉터리만인지 검사한다. source proof는
-device·inode·timestamp를 포함한 `snapshotDigest`, inode identity를 포함한
-`treeDigest`, 그리고 relative path·type·mode·file bytes만 포함해 새 inode와도
-비교할 수 있는 `contentDigest`를 함께 계산한다. 실제 Git common dir 아래
+external hardlink 없이 일반 파일과 디렉터리만인지 검사하고 setuid·setgid·
+sticky mode도 허용하지 않는다. source proof는 device·inode·timestamp를
+포함한 `snapshotDigest`, inode identity를 포함한 `treeDigest`, 그리고 relative
+path·type·전체 permission mode·file bytes만 포함해 새 inode와도 비교할 수
+있는 `contentDigest`를 함께 계산한다. 실제 Git common dir 아래
 `lunchtime-worktree-state/v2/<identity-sha256>/`에 0700 디렉터리와 exclusive
 0600 core `identity.json`, append-only
 `intents/<generation-sha256>.json`과
@@ -594,10 +597,13 @@ metadata 진행·local ref CAS·성공 반환을 중단하고 local ref와 resid
 helper가 자동 삭제·이동·reset·stash하지 않는다.
 index의 `assume-unchanged`·`skip-worktree`·`fsmonitor-valid` flag가 하나라도
 있으면 먼저 fail-closed한다. index와 exact head는 staged OID로 비교한다.
-worktree와 index는 stat-cache의 ctime·mtime 추정값이나 `--quiet` 결과가 아니라
-external diff·textconv를 끈 binary full-index patch의 실제 출력이 비었는지
-비교하며, 이 검사 전후 exact linked-worktree index identity와 bytes가 바뀌지
-않아야 한다.
+모든 helper Git 호출은 inherited `GIT_*`를 제거하고 ambient 설정과 무관하게
+`core.fsmonitor=false`,
+`core.fileMode=true`, `core.trustctime=true`, `core.checkStat=default`,
+`core.ignoreStat=false`, `core.untrackedCache=false`를 고정한다. worktree와
+index는 stat-cache의 ctime·mtime 추정값이나 `--quiet` 결과가 아니라 external
+diff·textconv를 끈 full-index patch의 실제 출력이 비었는지 비교하며, 이 검사
+전후 exact linked-worktree index identity와 bytes가 바뀌지 않아야 한다.
 
 이 scan과 atomic rename/CAS 사이에는 외부 writer를 동결하는 filesystem lease가
 없으므로 완전한 linearizable freeze를 보장하지 않는다. 각 scan은 그 bounded

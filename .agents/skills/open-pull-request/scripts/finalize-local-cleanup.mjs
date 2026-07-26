@@ -148,14 +148,14 @@ function isPathInside(candidate, parent) {
 }
 
 function modeBits(stats) {
-  return Number(stats.mode & 0o777n);
+  return Number(stats.mode & 0o7777n);
 }
 
 function runGit(cwd, arguments_, options = {}) {
   const allowedStatuses = options.allowedStatuses ?? [0];
   const result = spawnSync("git", arguments_, {
     cwd,
-    env: options.environment,
+    env: options.environment ?? isolatedGitEnvironment(),
     encoding: "utf8",
     maxBuffer: MAX_GIT_OUTPUT_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
@@ -178,7 +178,21 @@ function isolatedGitEnvironment(overrides = {}) {
       ([name]) => !name.startsWith("GIT_"),
     ),
   );
-  return Object.assign(environment, overrides);
+  return Object.assign(environment, overrides, {
+    GIT_CONFIG_COUNT: "6",
+    GIT_CONFIG_KEY_0: "core.fsmonitor",
+    GIT_CONFIG_VALUE_0: "false",
+    GIT_CONFIG_KEY_1: "core.fileMode",
+    GIT_CONFIG_VALUE_1: "true",
+    GIT_CONFIG_KEY_2: "core.trustctime",
+    GIT_CONFIG_VALUE_2: "true",
+    GIT_CONFIG_KEY_3: "core.checkStat",
+    GIT_CONFIG_VALUE_3: "default",
+    GIT_CONFIG_KEY_4: "core.ignoreStat",
+    GIT_CONFIG_VALUE_4: "false",
+    GIT_CONFIG_KEY_5: "core.untrackedCache",
+    GIT_CONFIG_VALUE_5: "false",
+  });
 }
 
 function gitOutput(cwd, arguments_) {
@@ -387,6 +401,11 @@ function scanOmcDirectory(root, expectedDevice) {
     }
     if (before.isSymbolicLink()) {
       fail(`.omc 내부 symlink는 자동 보존 대상으로 허용하지 않습니다: ${relativePath || "."}`);
+    }
+    if ((before.mode & 0o7000n) !== 0n) {
+      fail(
+        `.omc 내부 setuid·setgid·sticky mode는 자동 보존 대상으로 허용하지 않습니다: ${relativePath || "."}`,
+      );
     }
 
     const proof = [
@@ -1847,11 +1866,17 @@ function assertTrackedIndexFlagsSafe(gitRunner, label) {
     ]).stdout
       .split("\0")
       .filter(Boolean);
-    if (entries.some((entry) => !entry.startsWith("H "))) {
+    const invalid = entries.find((entry) => !entry.startsWith("H "));
+    if (!invalid) continue;
+    const tag = invalid.slice(0, 1);
+    if (tag === "S" || /^[a-z]$/.test(tag)) {
       fail(
         `${label} Git index의 ${view.name} flag는 로컬 cleanup에서 허용하지 않습니다.`,
       );
     }
+    fail(
+      `${label} Git index에 clean tracked entry가 아닌 ${JSON.stringify(tag)} 상태가 있습니다.`,
+    );
   }
 }
 
@@ -2014,7 +2039,6 @@ function readQuarantinedWorktreeResidue(plan) {
       [
         "diff-files",
         "--patch",
-        "--binary",
         "--full-index",
         "--no-ext-diff",
         "--no-textconv",
@@ -2818,6 +2842,10 @@ export function buildCleanupPlan(rawInput) {
   ) {
     fail("main worktree의 branch·HEAD·refs/heads/main·origin/main이 일치해야 합니다.");
   }
+  assertTrackedIndexFlagsSafe(
+    (arguments_) => runGit(input.mainWorktree, arguments_),
+    "main worktree",
+  );
   if (
     runGit(input.mainWorktree, [
       "status",
@@ -4810,6 +4838,10 @@ function assertExactMainWorktree(plan) {
     );
   }
 
+  assertTrackedIndexFlagsSafe(
+    (arguments_) => runGit(plan.mainWorktree, arguments_),
+    "quarantine canary의 main worktree",
+  );
   if (
     runGit(plan.mainWorktree, [
       "status",
