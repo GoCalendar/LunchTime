@@ -492,12 +492,18 @@ timestamp는 publication 뒤 receipt의 full proof에서 다시 읽는다.
 `generation.json`은 exact durable intent의 `intentDigest`, snapshot의
 `attemptDigest`와 현재 snapshot의
 device·inode·`snapshotDigest`·`treeDigest`·`contentDigest`를
-`payloadProof`로 결속한다. receipt 전후와 모든 계획·복구·canary에서 active
-head뿐 아니라 historic generation 전체의 현재 payload proof를 다시 계산해
-receipt·intent와 대조한다. JSON은 0600 pending file을 fsync한 뒤 final path로
-atomic no-replace publish하고 parent directory도 fsync한다. 새 archive·
-generation entry와 snapshot file·directory도 생성·receipt 완료 경계에서
-fsync하며, 기존 directory·symlink·receipt를 덮어쓰지 않는다.
+`payloadProof`로 결속하며 active head뿐 아니라 historic generation 전체에
+같은 검증을 적용한다. receipt 발행 전후에는 full proof가 같은 실행에서 정확히
+일치해야 한다. 완료된 archive를 새 실행에서 읽을 때는 device·inode·
+`treeDigest`·`contentDigest`의 `payloadSeal`을 receipt와 대조해 APFS·
+FileProvider의 timestamp-only churn을 payload 변조로 오판하지 않는다. 대신
+그 시점에 다시 읽은 `snapshotDigest` 포함 current full proof를 새 plan token과
+archive canary에 결속하므로 dry-run 뒤 timestamp를 포함한 어떤 proof drift도
+이후 mutation 전에 중단한다. intent·snapshot outcome의 seal도 함께 대조한다.
+JSON은 0600 pending file을 fsync한 뒤 final path로 atomic no-replace
+publish하고 parent directory도 fsync한다. 새 archive·generation entry와
+snapshot file·directory도 생성·receipt 완료 경계에서 fsync하며, 기존
+directory·symlink·receipt를 덮어쓰지 않는다.
 
 실제 `.omc/`가 없더라도 빈 첫 generation을 만든다. `.omc` symlink bridge는
 만들지 않으므로 old head의 `.omc/` ignore 규칙에서도 directory 존재 여부와
@@ -537,8 +543,11 @@ resume한다. source와 helper-owned candidate가 모두 없을 때만 복구를
 새 dry-run으로 재개한다. snapshot 뒤 원본에 발생한 write는 sealed generation을
 바꾸지 않으며 아래 worktree root 전체와 함께 quarantine된다. root rename 전에
 열린 FD가 rename 뒤에도 쓰면 그 변경은 mutable quarantined root에 남는다.
-helper-owned sealed payload 자체가 receipt proof에서 drift하면 원인이 무엇이든
-quarantine·local ref CAS·성공 반환을 중단한다.
+helper-owned sealed payload의 namespace·device·inode·mode·bytes라는
+immutable seal이 receipt proof에서 drift하면 원인이 무엇이든 quarantine·
+local ref CAS·성공 반환을 중단한다. 완료된 실행 사이의 timestamp-only drift는
+새 full proof로 다시 계획할 수 있지만, 같은 dry-run 뒤의 timestamp drift는
+canary가 중단한다.
 
 generation이 준비되면 helper는 `git rev-parse --git-dir`에서 검증한 exact
 `<git-common-dir>/worktrees/<id>` metadata와 issue worktree root의 device·
@@ -573,14 +582,18 @@ pre-rename operation으로 실행한다. root 이동 뒤에는 quarantined root�
 위치의 exact metadata를 FD·path proof로 고정하고, inherited `GIT_*`를 제거한
 환경에서 `GIT_DIR`·`GIT_COMMON_DIR`은 exact common dir, `GIT_WORK_TREE`는
 quarantined root, `GIT_INDEX_FILE`은 current metadata의 `index`로 명시한다.
-index와 exact head, worktree와 index를 각각 비교하고 마지막 all-untracked
-`git ls-files --others --directory -z` 결과는 exact `.omc` 또는 `.omc/`만
-허용한 뒤 `.omc`가 실제 ignored root인지 별도로 증명한다. 이 post-move
-residue canary는 root·metadata·receipt hook 뒤와 local ref CAS 직전에 다시
-실행한다. pre-scan 뒤 `.omc` 밖 residue가 생기면 root는 이미 quarantine됐을
-수 있지만 metadata 진행·local ref CAS·성공 반환을 중단하고 local ref와
-residue를 그대로 둔다. 복구는 사용자가 residue를 제거하거나 다른 곳으로
-옮긴 뒤에만 재개하며 helper가 자동 삭제·이동·reset·stash하지 않는다.
+마지막 all-untracked `git ls-files --others --directory -z` 결과는 exact
+`.omc` 또는 `.omc/`만 허용한 뒤 `.omc`가 실제 ignored root인지 별도로
+증명한다. 이 post-move residue canary는 root·metadata·receipt hook 뒤와
+local ref CAS 직전에 다시 실행한다.
+index와 exact head는 staged OID로 비교한다. worktree와 index는 stat-cache의
+ctime·mtime 추정값이나 `--quiet` 결과가 아니라 external diff·textconv를 끈
+binary full-index patch의 실제 출력이 비었는지 비교하며, 이 검사 전후 exact
+linked-worktree index identity와 bytes가 바뀌지 않아야 한다. pre-scan 뒤
+`.omc` 밖 residue가 생기면 root는 이미 quarantine됐을 수 있지만 metadata
+진행·local ref CAS·성공 반환을 중단하고 local ref와 residue를 그대로 둔다.
+복구는 사용자가 residue를 제거하거나 다른 곳으로 옮긴 뒤에만 재개하며
+helper가 자동 삭제·이동·reset·stash하지 않는다.
 
 이 scan과 atomic rename/CAS 사이에는 외부 writer를 동결하는 filesystem lease가
 없으므로 완전한 linearizable freeze를 보장하지 않는다. 각 scan은 그 bounded

@@ -1572,7 +1572,10 @@ function readGenerationArchive(paths, archiveKey, commonDevice) {
       ) {
         fail("generation payload inode가 receipt와 일치하지 않습니다.");
       }
-      if (stableJson(proof) !== stableJson(receipt.payloadProof)) {
+      if (
+        stableJson(payloadSeal(proof)) !==
+        stableJson(payloadSeal(receipt.payloadProof))
+      ) {
         fail(
           "archived payload의 current proof가 generation receipt의 sealed payload proof와 다릅니다.",
         );
@@ -1853,6 +1856,11 @@ function readQuarantinedWorktreeResidue(plan) {
   ) {
     fail("post-move residue canary의 exact linked-worktree index가 없습니다.");
   }
+  const indexProof = readExactLocalFileProof(
+    indexPath,
+    BigInt(plan.quarantinePlan.intent.metadata.device),
+    "post-move residue canary의 linked-worktree index",
+  );
 
   const environment = isolatedGitEnvironment({
     GIT_COMMON_DIR: plan.commonDir,
@@ -1914,6 +1922,11 @@ function readQuarantinedWorktreeResidue(plan) {
     ) {
       fail("post-move residue canary 중 exact linked-worktree index가 변경되었습니다.");
     }
+    assertExactLocalFileProof(
+      indexPath,
+      indexProof,
+      "post-move residue canary의 linked-worktree index",
+    );
   };
   const exactGit = (arguments_, options = {}) => {
     assertExactPlumbing();
@@ -1967,13 +1980,16 @@ function readQuarantinedWorktreeResidue(plan) {
     const tracked = exactGit(
       [
         "diff-files",
-        "--quiet",
+        "--patch",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
         "--ignore-submodules=none",
         "--",
       ],
-      { allowedStatuses: [0, 1] },
     );
-    if (staged.status !== 0 || tracked.status !== 0) {
+    if (staged.status !== 0 || tracked.stdout.length !== 0) {
       fail(
         "post-move residue canary가 tracked·staged 변경을 발견했습니다.",
       );
