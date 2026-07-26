@@ -400,7 +400,9 @@ git -C <main-worktree> merge --ff-only origin/main
 
 그 뒤 다음 읽기 전용 계획을 실행한다. 경로는 `git worktree list --porcelain`
 결과에서 검증한 branch와 정확히 연결된 단일 issue worktree와 단일 `main`
-worktree만 사용하며, 현재 cwd는 issue worktree 밖이어야 한다.
+worktree만 사용하며, 현재 cwd는 issue worktree 밖이어야 한다. helper는
+`worktree list --porcelain -z`를 지원하는 Git 2.36 이상을 요구하며 실행
+초기에 version을 확인한다.
 
 ```bash
 node .agents/skills/open-pull-request/scripts/finalize-local-cleanup.mjs \
@@ -441,10 +443,16 @@ git -C <main-worktree> rev-parse refs/heads/<validated-branch>
 # 두 OID 모두 <validated-head>
 ```
 
-일반 Git 상태는 비어 있어야 한다. ignored preflight는 아래 두 증거를 함께
-읽으며, 아무 ignored 경로도 없거나 `.gitignore`의 `.omc` 패턴에 귀속된 root
-`.omc` 하나만 허용한다. `.DS_Store`, IDE 파일과 다른 ignored·untracked
-경로는 자동 보존·삭제하지 않는다.
+main과 issue의 일반 Git 상태는 비어 있어야 한다. ignored preflight는 아래 두
+증거를 함께 읽으며, 아무 ignored 경로도 없거나 `.gitignore`의 `.omc` 패턴에
+귀속된 root `.omc` 하나만 허용한다. `.DS_Store`, IDE 파일과 다른
+ignored·untracked 경로는 자동 보존·삭제하지 않는다. tracked 검사를 생략하게
+만드는 `assume-unchanged`·`skip-worktree` index flag도 허용하지 않으며
+index를 자동 수정해 해제하지 않는다. sparse checkout은 `skip-worktree`를
+사용하므로 cleanup 대상과 main 모두 `git sparse-checkout disable`로 완전히
+materialize하거나 별도 full checkout worktree를 사용해야 한다.
+`fsmonitor-valid` 상태는 index에서 지우지 않고 `core.fsmonitor=false`로
+해석에서 배제한다.
 
 ```bash
 git -C <issue-worktree> status --porcelain=v1 \
@@ -454,10 +462,13 @@ git -C <issue-worktree> ls-files --others --ignored \
 ```
 
 실제 `.omc/`가 있으면 그 아래가 symlink·special file·다른 filesystem·
-external hardlink 없이 일반 파일과 디렉터리만인지 검사한다. source proof는
-device·inode·timestamp를 포함한 `snapshotDigest`, inode identity를 포함한
-`treeDigest`, 그리고 relative path·type·mode·file bytes만 포함해 새 inode와도
-비교할 수 있는 `contentDigest`를 함께 계산한다. 실제 Git common dir 아래
+external hardlink 없이 일반 파일과 디렉터리만인지 검사하고 setuid·setgid·
+sticky mode도 허용하지 않는다. 공유 setgid directory에서 상속된 bit도
+예외가 아니므로 사용자가 source `.omc`의 특수 mode를 제거한 뒤 새 dry-run을
+실행해야 한다. source proof는 device·inode·timestamp를
+포함한 `snapshotDigest`, inode identity를 포함한 `treeDigest`, 그리고 relative
+path·type·전체 permission mode·file bytes만 포함해 새 inode와도 비교할 수
+있는 `contentDigest`를 함께 계산한다. 실제 Git common dir 아래
 `lunchtime-worktree-state/v2/<identity-sha256>/`에 0700 디렉터리와 exclusive
 0600 core `identity.json`, append-only
 `intents/<generation-sha256>.json`과
@@ -492,12 +503,18 @@ timestamp는 publication 뒤 receipt의 full proof에서 다시 읽는다.
 `generation.json`은 exact durable intent의 `intentDigest`, snapshot의
 `attemptDigest`와 현재 snapshot의
 device·inode·`snapshotDigest`·`treeDigest`·`contentDigest`를
-`payloadProof`로 결속한다. receipt 전후와 모든 계획·복구·canary에서 active
-head뿐 아니라 historic generation 전체의 현재 payload proof를 다시 계산해
-receipt·intent와 대조한다. JSON은 0600 pending file을 fsync한 뒤 final path로
-atomic no-replace publish하고 parent directory도 fsync한다. 새 archive·
-generation entry와 snapshot file·directory도 생성·receipt 완료 경계에서
-fsync하며, 기존 directory·symlink·receipt를 덮어쓰지 않는다.
+`payloadProof`로 결속하며 active head뿐 아니라 historic generation 전체에
+같은 검증을 적용한다. receipt 발행 전후에는 full proof가 같은 실행에서 정확히
+일치해야 한다. 완료된 archive를 새 실행에서 읽을 때는 device·inode·
+`treeDigest`·`contentDigest`의 `payloadSeal`을 receipt와 대조해 APFS·
+FileProvider의 timestamp-only churn을 payload 변조로 오판하지 않는다. 대신
+그 시점에 다시 읽은 `snapshotDigest` 포함 current full proof를 새 plan token과
+archive canary에 결속하므로 dry-run 뒤 timestamp를 포함한 어떤 proof drift도
+이후 mutation 전에 중단한다. intent·snapshot outcome의 seal도 함께 대조한다.
+JSON은 0600 pending file을 fsync한 뒤 final path로 atomic no-replace
+publish하고 parent directory도 fsync한다. 새 archive·generation entry와
+snapshot file·directory도 생성·receipt 완료 경계에서 fsync하며, 기존
+directory·symlink·receipt를 덮어쓰지 않는다.
 
 실제 `.omc/`가 없더라도 빈 첫 generation을 만든다. `.omc` symlink bridge는
 만들지 않으므로 old head의 `.omc/` ignore 규칙에서도 directory 존재 여부와
@@ -537,8 +554,11 @@ resume한다. source와 helper-owned candidate가 모두 없을 때만 복구를
 새 dry-run으로 재개한다. snapshot 뒤 원본에 발생한 write는 sealed generation을
 바꾸지 않으며 아래 worktree root 전체와 함께 quarantine된다. root rename 전에
 열린 FD가 rename 뒤에도 쓰면 그 변경은 mutable quarantined root에 남는다.
-helper-owned sealed payload 자체가 receipt proof에서 drift하면 원인이 무엇이든
-quarantine·local ref CAS·성공 반환을 중단한다.
+helper-owned sealed payload의 namespace·device·inode·mode·bytes라는
+immutable seal이 receipt proof에서 drift하면 원인이 무엇이든 quarantine·
+local ref CAS·성공 반환을 중단한다. 완료된 실행 사이의 timestamp-only drift는
+새 full proof로 다시 계획할 수 있지만, 같은 dry-run 뒤의 timestamp drift는
+canary가 중단한다.
 
 generation이 준비되면 helper는 `git rev-parse --git-dir`에서 검증한 exact
 `<git-common-dir>/worktrees/<id>` metadata와 issue worktree root의 device·
@@ -550,6 +570,7 @@ Git registration을 다시 확인한다. 그 뒤 worktree root 전체를
 `worktree-quarantine/roots/<quarantine-id>`로, metadata directory 전체를
 `worktree-quarantine/metadata/<quarantine-id>`로 같은 filesystem atomic
 no-replace 이동하고 양쪽 parent를 fsync한 뒤 exclusive receipt를 발행한다.
+`git worktree remove`나 `git worktree prune`은 호출하지 않는다.
 quarantine transition canary는 durable intent와 pending metadata 부재를
 확인하고, intent 발행 hook 뒤·root 이동 전후와 hook 뒤·metadata 이동 전후와
 hook 뒤·receipt 발행 뒤마다 stage별 root·metadata device·inode·mode,
@@ -573,14 +594,34 @@ pre-rename operation으로 실행한다. root 이동 뒤에는 quarantined root�
 위치의 exact metadata를 FD·path proof로 고정하고, inherited `GIT_*`를 제거한
 환경에서 `GIT_DIR`·`GIT_COMMON_DIR`은 exact common dir, `GIT_WORK_TREE`는
 quarantined root, `GIT_INDEX_FILE`은 current metadata의 `index`로 명시한다.
-index와 exact head, worktree와 index를 각각 비교하고 마지막 all-untracked
-`git ls-files --others --directory -z` 결과는 exact `.omc` 또는 `.omc/`만
-허용한 뒤 `.omc`가 실제 ignored root인지 별도로 증명한다. 이 post-move
-residue canary는 root·metadata·receipt hook 뒤와 local ref CAS 직전에 다시
-실행한다. pre-scan 뒤 `.omc` 밖 residue가 생기면 root는 이미 quarantine됐을
-수 있지만 metadata 진행·local ref CAS·성공 반환을 중단하고 local ref와
-residue를 그대로 둔다. 복구는 사용자가 residue를 제거하거나 다른 곳으로
-옮긴 뒤에만 재개하며 helper가 자동 삭제·이동·reset·stash하지 않는다.
+마지막 all-untracked `git ls-files --others --directory -z` 결과는 exact
+`.omc` 또는 `.omc/`만 허용한 뒤 `.omc`가 실제 ignored root인지 별도로
+증명한다. 이 post-move residue canary는 root·metadata·receipt hook 뒤와
+local ref CAS 직전에 다시 실행한다.
+pre-scan 뒤 `.omc` 밖 residue가 생기면 root는 이미 quarantine됐을 수 있지만
+metadata 진행·local ref CAS·성공 반환을 중단하고 local ref와 residue를 그대로
+둔다. 복구는 사용자가 residue를 제거하거나 다른 곳으로 옮긴 뒤에만 재개하며
+helper가 자동 삭제·이동·reset·stash하지 않는다.
+index의 `assume-unchanged`·`skip-worktree` flag가 하나라도 있으면 먼저
+fail-closed한다. sparse checkout이면 full checkout worktree에서 다시
+실행한다. index와 exact head는 staged OID로 비교한다.
+모든 helper Git 호출은 inherited `GIT_*`를 제거하고 optional index write를
+끄는 `GIT_OPTIONAL_LOCKS=0`과 함께 ambient 설정과 무관하게
+`core.fsmonitor=false`,
+`core.fileMode=true`, `core.trustctime=true`, `core.checkStat=default`,
+`core.ignoreStat=false`, `core.untrackedCache=false`를 고정한다. worktree와
+index는 stat-cache의 ctime·mtime 추정값이나 `--quiet` 결과가 아니라 external
+diff·textconv를 끈 full-index patch의 실제 출력이 비었는지 비교하며, 이 검사
+전후 exact linked-worktree index identity와 bytes가 바뀌지 않아야 한다.
+`GIT_OPTIONAL_LOCKS=0`은 dry-run·execute의 Git 호출이 main index bytes를
+다시 쓰지 않게 하며, 회귀 테스트는 `UNTR`·`FSMN` extension이 있는 index의
+byte-for-byte 보존을 확인한다. 실행 bit drift가 있으면 index의 100755·100644
+mode와 실제 파일 mode를 사용자가 맞춘 뒤 새 dry-run을 실행하며 helper는
+config나 index를 자동으로 고치지 않는다. permission mode를 표현할 수 없어
+`core.fileMode=false`가 필요한 filesystem은 지원하지 않으므로 full-mode
+filesystem의 worktree를 사용한다. helper-owned archive directory는 setgid
+parent나 umask와 무관하게 생성 직후 FD로 exact 0700을 다시 봉인하며
+helper-owned JSON file도 FD로 exact 0600을 적용한다.
 
 이 scan과 atomic rename/CAS 사이에는 외부 writer를 동결하는 filesystem lease가
 없으므로 완전한 linearizable freeze를 보장하지 않는다. 각 scan은 그 bounded
@@ -588,11 +629,12 @@ residue를 그대로 둔다. 복구는 사용자가 residue를 제거하거나 �
 fail-closed한다. `.omc` 내부의 mutable write는 허용해 quarantined root에
 보존한다.
 
-`git worktree remove`나 `git worktree prune`은 호출하지 않는다. 따라서 최종
-검증 뒤 `.omc`가 재생성되어도 root와 함께 보존되며, root 이동 뒤 original
-path가 다시 생기면 이를 삭제하지 않고 unregistered bounded residue로
-보고한다. exact registration 부재와 quarantine root·metadata·receipt를 확인한
-뒤에만 old-OID local branch CAS를 실행하고 최신 clean `main`을 재검증한다.
+helper가 `git worktree remove`나 `git worktree prune`을 호출하지 않으므로
+최종 검증 뒤 `.omc`가 재생성되어도 root와 함께 보존된다. root 이동 뒤
+original path가 다시 생기면 이를 삭제하지 않고 unregistered bounded
+residue로 보고한다. exact registration 부재와 quarantine
+root·metadata·receipt를 확인한 뒤에만 old-OID local branch CAS를 실행하고
+최신 clean `main`을 재검증한다.
 
 ```bash
 git -C <main-worktree> update-ref -d \

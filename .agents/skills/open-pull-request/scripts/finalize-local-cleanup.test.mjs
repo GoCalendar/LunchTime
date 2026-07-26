@@ -17,6 +17,7 @@ import {
   rmSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -2431,6 +2432,246 @@ test("historic sealed generation이 변조되면 current head가 정상이어도
   assert.equal(existsSync(initial.quarantinePlan.rootDestination), false);
 });
 
+test("historic 완료 generation payload가 사라지면 current head가 정상이어도 quarantine 전에 차단한다", (t) => {
+  const fixture = createFixture(t);
+  const source = join(fixture.issueWorktree, ".omc");
+  mkdirSync(source);
+  writeFileSync(join(source, "old.json"), '{"old":true}\n');
+  const initial = buildCleanupPlan(fixture);
+
+  assert.throws(
+    () =>
+      executeLocalCleanup(
+        { ...fixture, planToken: initial.planToken },
+        {
+          hooks: {
+            afterGenerationPrepared() {
+              throw new Error("stop after first completed generation");
+            },
+          },
+        },
+      ),
+    /stop after first completed generation/,
+  );
+  writeFileSync(join(source, "new.json"), '{"new":true}\n');
+  const append = buildCleanupPlan(fixture);
+  assert.throws(
+    () =>
+      executeLocalCleanup(
+        { ...fixture, planToken: append.planToken },
+        {
+          hooks: {
+            afterGenerationPrepared() {
+              throw new Error("stop after current completed generation");
+            },
+          },
+        },
+      ),
+    /stop after current completed generation/,
+  );
+
+  renameSync(
+    initial.plannedGeneration.payload,
+    join(fixture.root, "missing-historic-payload"),
+  );
+  assert.throws(
+    () => buildCleanupPlan(fixture),
+    /durable snapshot attempt의 owned root가 사라졌습니다/,
+  );
+  assert.equal(existsSync(append.plannedGeneration.payload), true);
+  assert.equal(existsSync(fixture.issueWorktree), true);
+  assert.equal(localRef(fixture), fixture.head);
+  assert.equal(existsSync(initial.quarantinePlan.rootDestination), false);
+});
+
+test("완료 generation의 timestamp-only drift는 새 full proof로 재계획하되 stale token은 거부한다", (t) => {
+  const fixture = createFixture(t);
+  const source = join(fixture.issueWorktree, ".omc");
+  mkdirSync(source);
+  writeFileSync(join(source, "state.json"), '{"state":"sealed"}\n');
+  const initial = buildCleanupPlan(fixture);
+
+  assert.throws(
+    () =>
+      executeLocalCleanup(
+        { ...fixture, planToken: initial.planToken },
+        {
+          hooks: {
+            afterGenerationPrepared() {
+              throw new Error("stop after timestamp fixture receipt");
+            },
+          },
+        },
+      ),
+    /stop after timestamp fixture receipt/,
+  );
+
+  const payload = initial.plannedGeneration.payload;
+  const receipt = JSON.parse(
+    readFileSync(initial.plannedGeneration.receiptPath, "utf8"),
+  );
+  const firstStats = lstatSync(payload);
+  utimesSync(
+    payload,
+    firstStats.atime,
+    new Date(firstStats.mtimeMs - 10_000),
+  );
+
+  const recovery = buildCleanupPlan(fixture);
+  assert.equal(recovery.action, "quarantine-ready");
+  assert.notEqual(
+    recovery.archive.head.proof.snapshotDigest,
+    receipt.payloadProof.snapshotDigest,
+  );
+  assert.equal(
+    recovery.archive.head.proof.treeDigest,
+    receipt.payloadProof.treeDigest,
+  );
+  assert.equal(
+    recovery.archive.head.proof.contentDigest,
+    receipt.payloadProof.contentDigest,
+  );
+  assert.equal(
+    recovery.archive.head.proof.inode,
+    receipt.payloadProof.inode,
+  );
+  assert.equal(
+    recovery.archive.head.proof.device,
+    receipt.payloadProof.device,
+  );
+  assert.equal(
+    recovery.tokenState.generations[0].snapshotDigest,
+    recovery.archive.head.proof.snapshotDigest,
+  );
+
+  const secondStats = lstatSync(payload);
+  utimesSync(
+    payload,
+    secondStats.atime,
+    new Date(secondStats.mtimeMs - 10_000),
+  );
+  assert.throws(
+    () =>
+      executeLocalCleanup({
+        ...fixture,
+        planToken: recovery.planToken,
+      }),
+    /plan token.*일치하지 않습니다/,
+  );
+
+  const fresh = buildCleanupPlan(fixture);
+  assert.notEqual(fresh.planToken, recovery.planToken);
+  const result = executeLocalCleanup({
+    ...fixture,
+    planToken: fresh.planToken,
+  });
+  assert.equal(result.status, "completed");
+  assertWorktreeAbsent(fixture);
+  assert.equal(localRef(fixture), null);
+});
+
+test("완료 generation의 path·type·inode·mode·bytes drift는 계속 차단한다", async (t) => {
+  const cases = [
+    {
+      name: "path",
+      expected:
+        /durable snapshot attempt의 owned root가 사라졌습니다/,
+      mutate({ fixture, payload }) {
+        renameSync(payload, join(fixture.root, "moved-payload"));
+      },
+    },
+    {
+      name: "type",
+      expected:
+        /archived payload.*sealed payload proof/,
+      mutate({ payload }) {
+        const path = join(payload, "state.json");
+        unlinkSync(path);
+        mkdirSync(path);
+      },
+    },
+    {
+      name: "inode",
+      expected:
+        /snapshot candidate root가 durable attempt의 exact ownership과 다릅니다/,
+      mutate({ fixture, payload }) {
+        renameSync(payload, join(fixture.root, "old-payload"));
+        mkdirSync(payload, { mode: 0o700 });
+        writeFileSync(join(payload, "state.json"), '{"state":"sealed"}\n');
+      },
+    },
+    {
+      name: "mode",
+      expected:
+        /archived payload.*sealed payload proof/,
+      mutate({ payload }) {
+        const path = join(payload, "state.json");
+        const before = lstatSync(path).mode & 0o777;
+        chmodSync(path, before ^ 0o100);
+        assert.notEqual(lstatSync(path).mode & 0o777, before);
+      },
+    },
+    {
+      name: "special-mode",
+      expected:
+        /setuid·setgid·sticky mode/,
+      mutate({ payload }) {
+        const before = lstatSync(payload).mode & 0o7777;
+        chmodSync(payload, before | 0o2000);
+        assert.notEqual(lstatSync(payload).mode & 0o7000, 0);
+      },
+    },
+    {
+      name: "bytes",
+      expected:
+        /archived payload.*sealed payload proof/,
+      mutate({ payload }) {
+        writeFileSync(join(payload, "state.json"), '{"state":"changed"}\n');
+      },
+    },
+  ];
+
+  for (const driftCase of cases) {
+    await t.test(driftCase.name, (child) => {
+      const fixture = createFixture(child);
+      const source = join(fixture.issueWorktree, ".omc");
+      mkdirSync(source);
+      writeFileSync(join(source, "state.json"), '{"state":"sealed"}\n');
+      const initial = buildCleanupPlan(fixture);
+
+      assert.throws(
+        () =>
+          executeLocalCleanup(
+            { ...fixture, planToken: initial.planToken },
+            {
+              hooks: {
+                afterGenerationPrepared() {
+                  throw new Error(`stop before ${driftCase.name} drift`);
+                },
+              },
+            },
+          ),
+        new RegExp(`stop before ${driftCase.name} drift`),
+      );
+
+      driftCase.mutate({
+        fixture,
+        payload: initial.plannedGeneration.payload,
+      });
+      assert.throws(
+        () => buildCleanupPlan(fixture),
+        driftCase.expected,
+      );
+      assert.equal(localRef(fixture), fixture.head);
+      assert.equal(existsSync(fixture.issueWorktree), true);
+      assert.equal(
+        existsSync(initial.quarantinePlan.rootDestination),
+        false,
+      );
+    });
+  }
+});
+
 test("sealed payload drift는 generation·quarantine·ref CAS 각 안전 경계에서 이후 mutation을 차단한다", async (t) => {
   const cases = [
     {
@@ -3714,6 +3955,439 @@ test("quarantine intent·root·metadata 각 crash 지점에서 metadata-only cle
   }
 });
 
+test("stat-cache-only drift는 post-move canary가 index bytes를 바꾸지 않고 root 단계에서 재개한다", (t) => {
+  const fixture = createFixture(t);
+  const initial = buildCleanupPlan(fixture);
+  const indexPath = gitOutput(fixture.issueWorktree, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "index",
+  ]);
+  const indexBefore = readFileSync(indexPath);
+  const trackedBefore = readFileSync(
+    join(fixture.issueWorktree, "README.md"),
+  );
+  const indexEntryBefore = gitOutput(fixture.issueWorktree, [
+    "ls-files",
+    "--stage",
+    "--",
+    "README.md",
+  ]);
+
+  assert.throws(
+    () =>
+      executeLocalCleanup(
+        { ...fixture, planToken: initial.planToken },
+        {
+          hooks: {
+            afterWorktreeQuarantine({ plan }) {
+              const tracked = join(
+                plan.quarantinePlan.rootDestination,
+                "README.md",
+              );
+              const stats = lstatSync(tracked);
+              utimesSync(
+                tracked,
+                stats.atime,
+                new Date(stats.mtimeMs - 10_000),
+              );
+            },
+            beforeMetadataQuarantine({ plan }) {
+              assert.deepEqual(
+                readFileSync(
+                  join(
+                    plan.quarantinePlan.intent.metadata.path,
+                    "index",
+                  ),
+                ),
+                indexBefore,
+              );
+              assert.deepEqual(
+                readFileSync(
+                  join(
+                    plan.quarantinePlan.rootDestination,
+                    "README.md",
+                  ),
+                ),
+                trackedBefore,
+              );
+              assert.equal(
+                quarantinedGit(plan, [
+                  "ls-files",
+                  "--stage",
+                  "--",
+                  "README.md",
+                ]).stdout.trim(),
+                indexEntryBefore,
+              );
+              throw new Error("stop after stat-only root canary");
+            },
+          },
+        },
+      ),
+    /stop after stat-only root canary/,
+  );
+
+  assert.equal(
+    existsSync(initial.quarantinePlan.rootDestination),
+    true,
+  );
+  assert.equal(
+    existsSync(initial.quarantinePlan.metadataDestination),
+    false,
+  );
+  assert.equal(localRef(fixture), fixture.head);
+
+  const recovery = buildCleanupPlan(fixture);
+  assert.equal(recovery.action, "quarantine-recovery");
+  const result = executeLocalCleanup({
+    ...fixture,
+    planToken: recovery.planToken,
+  });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(
+    readFileSync(
+      join(recovery.quarantinePlan.metadataDestination, "index"),
+    ),
+    indexBefore,
+  );
+  assertWorktreeAbsent(fixture);
+  assert.equal(localRef(fixture), null);
+});
+
+test("tracked 변경을 숨기는 index flag는 post-move canary에서 fail-closed한다", async (t) => {
+  const cases = [
+    {
+      name: "assume-unchanged",
+      options: ["--assume-unchanged"],
+      expected: /assume-unchanged flag/,
+    },
+    {
+      name: "skip-worktree",
+      options: ["--skip-worktree"],
+      expected: /skip-worktree flag.*sparse checkout/,
+    },
+    {
+      name: "skip-worktree and assume-unchanged",
+      options: ["--assume-unchanged", "--skip-worktree"],
+      expected: /skip-worktree flag.*sparse checkout/,
+    },
+  ];
+
+  for (const flagCase of cases) {
+    await t.test(flagCase.name, (child) => {
+      const fixture = createFixture(child);
+      const initial = buildCleanupPlan(fixture);
+      const changed = join(
+        initial.quarantinePlan.rootDestination,
+        "README.md",
+      );
+
+      assert.throws(
+        () =>
+          executeLocalCleanup(
+            { ...fixture, planToken: initial.planToken },
+            {
+              hooks: {
+                afterWorktreeQuarantine({ plan }) {
+                  for (const option of flagCase.options) {
+                    quarantinedGit(plan, [
+                      "update-index",
+                      option,
+                      "--",
+                      "README.md",
+                    ]);
+                  }
+                  writeFileSync(
+                    changed,
+                    `hidden by ${flagCase.name}\n`,
+                  );
+                },
+              },
+            },
+          ),
+        flagCase.expected,
+      );
+
+      assert.equal(
+        readFileSync(changed, "utf8"),
+        `hidden by ${flagCase.name}\n`,
+      );
+      assert.equal(
+        existsSync(initial.quarantinePlan.rootDestination),
+        true,
+      );
+      assert.equal(
+        existsSync(initial.quarantinePlan.metadataDestination),
+        false,
+      );
+      assert.equal(localRef(fixture), fixture.head);
+    });
+  }
+});
+
+test("preexisting issue index flag는 quarantine 전에 fail-closed한다", async (t) => {
+  for (const flagCase of [
+    {
+      name: "assume-unchanged",
+      options: ["--assume-unchanged"],
+      expected: /assume-unchanged flag/,
+    },
+    {
+      name: "skip-worktree",
+      options: ["--skip-worktree"],
+      expected: /skip-worktree flag.*sparse checkout/,
+    },
+    {
+      name: "skip-worktree and assume-unchanged",
+      options: ["--assume-unchanged", "--skip-worktree"],
+      expected: /skip-worktree flag.*sparse checkout/,
+    },
+  ]) {
+    await t.test(flagCase.name, (child) => {
+      const fixture = createFixture(child);
+      for (const option of flagCase.options) {
+        git(fixture.issueWorktree, [
+          "update-index",
+          option,
+          "--",
+          "README.md",
+        ]);
+      }
+      writeFileSync(
+        join(fixture.issueWorktree, "README.md"),
+        `preexisting ${flagCase.name} drift\n`,
+      );
+
+      assert.throws(
+        () => buildCleanupPlan(fixture),
+        flagCase.expected,
+      );
+      assert.equal(existsSync(fixture.issueWorktree), true);
+      assert.equal(localRef(fixture), fixture.head);
+    });
+  }
+});
+
+test("main index flag는 clean gate 전에 fail-closed한다", (t) => {
+  const fixture = createFixture(t);
+  git(fixture.mainWorktree, [
+    "update-index",
+    "--assume-unchanged",
+    "--",
+    "README.md",
+  ]);
+  writeFileSync(
+    join(fixture.mainWorktree, "README.md"),
+    "hidden main drift\n",
+  );
+
+  assert.throws(
+    () => buildCleanupPlan(fixture),
+    /main worktree Git index의 .*flag는 로컬 cleanup에서 허용하지 않습니다/,
+  );
+  assert.equal(existsSync(fixture.issueWorktree), true);
+  assert.equal(localRef(fixture), fixture.head);
+});
+
+test("ambient fsmonitor hook은 residue 검사에서 실행하지 않는다", (t) => {
+  const fixture = createFixture(t);
+  const invoked = join(fixture.root, "fsmonitor-invoked");
+  const hook = join(fixture.root, "fsmonitor-hook.sh");
+  writeFileSync(
+    hook,
+    [
+      "#!/bin/sh",
+      `printf invoked > "${invoked}"`,
+      "printf '\\n'",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(hook, 0o700);
+  git(fixture.mainWorktree, [
+    "config",
+    "core.fsmonitor",
+    hook,
+  ]);
+
+  const plan = buildCleanupPlan(fixture);
+  assert.equal(existsSync(invoked), false);
+  const result = executeLocalCleanup({
+    ...fixture,
+    planToken: plan.planToken,
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(existsSync(invoked), false);
+  assertWorktreeAbsent(fixture);
+  assert.equal(localRef(fixture), null);
+});
+
+test("fsmonitor-valid hint는 tracked drift를 숨기거나 issue index를 다시 쓰지 못한다", (t) => {
+  const fixture = createFixture(t);
+  const invoked = join(fixture.root, "issue-fsmonitor-invoked");
+  const hook = join(fixture.root, "issue-fsmonitor-hook.sh");
+  writeFileSync(
+    hook,
+    [
+      "#!/bin/sh",
+      `printf invoked > "${invoked}"`,
+      "printf 'fixture-token\\n'",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(hook, 0o700);
+  git(fixture.issueWorktree, [
+    "config",
+    "core.fsmonitor",
+    hook,
+  ]);
+  git(fixture.issueWorktree, [
+    "update-index",
+    "--fsmonitor-valid",
+    "--",
+    "README.md",
+  ]);
+  assert.match(
+    gitOutput(fixture.issueWorktree, [
+      "ls-files",
+      "-f",
+      "--",
+      "README.md",
+    ]),
+    /^[a-z] /,
+  );
+  if (existsSync(invoked)) unlinkSync(invoked);
+
+  const indexPath = gitOutput(fixture.issueWorktree, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "index",
+  ]);
+  const indexBefore = readFileSync(indexPath);
+  writeFileSync(
+    join(fixture.issueWorktree, "README.md"),
+    "hidden by fsmonitor-valid\n",
+  );
+
+  assert.throws(
+    () => buildCleanupPlan(fixture),
+    /issue worktree에 tracked·staged 또는 unignored 변경/,
+  );
+  assert.deepEqual(readFileSync(indexPath), indexBefore);
+  assert.equal(existsSync(invoked), false);
+  assert.equal(existsSync(fixture.issueWorktree), true);
+  assert.equal(localRef(fixture), fixture.head);
+});
+
+test("main dry-run과 execute는 untracked-cache·fsmonitor index bytes를 바꾸지 않는다", (t) => {
+  const fixture = createFixture(t);
+  const invoked = join(fixture.root, "main-fsmonitor-invoked");
+  const hook = join(fixture.root, "main-fsmonitor-hook.sh");
+  writeFileSync(
+    hook,
+    [
+      "#!/bin/sh",
+      `printf invoked > "${invoked}"`,
+      "printf 'fixture-token\\n'",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(hook, 0o700);
+  git(fixture.mainWorktree, [
+    "config",
+    "core.untrackedCache",
+    "true",
+  ]);
+  git(fixture.mainWorktree, [
+    "config",
+    "core.fsmonitor",
+    hook,
+  ]);
+  git(fixture.mainWorktree, [
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+  ]);
+  assert.equal(existsSync(invoked), true);
+  unlinkSync(invoked);
+
+  const indexPath = gitOutput(fixture.mainWorktree, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "index",
+  ]);
+  const indexBefore = readFileSync(indexPath);
+  if (
+    !indexBefore.includes(Buffer.from("UNTR")) ||
+    !indexBefore.includes(Buffer.from("FSMN"))
+  ) {
+    t.skip("Git이 UNTR·FSMN index extension을 유지하지 않습니다.");
+    return;
+  }
+
+  const plan = buildCleanupPlan(fixture);
+  assert.deepEqual(readFileSync(indexPath), indexBefore);
+  assert.equal(existsSync(invoked), false);
+
+  const result = executeLocalCleanup({
+    ...fixture,
+    planToken: plan.planToken,
+  });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(readFileSync(indexPath), indexBefore);
+  assert.equal(existsSync(invoked), false);
+  assertWorktreeAbsent(fixture);
+  assert.equal(localRef(fixture), null);
+});
+
+test("setgid parent 아래 helper-owned archive directory는 exact 0700으로 봉인한다", (t) => {
+  const fixture = createFixture(t);
+  const commonDir = gitOutput(fixture.mainWorktree, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ]);
+  const originalMode = lstatSync(commonDir).mode & 0o7777;
+  chmodSync(commonDir, originalMode | 0o2000);
+  if ((lstatSync(commonDir).mode & 0o2000) === 0) {
+    t.skip("filesystem이 directory setgid mode를 지원하지 않습니다.");
+    return;
+  }
+
+  const plan = buildCleanupPlan(fixture);
+  const result = executeLocalCleanup({
+    ...fixture,
+    planToken: plan.planToken,
+  });
+  assert.equal(result.status, "completed");
+  for (const directory of [
+    plan.paths.archiveRoot,
+    plan.paths.versionRoot,
+    plan.paths.archiveDirectory,
+    plan.paths.generationsDirectory,
+    plan.paths.intentsDirectory,
+    plan.paths.snapshotScratchDirectory,
+    plan.plannedGeneration.directory,
+    plan.plannedGeneration.payload,
+    plan.paths.quarantineDirectory,
+    plan.paths.quarantineIntentsDirectory,
+    plan.paths.quarantineRootsDirectory,
+    plan.paths.quarantineMetadataDirectory,
+    plan.paths.quarantineReceiptsDirectory,
+  ]) {
+    assert.equal(
+      lstatSync(directory).mode & 0o7777,
+      0o700,
+      directory,
+    );
+  }
+  assertWorktreeAbsent(fixture);
+  assert.equal(localRef(fixture), null);
+});
+
 test("late ordinary residue는 final pre-scan과 post-move root·metadata·receipt·ref canary에서 fail-closed하고 사용자 정리 뒤에만 재개한다", async (t) => {
   const cases = [
     {
@@ -3761,6 +4435,36 @@ test("late ordinary residue는 final pre-scan과 post-move root·metadata·recei
               "README.md",
             ]);
             quarantinedGit(plan, ["update-index", "--refresh"]);
+          },
+        };
+      },
+    },
+    {
+      name: "root move 뒤 mode with core.fileMode false",
+      hook: "afterWorktreeQuarantine",
+      rootMoved: true,
+      metadataMoved: false,
+      receiptPublished: false,
+      expectedRecovery: "quarantine-recovery",
+      remainsAfterRemediation: true,
+      configure({ fixture }) {
+        git(fixture.mainWorktree, [
+          "config",
+          "core.fileMode",
+          "false",
+        ]);
+      },
+      mutate({ plan }) {
+        const path = join(
+          plan.quarantinePlan.rootDestination,
+          "README.md",
+        );
+        const before = lstatSync(path).mode & 0o777;
+        chmodSync(path, before ^ 0o100);
+        return {
+          path,
+          remediate() {
+            chmodSync(path, before);
           },
         };
       },
@@ -3841,6 +4545,7 @@ test("late ordinary residue는 final pre-scan과 post-move root·metadata·recei
   for (const residueCase of cases) {
     await t.test(residueCase.name, (child) => {
       const fixture = createFixture(child);
+      residueCase.configure?.({ fixture });
       const source = join(fixture.issueWorktree, ".omc");
       mkdirSync(source);
       writeFileSync(join(source, "state.json"), '{"state":true}\n');
