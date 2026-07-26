@@ -2432,6 +2432,58 @@ test("historic sealed generation이 변조되면 current head가 정상이어도
   assert.equal(existsSync(initial.quarantinePlan.rootDestination), false);
 });
 
+test("historic 완료 generation payload가 사라지면 current head가 정상이어도 quarantine 전에 차단한다", (t) => {
+  const fixture = createFixture(t);
+  const source = join(fixture.issueWorktree, ".omc");
+  mkdirSync(source);
+  writeFileSync(join(source, "old.json"), '{"old":true}\n');
+  const initial = buildCleanupPlan(fixture);
+
+  assert.throws(
+    () =>
+      executeLocalCleanup(
+        { ...fixture, planToken: initial.planToken },
+        {
+          hooks: {
+            afterGenerationPrepared() {
+              throw new Error("stop after first completed generation");
+            },
+          },
+        },
+      ),
+    /stop after first completed generation/,
+  );
+  writeFileSync(join(source, "new.json"), '{"new":true}\n');
+  const append = buildCleanupPlan(fixture);
+  assert.throws(
+    () =>
+      executeLocalCleanup(
+        { ...fixture, planToken: append.planToken },
+        {
+          hooks: {
+            afterGenerationPrepared() {
+              throw new Error("stop after current completed generation");
+            },
+          },
+        },
+      ),
+    /stop after current completed generation/,
+  );
+
+  renameSync(
+    initial.plannedGeneration.payload,
+    join(fixture.root, "missing-historic-payload"),
+  );
+  assert.throws(
+    () => buildCleanupPlan(fixture),
+    /durable snapshot attempt의 owned root가 사라졌습니다/,
+  );
+  assert.equal(existsSync(append.plannedGeneration.payload), true);
+  assert.equal(existsSync(fixture.issueWorktree), true);
+  assert.equal(localRef(fixture), fixture.head);
+  assert.equal(existsSync(initial.quarantinePlan.rootDestination), false);
+});
+
 test("완료 generation의 timestamp-only drift는 새 full proof로 재계획하되 stale token은 거부한다", (t) => {
   const fixture = createFixture(t);
   const source = join(fixture.issueWorktree, ".omc");
@@ -2522,12 +2574,16 @@ test("완료 generation의 path·type·inode·mode·bytes drift는 계속 차단
   const cases = [
     {
       name: "path",
+      expected:
+        /durable snapshot attempt의 owned root가 사라졌습니다/,
       mutate({ fixture, payload }) {
         renameSync(payload, join(fixture.root, "moved-payload"));
       },
     },
     {
       name: "type",
+      expected:
+        /archived payload.*sealed payload proof/,
       mutate({ payload }) {
         const path = join(payload, "state.json");
         unlinkSync(path);
@@ -2536,6 +2592,8 @@ test("완료 generation의 path·type·inode·mode·bytes drift는 계속 차단
     },
     {
       name: "inode",
+      expected:
+        /snapshot candidate root가 durable attempt의 exact ownership과 다릅니다/,
       mutate({ fixture, payload }) {
         renameSync(payload, join(fixture.root, "old-payload"));
         mkdirSync(payload, { mode: 0o700 });
@@ -2544,6 +2602,8 @@ test("완료 generation의 path·type·inode·mode·bytes drift는 계속 차단
     },
     {
       name: "mode",
+      expected:
+        /archived payload.*sealed payload proof/,
       mutate({ payload }) {
         const path = join(payload, "state.json");
         const before = lstatSync(path).mode & 0o777;
@@ -2553,15 +2613,18 @@ test("완료 generation의 path·type·inode·mode·bytes drift는 계속 차단
     },
     {
       name: "special-mode",
+      expected:
+        /setuid·setgid·sticky mode/,
       mutate({ payload }) {
-        const path = join(payload, "state.json");
-        const before = lstatSync(path).mode & 0o7777;
-        chmodSync(path, before | 0o1000);
-        assert.notEqual(lstatSync(path).mode & 0o7000, 0);
+        const before = lstatSync(payload).mode & 0o7777;
+        chmodSync(payload, before | 0o2000);
+        assert.notEqual(lstatSync(payload).mode & 0o7000, 0);
       },
     },
     {
       name: "bytes",
+      expected:
+        /archived payload.*sealed payload proof/,
       mutate({ payload }) {
         writeFileSync(join(payload, "state.json"), '{"state":"changed"}\n');
       },
@@ -2597,7 +2660,7 @@ test("완료 generation의 path·type·inode·mode·bytes drift는 계속 차단
       });
       assert.throws(
         () => buildCleanupPlan(fixture),
-        /archived payload|generation payload|generation receipt|durable snapshot attempt|snapshot candidate root|setuid·setgid·sticky mode/,
+        driftCase.expected,
       );
       assert.equal(localRef(fixture), fixture.head);
       assert.equal(existsSync(fixture.issueWorktree), true);
@@ -3997,11 +4060,18 @@ test("tracked 변경을 숨기는 index flag는 post-move canary에서 fail-clos
   const cases = [
     {
       name: "assume-unchanged",
-      option: "--assume-unchanged",
+      options: ["--assume-unchanged"],
+      expected: /assume-unchanged flag/,
     },
     {
       name: "skip-worktree",
-      option: "--skip-worktree",
+      options: ["--skip-worktree"],
+      expected: /skip-worktree flag.*sparse checkout/,
+    },
+    {
+      name: "skip-worktree and assume-unchanged",
+      options: ["--assume-unchanged", "--skip-worktree"],
+      expected: /skip-worktree flag.*sparse checkout/,
     },
   ];
 
@@ -4021,12 +4091,14 @@ test("tracked 변경을 숨기는 index flag는 post-move canary에서 fail-clos
             {
               hooks: {
                 afterWorktreeQuarantine({ plan }) {
-                  quarantinedGit(plan, [
-                    "update-index",
-                    flagCase.option,
-                    "--",
-                    "README.md",
-                  ]);
+                  for (const option of flagCase.options) {
+                    quarantinedGit(plan, [
+                      "update-index",
+                      option,
+                      "--",
+                      "README.md",
+                    ]);
+                  }
                   writeFileSync(
                     changed,
                     `hidden by ${flagCase.name}\n`,
@@ -4035,7 +4107,7 @@ test("tracked 변경을 숨기는 index flag는 post-move canary에서 fail-clos
               },
             },
           ),
-        /Git index의 .*flag는 로컬 cleanup에서 허용하지 않습니다|tracked·staged 변경/,
+        flagCase.expected,
       );
 
       assert.equal(
@@ -4059,21 +4131,30 @@ test("preexisting issue index flag는 quarantine 전에 fail-closed한다", asyn
   for (const flagCase of [
     {
       name: "assume-unchanged",
-      option: "--assume-unchanged",
+      options: ["--assume-unchanged"],
+      expected: /assume-unchanged flag/,
     },
     {
       name: "skip-worktree",
-      option: "--skip-worktree",
+      options: ["--skip-worktree"],
+      expected: /skip-worktree flag.*sparse checkout/,
+    },
+    {
+      name: "skip-worktree and assume-unchanged",
+      options: ["--assume-unchanged", "--skip-worktree"],
+      expected: /skip-worktree flag.*sparse checkout/,
     },
   ]) {
     await t.test(flagCase.name, (child) => {
       const fixture = createFixture(child);
-      git(fixture.issueWorktree, [
-        "update-index",
-        flagCase.option,
-        "--",
-        "README.md",
-      ]);
+      for (const option of flagCase.options) {
+        git(fixture.issueWorktree, [
+          "update-index",
+          option,
+          "--",
+          "README.md",
+        ]);
+      }
       writeFileSync(
         join(fixture.issueWorktree, "README.md"),
         `preexisting ${flagCase.name} drift\n`,
@@ -4081,7 +4162,7 @@ test("preexisting issue index flag는 quarantine 전에 fail-closed한다", asyn
 
       assert.throws(
         () => buildCleanupPlan(fixture),
-        /issue worktree Git index의 .*flag는 로컬 cleanup에서 허용하지 않습니다/,
+        flagCase.expected,
       );
       assert.equal(existsSync(fixture.issueWorktree), true);
       assert.equal(localRef(fixture), fixture.head);
@@ -4138,6 +4219,171 @@ test("ambient fsmonitor hook은 residue 검사에서 실행하지 않는다", (t
   });
   assert.equal(result.status, "completed");
   assert.equal(existsSync(invoked), false);
+  assertWorktreeAbsent(fixture);
+  assert.equal(localRef(fixture), null);
+});
+
+test("fsmonitor-valid hint는 tracked drift를 숨기거나 issue index를 다시 쓰지 못한다", (t) => {
+  const fixture = createFixture(t);
+  const invoked = join(fixture.root, "issue-fsmonitor-invoked");
+  const hook = join(fixture.root, "issue-fsmonitor-hook.sh");
+  writeFileSync(
+    hook,
+    [
+      "#!/bin/sh",
+      `printf invoked > "${invoked}"`,
+      "printf 'fixture-token\\n'",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(hook, 0o700);
+  git(fixture.issueWorktree, [
+    "config",
+    "core.fsmonitor",
+    hook,
+  ]);
+  git(fixture.issueWorktree, [
+    "update-index",
+    "--fsmonitor-valid",
+    "--",
+    "README.md",
+  ]);
+  assert.match(
+    gitOutput(fixture.issueWorktree, [
+      "ls-files",
+      "-f",
+      "--",
+      "README.md",
+    ]),
+    /^[a-z] /,
+  );
+  if (existsSync(invoked)) unlinkSync(invoked);
+
+  const indexPath = gitOutput(fixture.issueWorktree, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "index",
+  ]);
+  const indexBefore = readFileSync(indexPath);
+  writeFileSync(
+    join(fixture.issueWorktree, "README.md"),
+    "hidden by fsmonitor-valid\n",
+  );
+
+  assert.throws(
+    () => buildCleanupPlan(fixture),
+    /issue worktree에 tracked·staged 또는 unignored 변경/,
+  );
+  assert.deepEqual(readFileSync(indexPath), indexBefore);
+  assert.equal(existsSync(invoked), false);
+  assert.equal(existsSync(fixture.issueWorktree), true);
+  assert.equal(localRef(fixture), fixture.head);
+});
+
+test("main dry-run과 execute는 untracked-cache·fsmonitor index bytes를 바꾸지 않는다", (t) => {
+  const fixture = createFixture(t);
+  const invoked = join(fixture.root, "main-fsmonitor-invoked");
+  const hook = join(fixture.root, "main-fsmonitor-hook.sh");
+  writeFileSync(
+    hook,
+    [
+      "#!/bin/sh",
+      `printf invoked > "${invoked}"`,
+      "printf 'fixture-token\\n'",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(hook, 0o700);
+  git(fixture.mainWorktree, [
+    "config",
+    "core.untrackedCache",
+    "true",
+  ]);
+  git(fixture.mainWorktree, [
+    "config",
+    "core.fsmonitor",
+    hook,
+  ]);
+  git(fixture.mainWorktree, [
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+  ]);
+  assert.equal(existsSync(invoked), true);
+  unlinkSync(invoked);
+
+  const indexPath = gitOutput(fixture.mainWorktree, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "index",
+  ]);
+  const indexBefore = readFileSync(indexPath);
+  if (
+    !indexBefore.includes(Buffer.from("UNTR")) ||
+    !indexBefore.includes(Buffer.from("FSMN"))
+  ) {
+    t.skip("Git이 UNTR·FSMN index extension을 유지하지 않습니다.");
+    return;
+  }
+
+  const plan = buildCleanupPlan(fixture);
+  assert.deepEqual(readFileSync(indexPath), indexBefore);
+  assert.equal(existsSync(invoked), false);
+
+  const result = executeLocalCleanup({
+    ...fixture,
+    planToken: plan.planToken,
+  });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(readFileSync(indexPath), indexBefore);
+  assert.equal(existsSync(invoked), false);
+  assertWorktreeAbsent(fixture);
+  assert.equal(localRef(fixture), null);
+});
+
+test("setgid parent 아래 helper-owned archive directory는 exact 0700으로 봉인한다", (t) => {
+  const fixture = createFixture(t);
+  const commonDir = gitOutput(fixture.mainWorktree, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ]);
+  const originalMode = lstatSync(commonDir).mode & 0o7777;
+  chmodSync(commonDir, originalMode | 0o2000);
+  if ((lstatSync(commonDir).mode & 0o2000) === 0) {
+    t.skip("filesystem이 directory setgid mode를 지원하지 않습니다.");
+    return;
+  }
+
+  const plan = buildCleanupPlan(fixture);
+  const result = executeLocalCleanup({
+    ...fixture,
+    planToken: plan.planToken,
+  });
+  assert.equal(result.status, "completed");
+  for (const directory of [
+    plan.paths.archiveRoot,
+    plan.paths.versionRoot,
+    plan.paths.archiveDirectory,
+    plan.paths.generationsDirectory,
+    plan.paths.intentsDirectory,
+    plan.paths.snapshotScratchDirectory,
+    plan.plannedGeneration.directory,
+    plan.plannedGeneration.payload,
+    plan.paths.quarantineDirectory,
+    plan.paths.quarantineIntentsDirectory,
+    plan.paths.quarantineRootsDirectory,
+    plan.paths.quarantineMetadataDirectory,
+    plan.paths.quarantineReceiptsDirectory,
+  ]) {
+    assert.equal(
+      lstatSync(directory).mode & 0o7777,
+      0o700,
+      directory,
+    );
+  }
   assertWorktreeAbsent(fixture);
   assert.equal(localRef(fixture), null);
 });

@@ -401,8 +401,8 @@ git -C <main-worktree> merge --ff-only origin/main
 그 뒤 다음 읽기 전용 계획을 실행한다. 경로는 `git worktree list --porcelain`
 결과에서 검증한 branch와 정확히 연결된 단일 issue worktree와 단일 `main`
 worktree만 사용하며, 현재 cwd는 issue worktree 밖이어야 한다. helper는
-`rev-parse --path-format=absolute`와 `ls-files -f`를 지원하는 Git 2.31 이상을
-요구한다.
+`worktree list --porcelain -z`를 지원하는 Git 2.36 이상을 요구하며 실행
+초기에 version을 확인한다.
 
 ```bash
 node .agents/skills/open-pull-request/scripts/finalize-local-cleanup.mjs \
@@ -447,8 +447,12 @@ main과 issue의 일반 Git 상태는 비어 있어야 한다. ignored preflight
 증거를 함께 읽으며, 아무 ignored 경로도 없거나 `.gitignore`의 `.omc` 패턴에
 귀속된 root `.omc` 하나만 허용한다. `.DS_Store`, IDE 파일과 다른
 ignored·untracked 경로는 자동 보존·삭제하지 않는다. tracked 검사를 생략하게
-만드는 `assume-unchanged`·`skip-worktree`·`fsmonitor-valid` index flag도
-허용하지 않으며 index를 자동 수정해 해제하지 않는다.
+만드는 `assume-unchanged`·`skip-worktree` index flag도 허용하지 않으며
+index를 자동 수정해 해제하지 않는다. sparse checkout은 `skip-worktree`를
+사용하므로 cleanup 대상과 main 모두 `git sparse-checkout disable`로 완전히
+materialize하거나 별도 full checkout worktree를 사용해야 한다.
+`fsmonitor-valid` 상태는 index에서 지우지 않고 `core.fsmonitor=false`로
+해석에서 배제한다.
 
 ```bash
 git -C <issue-worktree> status --porcelain=v1 \
@@ -459,7 +463,9 @@ git -C <issue-worktree> ls-files --others --ignored \
 
 실제 `.omc/`가 있으면 그 아래가 symlink·special file·다른 filesystem·
 external hardlink 없이 일반 파일과 디렉터리만인지 검사하고 setuid·setgid·
-sticky mode도 허용하지 않는다. source proof는 device·inode·timestamp를
+sticky mode도 허용하지 않는다. 공유 setgid directory에서 상속된 bit도
+예외가 아니므로 사용자가 source `.omc`의 특수 mode를 제거한 뒤 새 dry-run을
+실행해야 한다. source proof는 device·inode·timestamp를
 포함한 `snapshotDigest`, inode identity를 포함한 `treeDigest`, 그리고 relative
 path·type·전체 permission mode·file bytes만 포함해 새 inode와도 비교할 수
 있는 `contentDigest`를 함께 계산한다. 실제 Git common dir 아래
@@ -564,6 +570,7 @@ Git registration을 다시 확인한다. 그 뒤 worktree root 전체를
 `worktree-quarantine/roots/<quarantine-id>`로, metadata directory 전체를
 `worktree-quarantine/metadata/<quarantine-id>`로 같은 filesystem atomic
 no-replace 이동하고 양쪽 parent를 fsync한 뒤 exclusive receipt를 발행한다.
+`git worktree remove`나 `git worktree prune`은 호출하지 않는다.
 quarantine transition canary는 durable intent와 pending metadata 부재를
 확인하고, intent 발행 hook 뒤·root 이동 전후와 hook 뒤·metadata 이동 전후와
 hook 뒤·receipt 발행 뒤마다 stage별 root·metadata device·inode·mode,
@@ -595,15 +602,26 @@ pre-scan 뒤 `.omc` 밖 residue가 생기면 root는 이미 quarantine됐을 수
 metadata 진행·local ref CAS·성공 반환을 중단하고 local ref와 residue를 그대로
 둔다. 복구는 사용자가 residue를 제거하거나 다른 곳으로 옮긴 뒤에만 재개하며
 helper가 자동 삭제·이동·reset·stash하지 않는다.
-index의 `assume-unchanged`·`skip-worktree`·`fsmonitor-valid` flag가 하나라도
-있으면 먼저 fail-closed한다. index와 exact head는 staged OID로 비교한다.
-모든 helper Git 호출은 inherited `GIT_*`를 제거하고 ambient 설정과 무관하게
+index의 `assume-unchanged`·`skip-worktree` flag가 하나라도 있으면 먼저
+fail-closed한다. sparse checkout이면 full checkout worktree에서 다시
+실행한다. index와 exact head는 staged OID로 비교한다.
+모든 helper Git 호출은 inherited `GIT_*`를 제거하고 optional index write를
+끄는 `GIT_OPTIONAL_LOCKS=0`과 함께 ambient 설정과 무관하게
 `core.fsmonitor=false`,
 `core.fileMode=true`, `core.trustctime=true`, `core.checkStat=default`,
 `core.ignoreStat=false`, `core.untrackedCache=false`를 고정한다. worktree와
 index는 stat-cache의 ctime·mtime 추정값이나 `--quiet` 결과가 아니라 external
 diff·textconv를 끈 full-index patch의 실제 출력이 비었는지 비교하며, 이 검사
 전후 exact linked-worktree index identity와 bytes가 바뀌지 않아야 한다.
+`GIT_OPTIONAL_LOCKS=0`은 dry-run·execute의 Git 호출이 main index bytes를
+다시 쓰지 않게 하며, 회귀 테스트는 `UNTR`·`FSMN` extension이 있는 index의
+byte-for-byte 보존을 확인한다. 실행 bit drift가 있으면 index의 100755·100644
+mode와 실제 파일 mode를 사용자가 맞춘 뒤 새 dry-run을 실행하며 helper는
+config나 index를 자동으로 고치지 않는다. permission mode를 표현할 수 없어
+`core.fileMode=false`가 필요한 filesystem은 지원하지 않으므로 full-mode
+filesystem의 worktree를 사용한다. helper-owned archive directory는 setgid
+parent나 umask와 무관하게 생성 직후 FD로 exact 0700을 다시 봉인하며
+helper-owned JSON file도 FD로 exact 0600을 적용한다.
 
 이 scan과 atomic rename/CAS 사이에는 외부 writer를 동결하는 filesystem lease가
 없으므로 완전한 linearizable freeze를 보장하지 않는다. 각 scan은 그 bounded
@@ -611,11 +629,12 @@ diff·textconv를 끈 full-index patch의 실제 출력이 비었는지 비교�
 fail-closed한다. `.omc` 내부의 mutable write는 허용해 quarantined root에
 보존한다.
 
-`git worktree remove`나 `git worktree prune`은 호출하지 않는다. 따라서 최종
-검증 뒤 `.omc`가 재생성되어도 root와 함께 보존되며, root 이동 뒤 original
-path가 다시 생기면 이를 삭제하지 않고 unregistered bounded residue로
-보고한다. exact registration 부재와 quarantine root·metadata·receipt를 확인한
-뒤에만 old-OID local branch CAS를 실행하고 최신 clean `main`을 재검증한다.
+helper가 `git worktree remove`나 `git worktree prune`을 호출하지 않으므로
+최종 검증 뒤 `.omc`가 재생성되어도 root와 함께 보존된다. root 이동 뒤
+original path가 다시 생기면 이를 삭제하지 않고 unregistered bounded
+residue로 보고한다. exact registration 부재와 quarantine
+root·metadata·receipt를 확인한 뒤에만 old-OID local branch CAS를 실행하고
+최신 clean `main`을 재검증한다.
 
 ```bash
 git -C <main-worktree> update-ref -d \

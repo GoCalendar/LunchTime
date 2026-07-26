@@ -58,6 +58,7 @@ const ARCHIVE_ROOT_NAME = "lunchtime-worktree-state";
 const ARCHIVE_VERSION = "v2";
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
+const MINIMUM_GIT_VERSION = [2, 36, 0];
 const PYTHON_EXECUTABLE = "/usr/bin/python3";
 const ATOMIC_RENAME_NO_REPLACE_SCRIPT = String.raw`
 import ctypes
@@ -179,6 +180,7 @@ function isolatedGitEnvironment(overrides = {}) {
     ),
   );
   return Object.assign(environment, overrides, {
+    GIT_OPTIONAL_LOCKS: "0",
     GIT_CONFIG_COUNT: "6",
     GIT_CONFIG_KEY_0: "core.fsmonitor",
     GIT_CONFIG_VALUE_0: "false",
@@ -193,6 +195,33 @@ function isolatedGitEnvironment(overrides = {}) {
     GIT_CONFIG_KEY_5: "core.untrackedCache",
     GIT_CONFIG_VALUE_5: "false",
   });
+}
+
+function assertSupportedGitVersion(cwd) {
+  const output = runGit(cwd, ["version"]).stdout.trim();
+  const match = /^git version ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?/.exec(
+    output,
+  );
+  if (!match) {
+    fail("로컬 cleanup이 Git version을 확인하지 못했습니다.");
+  }
+  const current = [
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3] ?? 0),
+  ];
+  let comparison = 0;
+  for (let index = 0; index < current.length; index += 1) {
+    if (current[index] === MINIMUM_GIT_VERSION[index]) continue;
+    comparison =
+      current[index] > MINIMUM_GIT_VERSION[index] ? 1 : -1;
+    break;
+  }
+  if (comparison < 0) {
+    fail(
+      `로컬 cleanup은 Git ${MINIMUM_GIT_VERSION.join(".")} 이상을 요구합니다.`,
+    );
+  }
 }
 
 function gitOutput(cwd, arguments_) {
@@ -710,6 +739,49 @@ function validatePrivateDirectory(path, expectedDevice) {
   return true;
 }
 
+function normalizeCreatedPrivateDirectory(path, expectedDevice, label) {
+  let descriptor;
+  try {
+    descriptor = openSync(
+      path,
+      fsConstants.O_RDONLY |
+        (fsConstants.O_DIRECTORY ?? 0) |
+        (fsConstants.O_NOFOLLOW ?? 0),
+    );
+    const opened = fstatSync(descriptor, { bigint: true });
+    const linked = lstatSync(path, { bigint: true });
+    if (
+      !opened.isDirectory() ||
+      !linked.isDirectory() ||
+      linked.isSymbolicLink() ||
+      opened.dev !== expectedDevice ||
+      linked.dev !== expectedDevice ||
+      opened.ino !== linked.ino
+    ) {
+      fail(`${label}가 helper가 방금 만든 private directory가 아닙니다.`);
+    }
+    fchmodSync(descriptor, PRIVATE_DIRECTORY_MODE);
+    fsyncSync(descriptor);
+    const sealed = fstatSync(descriptor, { bigint: true });
+    const sealedPath = lstatSync(path, { bigint: true });
+    if (
+      !sealed.isDirectory() ||
+      !sealedPath.isDirectory() ||
+      sealedPath.isSymbolicLink() ||
+      sealed.dev !== expectedDevice ||
+      sealedPath.dev !== expectedDevice ||
+      sealed.ino !== opened.ino ||
+      sealedPath.ino !== opened.ino ||
+      modeBits(sealed) !== PRIVATE_DIRECTORY_MODE ||
+      modeBits(sealedPath) !== PRIVATE_DIRECTORY_MODE
+    ) {
+      fail(`${label}를 exact 0700 private directory로 봉인하지 못했습니다.`);
+    }
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
 function readPrivateJson(path, label) {
   const stats = pathState(path);
   if (!stats) return null;
@@ -734,6 +806,13 @@ function ensurePrivateDirectory(path, expectedDevice) {
     created = true;
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
+  }
+  if (created) {
+    normalizeCreatedPrivateDirectory(
+      path,
+      expectedDevice,
+      "archive 디렉터리",
+    );
   }
   validatePrivateDirectory(path, expectedDevice);
   if (created) syncDirectory(dirname(path));
@@ -763,6 +842,7 @@ function writeExclusiveJson(path, value, label) {
   let descriptor;
   try {
     descriptor = openSync(pendingPath, flags, PRIVATE_FILE_MODE);
+    fchmodSync(descriptor, PRIVATE_FILE_MODE);
     writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     fsyncSync(descriptor);
   } finally {
@@ -1741,11 +1821,7 @@ function readWorktreeResidue(
   issueWorktree,
   activeGeneration,
   gitRunner = (arguments_) =>
-    runGit(issueWorktree, arguments_, {
-      environment: isolatedGitEnvironment({
-        GIT_OPTIONAL_LOCKS: "0",
-      }),
-    }),
+    runGit(issueWorktree, arguments_),
 ) {
   assertTrackedIndexFlagsSafe(gitRunner, "issue worktree");
   const ordinary = gitRunner([
@@ -1847,37 +1923,30 @@ function readWorktreeResidue(
 }
 
 function assertTrackedIndexFlagsSafe(gitRunner, label) {
-  const flagViews = [
-    {
-      option: "-v",
-      name: "assume-unchanged·skip-worktree",
-    },
-    {
-      option: "-f",
-      name: "fsmonitor-valid·skip-worktree",
-    },
-  ];
-  for (const view of flagViews) {
-    const entries = gitRunner([
-      "ls-files",
-      view.option,
-      "-z",
-      "--",
-    ]).stdout
-      .split("\0")
-      .filter(Boolean);
-    const invalid = entries.find((entry) => !entry.startsWith("H "));
-    if (!invalid) continue;
-    const tag = invalid.slice(0, 1);
-    if (tag === "S" || /^[a-z]$/.test(tag)) {
-      fail(
-        `${label} Git index의 ${view.name} flag는 로컬 cleanup에서 허용하지 않습니다.`,
-      );
-    }
+  const entries = gitRunner([
+    "ls-files",
+    "-v",
+    "-z",
+    "--",
+  ]).stdout
+    .split("\0")
+    .filter(Boolean);
+  const invalid = entries.find((entry) => !entry.startsWith("H "));
+  if (!invalid) return;
+  const tag = invalid.slice(0, 1);
+  if (tag === "S" || tag === "s") {
     fail(
-      `${label} Git index에 clean tracked entry가 아닌 ${JSON.stringify(tag)} 상태가 있습니다.`,
+      `${label} Git index의 skip-worktree flag는 로컬 cleanup에서 허용하지 않습니다. sparse checkout이면 disable하거나 별도 full checkout worktree를 사용하세요.`,
     );
   }
+  if (/^[a-z]$/.test(tag)) {
+    fail(
+      `${label} Git index의 assume-unchanged flag는 로컬 cleanup에서 허용하지 않습니다.`,
+    );
+  }
+  fail(
+    `${label} Git index에 clean tracked entry가 아닌 ${JSON.stringify(tag)} 상태가 있습니다.`,
+  );
 }
 
 function readQuarantinedWorktreeResidue(plan) {
@@ -1920,7 +1989,6 @@ function readQuarantinedWorktreeResidue(plan) {
     GIT_COMMON_DIR: plan.commonDir,
     GIT_DIR: plan.commonDir,
     GIT_INDEX_FILE: indexPath,
-    GIT_OPTIONAL_LOCKS: "0",
     GIT_WORK_TREE: root,
   });
 
@@ -2804,6 +2872,7 @@ export function buildCleanupPlan(rawInput) {
   if (!mainStats?.isDirectory() || mainStats.isSymbolicLink()) {
     fail("main worktree는 symlink가 아닌 기존 디렉터리여야 합니다.");
   }
+  assertSupportedGitVersion(input.mainWorktree);
   const originIdentity = readExpectedOrigin(
     input.mainWorktree,
     input.repository,
@@ -3900,6 +3969,11 @@ function ensureOwnedSnapshotRoot(plan, generation, options) {
       }
       throw error;
     }
+    normalizeCreatedPrivateDirectory(
+      scratchRoot,
+      plan.commonDevice,
+      "snapshot scratch root",
+    );
     let descriptor;
     try {
       descriptor = openSync(
@@ -4226,6 +4300,11 @@ function prepareGeneration(
       }
       throw error;
     }
+    normalizeCreatedPrivateDirectory(
+      generation.directory,
+      plan.commonDevice,
+      "generation container",
+    );
     validatePrivateDirectory(generation.directory, plan.commonDevice);
     syncDirectory(plan.paths.generationsDirectory);
     assertExactOrigin(plan);
@@ -4346,6 +4425,11 @@ function prepareGeneration(
         }
         throw error;
       }
+      normalizeCreatedPrivateDirectory(
+        generation.payload,
+        plan.commonDevice,
+        "empty generation payload",
+      );
       syncDirectory(generation.directory);
       assertExactOrigin(plan);
       payloadStats = lstatSync(generation.payload, { bigint: true });
