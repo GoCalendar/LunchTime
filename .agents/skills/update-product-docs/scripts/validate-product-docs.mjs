@@ -949,6 +949,8 @@ function validateHarnessSkillContracts() {
     ".agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
     ".agents/skills/open-pull-request/scripts/validate-finalize.mjs",
     ".agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
+    ".agents/skills/open-pull-request/scripts/finalize-merge.mjs",
+    ".agents/skills/open-pull-request/scripts/finalize-merge.test.mjs",
   ];
   for (const file of requiredFiles) {
     if (!isFile(file)) {
@@ -1004,12 +1006,22 @@ function validateHarnessSkillContracts() {
         ["PR-only 중단", /PR 생성·갱신만[\s\S]{0,240}멈춘다/],
         ["명시적 finalize", /완료·병합·end-to-end/],
         ["finalize validator", /validate-finalize\.mjs/],
-        ["exact-head guard", /--match-head-commit/],
+        [
+          "exact-head guard",
+          /finalize-merge\.mjs[\s\S]{0,900}--match-head-commit/,
+        ],
         [
           "structured exact review head",
           /review-head=<40자리 SHA>[\s\S]{0,180}정확히 한 번[\s\S]{0,180}완전히 일치/,
         ],
-        ["squash merge", /gh pr merge[\s\S]{0,180}--squash/],
+        [
+          "squash merge helper",
+          /Exact-head squash merge[\s\S]{0,700}finalize-merge\.mjs/,
+        ],
+        [
+          "argv-bound merge",
+          /gh pr merge[\s\S]{0,100}shell 문자열[\s\S]{0,160}별도 argv/,
+        ],
         ["merge branch 보존", /`--delete-branch`[\s\S]{0,160}사용하지 않는다/],
         [
           "exact remote OID 조회",
@@ -1052,7 +1064,7 @@ function validateHarnessSkillContracts() {
         ],
         [
           "recovery ownership dry-run",
-          /complete <issue> --pr <pr> --head <validated-head> --dry-run/,
+          /complete <issue> --pr <pr> --head <validated-head>[\s\S]{0,80}--repo <validated-repository> --dry-run/,
         ],
         [
           "recovery main cwd",
@@ -1075,12 +1087,80 @@ function validateHarnessSkillContracts() {
           /git -C <issue-worktree> rev-parse HEAD[\s\S]{0,240}git -C <main-worktree> rev-parse refs\/heads\/<validated-branch>[\s\S]{0,160}<validated-head>/,
         ],
         [
+          "local cleanup explicit repository",
+          /finalize-local-cleanup\.mjs[\s\S]{0,360}--repo <validated-repository>[\s\S]{0,360}repository를 포함한 같은 일곱 identity/,
+        ],
+        [
+          "local cleanup canonical origin identity",
+          /각각 정확히 하나인[\s\S]{0,120}credential 없는 canonical GitHub URL[\s\S]{0,260}raw[\s\S]{0,8}URL은 출력하거나 plan·identity에 저장하지 않고[\s\S]{0,160}fingerprint[\s\S]{0,160}plan[\s\S]{0,8}token과 runtime canary에만/,
+        ],
+        [
+          "local cleanup stable archive namespace",
+          /archive key는[\s\S]{0,240}stable local locator[\s\S]{0,220}explicit repository만[\s\S]{0,180}durable core[\s\S]{0,220}repository 변경[\s\S]{0,180}core identity[\s\S]{0,240}같은 repository[\s\S]{0,180}URL 변경[\s\S]{0,220}새 dry-run[\s\S]{0,180}복구/,
+        ],
+        [
           "CAS local 삭제",
           /git -C <main-worktree> update-ref -d[\s\\]*refs\/heads\/<validated-branch> <validated-head>/,
         ],
         [
-          "main cwd worktree 제거",
-          /git -C <main-worktree> worktree remove -- <issue-worktree>/,
+          "metadata-only worktree quarantine",
+          /worktree root 전체[\s\S]{0,800}metadata directory 전체[\s\S]{0,400}atomic\s+no-replace[\s\S]{0,3000}`git worktree remove`[\s\S]{0,120}호출하지 않는다/,
+        ],
+        [
+          "OMC sealed new-inode snapshot",
+          /원본을 rename·삭제하지 않고[\s\S]{0,180}helper-owned 새 inode[\s\S]{0,100}sealed snapshot/,
+        ],
+        [
+          "OMC sealed snapshot은 fallback 아님",
+          /copy\s+fallback이 아니라[\s\S]{0,180}원본을 그대로 보존하는 primary snapshot/,
+        ],
+        [
+          "OMC generation proof chain",
+          /`generation\.json`[\s\S]{0,180}`intentDigest`[\s\S]{0,180}`payloadProof`[\s\S]{0,300}historic generation 전체/,
+        ],
+        [
+          "OMC scratch ownership",
+          /`snapshot-scratch\/`[\s\S]{0,180}root device\/inode[\s\S]{0,180}`snapshot-attempt\.json`[\s\S]{0,280}empty inert residue[\s\S]{0,180}payload 채택[\s\S]{0,80}하지 않는다/,
+        ],
+        [
+          "OMC partial snapshot forward recovery",
+          /helper-owned bound scratch[\s\S]{0,260}`snapshot-failed\.json`[\s\S]{0,260}`pending\.omc`,[\s\S]{0,80}`current\.omc`[\s\S]{0,260}nonempty[\s\S]{0,120}`partial` orphan receipt[\s\S]{0,420}다음 preserved[\s\S]{0,8}generation/,
+        ],
+        [
+          "OMC failed-empty snapshot forward recovery",
+          /첫 entry 전 실패한 exact owned empty root[\s\S]{0,160}`failed-empty` orphan receipt[\s\S]{0,220}attempt·root·failed proof[\s\S]{0,240}source가 있으면[\s\S]{0,120}preserved generation[\s\S]{0,180}사라졌으면[\s\S]{0,120}empty generation/,
+        ],
+        [
+          "OMC absent-source exact candidate recovery",
+          /receipt-less preserved intent[\s\S]{0,160}source가 사라져도[\s\S]{0,220}nonempty 실패 candidate[\s\S]{0,100}`partial` orphan[\s\S]{0,180}`failed-empty` orphan[\s\S]{0,220}complete candidate[\s\S]{0,140}preserved generation[\s\S]{0,220}truthful empty generation[\s\S]{0,420}source와 helper-owned candidate가 모두 없을 때만[\s\S]{0,100}fail-closed/,
+        ],
+        [
+          "OMC mutable root와 drift 중단",
+          /snapshot 뒤 원본[\s\S]{0,320}mutable quarantined root[\s\S]{0,260}receipt proof에서 drift[\s\S]{0,180}local ref CAS/,
+        ],
+        [
+          "quarantine transition global canary",
+          /quarantine transition canary[\s\S]{0,420}main worktree root·branch·HEAD·main·origin\/main ref·clean 상태·common dir·[\s\S]{0,120}registration/,
+        ],
+        [
+          "quarantine Git plumbing byte proof",
+          /root `\.git` marker[\s\S]{0,100}metadata의 `commondir`·`gitdir`·`HEAD`[\s\S]{0,140}device·inode·mode·size·byte digest[\s\S]{0,160}해석·재작성하지 않는다/,
+        ],
+        [
+          "bounded pre-rename and post-move residue canary",
+          /origin canary[\s\S]{0,220}마지막 bounded[\s\S]{0,80}pre-rename operation[\s\S]{0,320}`GIT_DIR`·`GIT_COMMON_DIR`[\s\S]{0,180}`GIT_WORK_TREE`[\s\S]{0,120}`GIT_INDEX_FILE`[\s\S]{0,300}ls-files --others --directory -z[\s\S]{0,360}root·metadata·receipt hook 뒤[\s\S]{0,120}local ref CAS 직전[\s\S]{0,700}사용자가 residue를 제거하거나 다른 곳으로[\s\S]{0,8}옮긴 뒤에만/,
+        ],
+        [
+          "external writer no-freeze boundary",
+          /외부 writer를 동결하는 filesystem lease[\s\S]{0,160}linearizable freeze를 보장하지 않는다[\s\S]{0,220}다음 post-move canary[\s\S]{0,120}fail-closed[\s\S]{0,160}`\.omc` 내부의 mutable write는 허용/,
+        ],
+        [
+          "origin all durable-boundary canary",
+          /repository와 canonical origin fetch·push fingerprint canary[\s\S]{0,180}identity와 published-pending cleanup[\s\S]{0,180}generation intent·container[\s\S]{0,180}snapshot[\s\S]{0,8}attempt[\s\S]{0,180}copy 시작·종료[\s\S]{0,180}scratch→pending[\s\S]{0,180}outcome[\s\S]{0,180}pending→current[\s\S]{0,180}generation[\s\S]{0,8}receipt[\s\S]{0,240}quarantine intent·root·metadata·receipt[\s\S]{0,180}local ref CAS[\s\S]{0,160}모든 durable boundary/,
+        ],
+        [
+          "pre-CAS fresh full plan",
+          /`beforeRefDelete` hook 뒤[\s\S]{0,140}fresh full plan과 plan token[\s\S]{0,300}확인한 뒤에만 CAS/,
         ],
         [
           "ignored worktree preflight",
@@ -1124,6 +1204,14 @@ function validateHarnessSkillContracts() {
         [
           "CI finalize 회귀 테스트",
           /node --test \.agents\/skills\/open-pull-request\/scripts\/validate-finalize\.test\.mjs/,
+        ],
+        [
+          "CI merge helper 구문 검사",
+          /node --check \.agents\/skills\/open-pull-request\/scripts\/finalize-merge\.mjs/,
+        ],
+        [
+          "CI merge helper 회귀 테스트",
+          /node --test \.agents\/skills\/open-pull-request\/scripts\/finalize-merge\.test\.mjs/,
         ],
       ],
     },

@@ -1,4 +1,4 @@
 interface:
   display_name: "GitHub 작업 이슈 운영"
   short_description: "검증된 이슈 생성부터 선점·완료까지 안전하게 실행"
-  default_prompt: "$run-github-work-item을 사용해 LunchTime 이슈 본문과 concrete planned-ID 경로를 검증하고 필요한 경우 dry-run 뒤 정확한 label 집합의 미할당 이슈를 생성한 다음 작업 상태를 안전하게 전이해 주세요."
+  default_prompt: "$run-github-work-item을 사용해 LunchTime 이슈 본문과 concrete planned-ID 경로를 검증하고 필요한 경우 dry-run 뒤 정확한 label 집합의 미할당 이슈를 생성한 다음, same-repository PR identity를 포함해 작업 상태를 안전하게 전이해 주세요."

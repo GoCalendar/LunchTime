@@ -58,11 +58,12 @@ const openPullRequestFixtureContract = [
   "--merged-recovery는 `MERGED`, `mergedAt`, `mergeCommit.oid`를 검증하고 merge 명령은 실행하지 않고 원격 ref 확인부터 재개한다.",
   "병합 전에만 의미가 있는 required check·review thread는 다시 판정하지 않고 복구한다.",
   "merge commit의 유일한 parent는 `baseRefOid`이고 merge tree는 exact head tree이며 origin/main first-parent에 포함된다.",
-  "complete <issue> --pr <pr> --head <validated-head> --dry-run",
+  "complete <issue> --pr <pr> --head <validated-head> --repo <validated-repository> --dry-run",
   "issue worktree가 이미 없으면 clean `main` worktree에서 재개한다.",
   "review-head=<40자리 SHA>를 정확히 한 번 기록하고 현재 head와 완전히 일치시킨다.",
   "FR·AC·Policy visible heading 또는 PRD 기술 스파이크 표의 첫 셀로 실제 정의한다.",
-  "gh pr merge <pr> --squash --match-head-commit <head>",
+  "## 7. Exact-head squash merge\nfinalize-merge.mjs --snapshot <snapshot> --confirm-plan <token>을 사용한다.",
+  "gh pr merge는 shell 문자열이 아니라 --squash와 --match-head-commit <head>를 포함한 각각 별도 argv로 실행한다.",
   "`--delete-branch`는 사용하지 않는다.",
   "병합 재조회가 성공한 뒤에만 exact remote ref를 읽는다.",
   "git ls-remote --heads origin refs/heads/<validated-branch>",
@@ -71,7 +72,24 @@ const openPullRequestFixtureContract = [
   "불명확한 응답이면 다시 실행하지 않는다.",
   "`complete` 성공과 사후 검증 전에는 worktree나 local branch를 삭제하지 않는다.",
   "git -C <issue-worktree> rev-parse HEAD와 git -C <main-worktree> rev-parse refs/heads/<validated-branch>를 <validated-head>와 확인한다.",
-  "git -C <main-worktree> worktree remove -- <issue-worktree>",
+  "finalize-local-cleanup.mjs --repo <validated-repository> --issue <issue> --pr <pr> --dry-run을 repository를 포함한 같은 일곱 identity로 실행한다.",
+  "origin fetch와 push URL은 각각 정확히 하나인 credential 없는 canonical GitHub URL이어야 하며 raw URL은 출력하거나 plan·identity에 저장하지 않고 fingerprint는 plan token과 runtime canary에만 결속한다.",
+  "archive key는 stable local locator identity로 유지하고 explicit repository만 durable core identity에 둔다. repository 변경은 core identity collision으로 중단하지만 같은 repository의 canonical URL 변경은 새 dry-run으로 기존 archive를 복구한다.",
+  "worktree root 전체와 metadata directory 전체를 atomic no-replace quarantine하고 `git worktree remove`나 `git worktree prune`은 호출하지 않는다.",
+  "원본을 rename·삭제하지 않고 helper-owned 새 inode current.omc sealed snapshot을 만들고 source·payload `contentDigest`를 확인한다.",
+  "이 단계는 copy fallback이 아니라 원본을 그대로 보존하는 primary snapshot이다.",
+  "`generation.json`은 `intentDigest`와 `payloadProof`를 결속하고 historic generation 전체를 검증한다.",
+  "`snapshot-scratch/`의 nonce root는 exact durable intent digest·scratch basename·root device/inode·pending·final 경로를 `snapshot-attempt.json`에 결속하며 attempt 전 중단된 empty inert residue는 payload 채택을 하지 않는다.",
+  "helper-owned bound scratch는 `snapshot-failed.json`에 결속하고 `pending.omc`, `current.omc` 순서로 publish하며 candidate가 nonempty일 때만 `partial` orphan receipt로 봉인한 뒤 현재 source를 다음 preserved generation에 append한다.",
+  "첫 entry 전 실패한 exact owned empty root는 `failed-empty` orphan receipt로 같은 attempt·root·failed proof를 보존하고 source가 있으면 preserved generation을, 사라졌으면 empty generation을 append한다.",
+  "receipt-less preserved intent의 source가 사라져도 nonempty 실패 candidate는 `partial` orphan, exact empty failure는 `failed-empty` orphan, complete candidate는 preserved generation으로 봉인한 뒤 truthful empty generation을 append하며 source와 helper-owned candidate가 모두 없을 때만 fail-closed한다.",
+  "snapshot 뒤 원본 write는 sealed generation을 바꾸지 않고 mutable quarantined root에 남으며 sealed payload가 receipt proof에서 drift하면 quarantine과 local ref CAS를 중단한다.",
+  "quarantine transition canary는 stage root·metadata와 main worktree root·branch·HEAD·main·origin/main ref·clean 상태·common dir·registration을 검증한다.",
+  "root `.git` marker와 metadata의 `commondir`·`gitdir`·`HEAD`는 device·inode·mode·size·byte digest에 결속하고 이동 뒤 bytes를 해석·재작성하지 않는다.",
+  "root rename 전 origin canary 뒤 residue scan을 마지막 bounded pre-rename operation으로 실행한다. post-move에는 `GIT_DIR`·`GIT_COMMON_DIR`을 common dir로, `GIT_WORK_TREE`를 quarantined root로, `GIT_INDEX_FILE`을 current metadata index로 명시하고 git ls-files --others --directory -z를 검사한다. post-move residue canary는 root·metadata·receipt hook 뒤와 local ref CAS 직전에 반복하며 사용자가 residue를 제거하거나 다른 곳으로 옮긴 뒤에만 복구한다.",
+  "외부 writer를 동결하는 filesystem lease가 없으므로 linearizable freeze를 보장하지 않는다. 이후 residue는 다음 post-move canary에서 fail-closed하며 `.omc` 내부의 mutable write는 허용한다.",
+  "repository와 canonical origin fetch·push fingerprint canary는 identity와 published-pending cleanup, generation intent·container, snapshot attempt, copy 시작·종료, scratch→pending, outcome, pending→current, generation receipt, quarantine intent·root·metadata·receipt, local ref CAS의 모든 durable boundary를 검증한다.",
+  "`beforeRefDelete` hook 뒤 fresh full plan과 plan token에서 exact generation·quarantine·receipt·registration을 확인한 뒤에만 CAS를 실행한다.",
   "git status --porcelain=v1 --untracked-files=all --ignored=matching --ignore-submodules=none 뒤 git ls-files --others --ignored를 확인한다.",
   "git -C <main-worktree> update-ref -d refs/heads/<validated-branch> <validated-head>",
   "dirty·staged·untracked 사용자 변경이면 중단한다.",
@@ -339,6 +357,16 @@ function createFixture() {
   );
   write(
     root,
+    ".agents/skills/open-pull-request/scripts/finalize-merge.mjs",
+    "#!/usr/bin/env node\n",
+  );
+  write(
+    root,
+    ".agents/skills/open-pull-request/scripts/finalize-merge.test.mjs",
+    "import test from \"node:test\";\ntest(\"fixture\", () => {});\n",
+  );
+  write(
+    root,
     ".github/workflows/validate-harness.yml",
     [
       "name: fixture",
@@ -355,6 +383,8 @@ function createFixture() {
       "            --index",
       "          node --check .agents/skills/open-pull-request/scripts/validate-finalize.mjs",
       "          node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
+      "          node --check .agents/skills/open-pull-request/scripts/finalize-merge.mjs",
+      "          node --test .agents/skills/open-pull-request/scripts/finalize-merge.test.mjs",
       "",
     ].join("\n"),
   );
@@ -834,6 +864,12 @@ test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", 
     },
     {
       file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "각각 별도 argv",
+      replacement: "하나의 shell command",
+      message: /하네스 수명주기 계약이 없습니다: argv-bound merge/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
       source: "`statusCheckRollup`",
       replacement: "별도 check 목록",
       message:
@@ -870,7 +906,7 @@ test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", 
     {
       file: ".agents/skills/open-pull-request/SKILL.md",
       source:
-        "complete <issue> --pr <pr> --head <validated-head> --dry-run",
+        "complete <issue> --pr <pr> --head <validated-head> --repo <validated-repository> --dry-run",
       replacement: "complete <issue> --pr <pr>",
       message:
         /하네스 수명주기 계약이 없습니다: recovery ownership dry-run/,
@@ -885,9 +921,164 @@ test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", 
     {
       file: ".agents/skills/open-pull-request/SKILL.md",
       source:
+        "--repo <validated-repository> --issue <issue> --pr <pr> --dry-run",
+      replacement: "--issue <issue> --pr <pr> --dry-run",
+      message:
+        /하네스 수명주기 계약이 없습니다: local cleanup explicit repository/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "raw URL은 출력하거나 plan·identity에 저장하지 않고",
+      replacement: "raw URL을 plan에 저장하고",
+      message:
+        /하네스 수명주기 계약이 없습니다: local cleanup canonical origin identity/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "plan token과 runtime canary에만 결속한다.",
+      replacement: "durable identity에 결속한다.",
+      message:
+        /하네스 수명주기 계약이 없습니다: local cleanup canonical origin identity/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "stable local locator identity",
+      replacement: "repository별 archive identity",
+      message:
+        /하네스 수명주기 계약이 없습니다: local cleanup stable archive namespace/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "같은 repository의 canonical",
+      replacement: "다른 repository의 canonical",
+      message:
+        /하네스 수명주기 계약이 없습니다: local cleanup stable archive namespace/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source:
         "git -C <main-worktree> update-ref -d",
       replacement: "git branch -d <validated-branch>",
       message: /하네스 수명주기 계약이 없습니다: CAS local 삭제/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "`git worktree remove`나 `git worktree prune`은 호출하지 않는다.",
+      replacement: "git worktree remove로 정리한다.",
+      message:
+        /하네스 수명주기 계약이 없습니다: metadata-only worktree quarantine/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "원본을 rename·삭제하지 않고",
+      replacement: "원본을 archive inode로 rename하고",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC sealed new-inode snapshot/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "copy fallback이 아니라",
+      replacement: "copy fallback으로",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC sealed snapshot은 fallback 아님/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "`intentDigest`와",
+      replacement: "intent와",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC generation proof chain/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "root device/inode·pending·final",
+      replacement: "pending·final",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC scratch ownership/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "helper-owned bound scratch",
+      replacement: "unowned pending",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC partial snapshot forward recovery/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "`snapshot-failed.json`에 결속하고",
+      replacement: "partial payload를 삭제하고",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC partial snapshot forward recovery/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "candidate가 nonempty일",
+      replacement: "candidate가 empty일",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC partial snapshot forward recovery/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "첫 entry 전 실패한 exact owned empty root",
+      replacement: "첫 entry 전 실패한 payload",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC failed-empty snapshot forward recovery/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "source와 helper-owned candidate가 모두 없을 때만",
+      replacement: "source가 없어도",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC absent-source exact candidate recovery/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "mutable quarantined root",
+      replacement: "discarded root",
+      message:
+        /하네스 수명주기 계약이 없습니다: OMC mutable root와 drift 중단/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "main worktree root·branch·HEAD·main·origin/main ref·clean 상태·common dir·",
+      replacement: "main worktree를",
+      message:
+        /하네스 수명주기 계약이 없습니다: quarantine transition global canary/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "device·inode·mode·size·byte digest",
+      replacement: "파일 이름",
+      message:
+        /하네스 수명주기 계약이 없습니다: quarantine Git plumbing byte proof/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "마지막 bounded pre-rename operation",
+      replacement: "root 이동 전에 한 번",
+      message:
+        /하네스 수명주기 계약이 없습니다: bounded pre-rename and post-move residue canary/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "linearizable freeze를 보장하지 않는다",
+      replacement: "모든 writer를 동결한다",
+      message:
+        /하네스 수명주기 계약이 없습니다: external writer no-freeze boundary/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "identity와 published-pending cleanup",
+      replacement: "quarantine cleanup",
+      message:
+        /하네스 수명주기 계약이 없습니다: origin all durable-boundary canary/,
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "fresh full plan과 plan token",
+      replacement: "직전 plan",
+      message:
+        /하네스 수명주기 계약이 없습니다: pre-CAS fresh full plan/,
     },
     {
       file: ".agents/skills/open-pull-request/SKILL.md",
@@ -903,6 +1094,14 @@ test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", 
       replacement:
         "node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs",
       message: /하네스 수명주기 계약이 없습니다: CI finalize 회귀 테스트/,
+    },
+    {
+      file: ".github/workflows/validate-harness.yml",
+      source:
+        "node --test .agents/skills/open-pull-request/scripts/finalize-merge.test.mjs",
+      replacement:
+        "node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
+      message: /하네스 수명주기 계약이 없습니다: CI merge helper 회귀 테스트/,
     },
     {
       file: ".github/workflows/validate-harness.yml",
@@ -923,7 +1122,7 @@ test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", 
         fs.readFileSync(target, "utf8").replace(source, replacement),
       );
       const result = runValidator(root);
-      assert.equal(result.status, 1);
+      assert.equal(result.status, 1, `${file}: ${source}`);
       assert.match(result.stderr, message);
     });
   }
@@ -931,6 +1130,18 @@ test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", 
   withFixture((root) => {
     const file =
       ".agents/skills/open-pull-request/scripts/validate-finalize.test.mjs";
+    fs.unlinkSync(path.join(root, file));
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.ok(
+      result.stderr.includes(`필수 하네스 검증 파일이 없습니다: ${file}`),
+      result.stderr,
+    );
+  });
+
+  withFixture((root) => {
+    const file =
+      ".agents/skills/open-pull-request/scripts/finalize-merge.mjs";
     fs.unlinkSync(path.join(root, file));
     const result = runValidator(root);
     assert.equal(result.status, 1);

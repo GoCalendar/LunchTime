@@ -115,9 +115,11 @@ GitHub 이슈는 댓글, 담당자, 레이블과 Project를 아우르는 비교 
 
 제한되고 멱등인 절차를 한 번 수행한다.
 
-1. PR이 설정된 저장소에 속하고 `merged_at`이 있으며 설정된 trunk를 base로,
-   기록된 승리 작업 브랜치와 입력한 exact head를 사용하고 본문에 종료 참조가
-   있는지 확인한다.
+1. PR에 `merged_at`이 있고 REST 응답의 `base.repo.full_name`과
+   `head.repo.full_name`이 모두 설정된 작업 저장소와 같으며, 설정된 trunk를
+   base로 기록된 승리 작업 브랜치와 입력한 exact head를 사용하고 본문에 종료
+   참조가 있는지 확인한다. fork·cross-repository PR과 repository identity
+   누락은 `complete`로 복구하지 않는다.
 2. GitHub 기본 `closingIssuesReferences`가 다음 page 없이 설정된 저장소의 이
    이슈 하나만 포함하는지 확인한다. 본문의 종료 참조만으로는 충분하지 않다.
 3. 작업 흐름 레이블을 `Done`으로 바꾼다.

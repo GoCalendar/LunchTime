@@ -188,6 +188,10 @@ const active = [
   "head-mismatch",
   "multiple-closing",
   "duplicate-status",
+  "wrong-base-repository",
+  "wrong-head-repository",
+  "missing-base-repository",
+  "missing-head-repository",
 ].includes(mode);
 const closedNotPlanned = mode === "closed-not-planned";
 const staleBlocked = reconcileState?.blocked ?? (mode === "blocked-stale" || mode === "reconcile-remove");
@@ -374,9 +378,27 @@ if (endpoint === "user") {
     merged_at: "2026-07-24T00:00:00Z",
     merge_commit_sha: "abc123",
     body: "Closes #1",
-    base: { ref: mode === "wrong-base" ? "work/issue-99-integration" : "main" },
+    base: {
+      ref: mode === "wrong-base" ? "work/issue-99-integration" : "main",
+      repo: {
+        full_name:
+          mode === "missing-base-repository"
+            ? undefined
+            : mode === "wrong-base-repository"
+            ? "Other/LunchTime"
+            : "Example/LunchTime",
+      },
+    },
     head: {
       ref: branch,
+      repo: {
+        full_name:
+          mode === "missing-head-repository"
+            ? undefined
+            : mode === "wrong-head-repository"
+            ? "ForkOwner/LunchTime"
+            : "Example/LunchTime",
+      },
       sha:
         mode === "head-mismatch"
           ? "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
@@ -649,9 +671,10 @@ if (endpoint === "user") {
     merged_at: "2026-07-24T00:00:00Z",
     merge_commit_sha: "abc123",
     body: "Closes #1",
-    base: { ref: "main" },
+    base: { ref: "main", repo: { full_name: "Example/LunchTime" } },
     head: {
       ref: "work/issue-1-stateful",
+      repo: { full_name: "Example/LunchTime" },
       sha: "1234567890abcdef1234567890abcdef12345678",
     },
   });
@@ -2168,6 +2191,34 @@ test("complete는 trunk가 아닌 base에 병합된 PR을 거부한다", () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /base branch.*expected trunk/);
   assert.equal(result.mutations, "");
+});
+
+test("complete는 다른 base·head repository 또는 누락된 repository identity를 거부한다", () => {
+  for (const mode of [
+    "wrong-base-repository",
+    "wrong-head-repository",
+    "missing-base-repository",
+    "missing-head-repository",
+  ]) {
+    const result = runCli(
+      [
+        "complete",
+        "1",
+        "--pr",
+        "9",
+        "--head",
+        mergedHead,
+        "--config",
+        "work-management.json",
+        "--dry-run",
+        "--json",
+      ],
+      { mode },
+    );
+    assert.equal(result.status, 1, mode);
+    assert.match(result.stderr, /repository is not the current work repository/, mode);
+    assert.equal(result.mutations, "", mode);
+  }
 });
 
 test("complete rejects a closed Issue whose state_reason is not completed", () => {
