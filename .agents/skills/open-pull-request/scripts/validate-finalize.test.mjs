@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
+  parseGitHubRepositoryFromRemoteUrl,
   parseArguments,
   readFinalizeGitProof,
   validateFinalizeSnapshot,
@@ -88,6 +89,12 @@ function snapshot(overrides = {}) {
       baseRefOid: base,
       headRefName: "work/issue-49-harness-lifecycle",
       headRefOid: head,
+      headRepository: {
+        name: "LunchTime",
+        nameWithOwner: repository,
+      },
+      headRepositoryOwner: { login: "GoCalendar" },
+      isCrossRepository: false,
       title: "docs: #49 - 하네스 finalize 계약을 추가한다",
       body: body(),
       mergeable: "MERGEABLE",
@@ -131,9 +138,20 @@ function snapshot(overrides = {}) {
             baseRefOid: base,
             headRefName: "work/issue-49-harness-lifecycle",
             headRefOid: head,
+            headRepository: { nameWithOwner: repository },
+            isCrossRepository: false,
             reviewThreads: {
-              nodes: [{ isResolved: true }, { isResolved: true }],
-              pageInfo: { hasNextPage: false },
+              totalCount: 2,
+              nodes: [
+                { id: "PRRT_fixture_1", isResolved: true },
+                { id: "PRRT_fixture_2", isResolved: true },
+              ],
+              pageInfo: {
+                hasNextPage: false,
+                hasPreviousPage: false,
+                startCursor: "cursor-1",
+                endCursor: "cursor-2",
+              },
             },
           },
         },
@@ -148,6 +166,10 @@ function snapshot(overrides = {}) {
       headTree: tree,
       main: base,
       baseIsAncestorOfHead: true,
+      originFetchRepository: repository,
+      originFetchUrlCount: 1,
+      originPushRepository: repository,
+      originPushUrlCount: 1,
     },
     ...overrides,
   };
@@ -174,6 +196,9 @@ test("현재 head의 Ready·CI·review snapshot을 finalize 입력으로 고정�
       headTree: tree,
       branch: "work/issue-49-harness-lifecycle",
       title: "docs: #49 - 하네스 finalize 계약을 추가한다",
+      updatedAt: "2026-07-25T01:00:00Z",
+      sourceRepository: repository,
+      remote: "origin",
     },
   });
 });
@@ -215,6 +240,9 @@ test("MERGED PR의 exact head를 남은 단계 복구 snapshot으로 고정한�
       headTree: tree,
       branch: "work/issue-49-harness-lifecycle",
       title: "docs: #49 - 하네스 finalize 계약을 추가한다",
+      updatedAt: "2026-07-25T01:00:00Z",
+      sourceRepository: repository,
+      remote: "origin",
       recovery: true,
       mergeCommit: merge,
       mergeTree: tree,
@@ -375,6 +403,7 @@ test("실패·대기·비어 있는 required CI snapshot을 거부한다", () =>
 test("미해결 또는 pagination이 남은 review thread snapshot을 거부한다", () => {
   const unresolved = snapshot();
   unresolved.threads.data.repository.pullRequest.reviewThreads.nodes[0] = {
+    id: "PRRT_fixture_1",
     isResolved: false,
   };
   assert.match(
@@ -389,6 +418,53 @@ test("미해결 또는 pagination이 남은 review thread snapshot을 거부한�
     joined(validateFinalizeSnapshot(paginated)),
     /다음 page가 남아/,
   );
+});
+
+test("review thread의 이전 page·잘린 totalCount·중복 id·cursor 불일치를 거부한다", () => {
+  const previousPage = snapshot();
+  previousPage.threads.data.repository.pullRequest.reviewThreads.pageInfo.hasPreviousPage =
+    true;
+  assert.match(
+    joined(validateFinalizeSnapshot(previousPage)),
+    /이전 page가 있어 첫 page 전체 snapshot이 아닙니다/,
+  );
+
+  const truncated = snapshot();
+  truncated.threads.data.repository.pullRequest.reviewThreads.totalCount = 3;
+  assert.match(
+    joined(validateFinalizeSnapshot(truncated)),
+    /totalCount와 반환된 node 수가 달라/,
+  );
+
+  const duplicate = snapshot();
+  duplicate.threads.data.repository.pullRequest.reviewThreads.nodes[1].id =
+    "PRRT_fixture_1";
+  assert.match(
+    joined(validateFinalizeSnapshot(duplicate)),
+    /node id는 비어 있지 않고 고유/,
+  );
+
+  const wrongCursor = snapshot();
+  wrongCursor.threads.data.repository.pullRequest.reviewThreads.pageInfo.startCursor =
+    null;
+  assert.match(
+    joined(validateFinalizeSnapshot(wrongCursor)),
+    /page cursor가 반환된 node와 일치하지 않습니다/,
+  );
+});
+
+test("review thread completeness 필드 누락을 부분 응답으로 거부한다", () => {
+  for (const mutate of [
+    (connection) => delete connection.totalCount,
+    (connection) => delete connection.pageInfo.hasPreviousPage,
+  ]) {
+    const value = snapshot();
+    mutate(value.threads.data.repository.pullRequest.reviewThreads);
+    assert.match(
+      joined(validateFinalizeSnapshot(value)),
+      /connection을 완전하게 읽지 못했습니다/,
+    );
+  }
 });
 
 test("required check와 review thread를 같은 repo·PR·base·head snapshot에 귀속한다", () => {
@@ -407,6 +483,8 @@ test("required check와 review thread를 같은 repo·PR·base·head snapshot에
     ["updatedAt", "2026-07-25T02:00:00Z"],
     ["baseRefOid", "d".repeat(40)],
     ["headRefOid", "e".repeat(40)],
+    ["headRepository", { nameWithOwner: "Other/Repository" }],
+    ["isCrossRepository", true],
   ]) {
     const mixed = snapshot();
     mixed.threads.data.repository.pullRequest[field] = value;
@@ -423,6 +501,70 @@ test("required check와 review thread를 같은 repo·PR·base·head snapshot에
     joined(validateFinalizeSnapshot(wrongRepository)),
     /repository.*일치하지 않습니다/,
   );
+});
+
+test("same-repository PR과 canonical origin fetch·push만 finalize한다", () => {
+  const crossRepository = snapshot();
+  crossRepository.pr.isCrossRepository = true;
+  assert.match(
+    joined(validateFinalizeSnapshot(crossRepository)),
+    /same-repository PR에서만 허용/,
+  );
+
+  const wrongHeadRepository = snapshot();
+  wrongHeadRepository.pr.headRepository = {
+    name: "LunchTime",
+    nameWithOwner: "",
+  };
+  wrongHeadRepository.pr.headRepositoryOwner = { login: "ForkOwner" };
+  assert.match(
+    joined(validateFinalizeSnapshot(wrongHeadRepository)),
+    /PR head repository가 현재 작업 저장소와 다릅니다/,
+  );
+
+  for (const [field, value] of [
+    ["originFetchRepository", "Other/Repository"],
+    ["originPushRepository", "Other/Repository"],
+    ["originFetchUrlCount", 2],
+    ["originPushUrlCount", 0],
+  ]) {
+    const invalid = snapshot();
+    invalid.gitProof = { ...invalid.gitProof, [field]: value };
+    assert.match(
+      joined(validateFinalizeSnapshot(invalid)),
+      /origin (?:fetch|push) URL이 PR source repository 하나에 정확히 귀속/,
+      field,
+    );
+  }
+});
+
+test("GitHub origin URL은 credential 없는 canonical HTTPS·SSH 형식만 허용한다", () => {
+  for (const url of [
+    "https://github.com/GoCalendar/LunchTime.git",
+    "https://github.com/GoCalendar/LunchTime",
+    "ssh://git@github.com/GoCalendar/LunchTime.git",
+    "ssh://git@github.com:22/GoCalendar/LunchTime.git",
+    "git@github.com:GoCalendar/LunchTime.git",
+  ]) {
+    assert.equal(parseGitHubRepositoryFromRemoteUrl(url), repository, url);
+  }
+  for (const url of [
+    " https://github.com/GoCalendar/LunchTime.git",
+    "https://token@github.com/GoCalendar/LunchTime.git",
+    "https://github.com:8443/GoCalendar/LunchTime.git",
+    "http://github.com/GoCalendar/LunchTime.git",
+    "git://github.com/GoCalendar/LunchTime.git",
+    "ssh://git:secret@github.com/GoCalendar/LunchTime.git",
+    "ssh://git@github.com:2222/GoCalendar/LunchTime.git",
+    "ssh://git@github-alias/GoCalendar/LunchTime.git",
+    "file:///tmp/LunchTime.git",
+    "../LunchTime",
+    "https://github.com/GoCalendar/LunchTime/extra",
+    "https://github.com/GoCalendar/LunchTime.git?token=secret",
+    "https://github.com/GoCalendar/LunchTime.git/",
+  ]) {
+    assert.equal(parseGitHubRepositoryFromRemoteUrl(url), "", url);
+  }
 });
 
 test("OPEN finalize는 exact Git base·head와 최신 origin/main proof를 요구한다", () => {
@@ -526,8 +668,14 @@ test("부분 GraphQL 응답으로 미해결 0개를 추측하지 않는다", () 
             repository: {
               pullRequest: {
                 reviewThreads: {
+                  totalCount: 0,
                   nodes: [],
-                  pageInfo: { hasNextPage: false },
+                  pageInfo: {
+                    hasNextPage: false,
+                    hasPreviousPage: false,
+                    startCursor: null,
+                    endCursor: null,
+                  },
                 },
               },
             },
@@ -568,6 +716,7 @@ test("exact Git objects에서 squash topology와 main first-parent proof를 읽�
   git(["init", "-q"]);
   git(["config", "user.name", "Fixture"]);
   git(["config", "user.email", "fixture@example.com"]);
+  git(["remote", "add", "origin", "git@github.com:GoCalendar/LunchTime.git"]);
   writeFileSync(join(root, "fixture.txt"), "base\n");
   git(["add", "--", "fixture.txt"]);
   git(["commit", "-q", "-m", "chore: #49 - base를 추가한다"]);
@@ -599,6 +748,10 @@ test("exact Git objects에서 squash topology와 main first-parent proof를 읽�
       headTree,
       main: mergeOid,
       baseIsAncestorOfHead: true,
+      originFetchRepository: repository,
+      originFetchUrlCount: 1,
+      originPushRepository: repository,
+      originPushUrlCount: 1,
       merge: mergeOid,
       mergeTree: headTree,
       mergeParents: [baseOid],

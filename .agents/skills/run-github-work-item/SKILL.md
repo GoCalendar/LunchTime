@@ -32,7 +32,7 @@ node .agents/skills/run-github-work-item/scripts/work-item.mjs check <issue>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs create --idempotency-key <key> --title <title> --body <body-file> --milestone <title> --label <label> --dry-run
 node .agents/skills/run-github-work-item/scripts/work-item.mjs create --idempotency-key <key> --title <title> --body <body-file> --milestone <title> --label <label> --confirm-plan <dry-run-token>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs start <issue> --branch <branch> --agent <marker>
-node .agents/skills/run-github-work-item/scripts/work-item.mjs complete <issue> --pr <merged-pr> --head <finalized-head>
+node .agents/skills/run-github-work-item/scripts/work-item.mjs complete <issue> --pr <merged-pr> --head <finalized-head> --repo <owner/repo>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs release <issue> --branch <branch> --agent <marker> --reason <text>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs reconcile <issue>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <body-file>
@@ -83,5 +83,9 @@ review-fix를 반복한다. 3회 뒤에도 P0/P1이 남으면 상태 전이나 �
 14. 저장소 전체 이슈를 찾을 때 관련 없는 malformed create marker는 건너뛰어
     다른 개별 이슈 생성을 막지 않는다. 선택된 이슈의 malformed·중복 marker와
     같은 idempotency key 충돌은 계속 fail-closed한다.
+15. `complete`는 REST PR의 `base.repo.full_name`과
+    `head.repo.full_name`이 모두 설정된 작업 저장소와 같을 때만 실행한다.
+    fork·cross-repository PR이나 repository identity가 누락된 응답은 branch와
+    head SHA가 같아도 완료 근거로 사용하지 않는다.
 
 정확한 이슈 본문 계약은 [issue-contract.md](references/issue-contract.md)에 있다. 상태 전이, 설정, 의존 관계 해제와 복구 규칙은 [work-item-lifecycle.md](references/work-item-lifecycle.md)에 있다. 순서가 보장되고 멱등인 MVP 등록 절차는 [bulk-registration.md](references/bulk-registration.md)에 있다.

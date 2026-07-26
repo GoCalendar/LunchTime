@@ -1,5 +1,5 @@
 # Local agent runtime state
-.omc/
+.omc
 
 # OS metadata
 .DS_Store

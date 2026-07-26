@@ -2632,6 +2632,22 @@ function completeCommand(parsed) {
       repair: ["Merge the PR successfully before completing the work item."],
     });
   }
+  const expectedRepository = context.repository.nameWithOwner.toLowerCase();
+  for (const side of ["base", "head"]) {
+    const actualRepository = String(
+      pull?.[side]?.repo?.full_name ?? "",
+    ).toLowerCase();
+    if (actualRepository !== expectedRepository) {
+      throw new WorkItemError(
+        `Pull request #${prNumber} ${side} repository is not the current work repository.`,
+        {
+          repair: [
+            "Use a same-repository merged PR verified by the finalize snapshot.",
+          ],
+        },
+      );
+    }
+  }
   if (pull.base?.ref !== context.config.branch.base) {
     throw new WorkItemError(
       `Pull request #${prNumber} base branch is "${pull.base?.ref}", expected trunk "${context.config.branch.base}".`,

@@ -41,6 +41,62 @@ function closingReferenceRepository(reference) {
   );
 }
 
+export function parseGitHubRepositoryFromRemoteUrl(remoteUrl) {
+  const raw = String(remoteUrl ?? "");
+  if (!raw || raw !== raw.trim() || /[\r\n]/.test(raw)) return "";
+
+  const scpLike = raw.match(
+    /^git@github\.com:([^/\s:]+)\/([^/\s]+?)(?:\.git)?$/i,
+  );
+  if (scpLike) {
+    const repository = `${scpLike[1]}/${scpLike[2]}`;
+    return REPOSITORY_PATTERN.test(repository) ? repository : "";
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (
+      !["https:", "ssh:"].includes(parsed.protocol) ||
+      parsed.hostname.toLowerCase() !== "github.com" ||
+      parsed.pathname.endsWith("/") ||
+      parsed.pathname.includes("//") ||
+      parsed.pathname.includes("%") ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return "";
+    }
+    if (parsed.protocol === "https:" && (parsed.username || parsed.password)) {
+      return "";
+    }
+    if (
+      parsed.protocol === "ssh:" &&
+      (parsed.username !== "git" ||
+        parsed.password ||
+        (parsed.port && parsed.port !== "22"))
+    ) {
+      return "";
+    }
+    if (parsed.protocol === "https:" && parsed.port) return "";
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length !== 2) return "";
+    const repository = segments[1].replace(/\.git$/i, "");
+    const combined = `${segments[0]}/${repository}`;
+    return REPOSITORY_PATTERN.test(combined) ? combined : "";
+  } catch {
+    return "";
+  }
+}
+
+function pullRequestHeadRepository(pr) {
+  const nameWithOwner = String(pr?.headRepository?.nameWithOwner ?? "").trim();
+  if (REPOSITORY_PATTERN.test(nameWithOwner)) return nameWithOwner;
+  const owner = String(pr?.headRepositoryOwner?.login ?? "").trim();
+  const name = String(pr?.headRepository?.name ?? "").trim();
+  const combined = `${owner}/${name}`;
+  return REPOSITORY_PATTERN.test(combined) ? combined : "";
+}
+
 function reviewThreadsConnection(response) {
   return response?.data?.repository?.pullRequest?.reviewThreads;
 }
@@ -76,6 +132,8 @@ function threadIdentity(response) {
     baseRefOid: pullRequest?.baseRefOid,
     headRefName: pullRequest?.headRefName,
     headRefOid: pullRequest?.headRefOid,
+    headRepository: pullRequest?.headRepository?.nameWithOwner,
+    isCrossRepository: pullRequest?.isCrossRepository,
   };
 }
 
@@ -90,6 +148,8 @@ function prIdentity(pr) {
     baseRefOid: pr?.baseRefOid,
     headRefName: pr?.headRefName,
     headRefOid: pr?.headRefOid,
+    headRepository: pullRequestHeadRepository(pr),
+    isCrossRepository: pr?.isCrossRepository,
   };
 }
 
@@ -128,6 +188,20 @@ function runGit(repositoryRoot, arguments_, { allowedStatuses = [0] } = {}) {
     throw new Error(`Finalize Git snapshot을 읽지 못했습니다: ${detail}`);
   }
   return result;
+}
+
+function remoteRepositoryProof(repositoryRoot, { push = false } = {}) {
+  const arguments_ = ["remote", "get-url"];
+  if (push) arguments_.push("--push");
+  arguments_.push("--all", "origin");
+  const urls = runGit(repositoryRoot, arguments_)
+    .stdout.split(/\r?\n/)
+    .filter(Boolean);
+  return {
+    count: urls.length,
+    repository:
+      urls.length === 1 ? parseGitHubRepositoryFromRemoteUrl(urls[0]) : "",
+  };
 }
 
 function readCommitSnapshot(repositoryRoot, oid) {
@@ -174,6 +248,8 @@ export function readFinalizeGitProof(
     ["merge-base", "--is-ancestor", base.commit, head.commit],
     { allowedStatuses: [0, 1] },
   ).status === 0;
+  const originFetch = remoteRepositoryProof(repositoryRoot);
+  const originPush = remoteRepositoryProof(repositoryRoot, { push: true });
 
   const proof = {
     base: base.commit,
@@ -181,6 +257,10 @@ export function readFinalizeGitProof(
     headTree: head.tree,
     main,
     baseIsAncestorOfHead: ancestor,
+    originFetchRepository: originFetch.repository,
+    originFetchUrlCount: originFetch.count,
+    originPushRepository: originPush.repository,
+    originPushUrlCount: originPush.count,
   };
   if (mode !== "merged-recovery") return proof;
 
@@ -270,6 +350,19 @@ export function validateFinalizeSnapshot({
   }
   if (pr.baseRefName !== "main") {
     errors.push("Finalize 대상 PR base는 `main`이어야 합니다.");
+  }
+  const headRepository = pullRequestHeadRepository(pr);
+  if (!headRepository) {
+    errors.push("PR snapshot에 current head repository identity가 필요합니다.");
+  } else if (
+    headRepository.toLowerCase() !== normalizedRepository.toLowerCase()
+  ) {
+    errors.push("PR head repository가 현재 작업 저장소와 다릅니다.");
+  }
+  if (pr.isCrossRepository !== false) {
+    errors.push(
+      "자동 finalize와 source branch 정리는 same-repository PR에서만 허용됩니다.",
+    );
   }
   if (!HEAD_PATTERN.test(String(pr.headRefOid ?? ""))) {
     errors.push("PR snapshot에 40자리 current head OID가 필요합니다.");
@@ -414,7 +507,10 @@ export function validateFinalizeSnapshot({
     if (
       !reviewThreads ||
       !Array.isArray(reviewThreads.nodes) ||
-      typeof reviewThreads.pageInfo?.hasNextPage !== "boolean"
+      !Number.isInteger(reviewThreads.totalCount) ||
+      reviewThreads.totalCount < 0 ||
+      typeof reviewThreads.pageInfo?.hasNextPage !== "boolean" ||
+      typeof reviewThreads.pageInfo?.hasPreviousPage !== "boolean"
     ) {
       errors.push("현재 review thread connection을 완전하게 읽지 못했습니다.");
     } else {
@@ -422,6 +518,34 @@ export function validateFinalizeSnapshot({
         errors.push(
           "review thread 조회에 다음 page가 남아 있어 미해결 0개를 증명할 수 없습니다.",
         );
+      }
+      if (reviewThreads.pageInfo.hasPreviousPage) {
+        errors.push(
+          "review thread 조회에 이전 page가 있어 첫 page 전체 snapshot이 아닙니다.",
+        );
+      }
+      if (reviewThreads.totalCount !== reviewThreads.nodes.length) {
+        errors.push(
+          "review thread totalCount와 반환된 node 수가 달라 전체 snapshot을 증명할 수 없습니다.",
+        );
+      }
+      const nodeIds = reviewThreads.nodes.map((thread) =>
+        String(thread?.id ?? "").trim(),
+      );
+      if (
+        nodeIds.some((id) => !id) ||
+        new Set(nodeIds).size !== nodeIds.length
+      ) {
+        errors.push("review thread node id는 비어 있지 않고 고유해야 합니다.");
+      }
+      const { startCursor, endCursor } = reviewThreads.pageInfo;
+      if (
+        reviewThreads.nodes.length === 0
+          ? startCursor !== null || endCursor !== null
+          : !String(startCursor ?? "").trim() ||
+            !String(endCursor ?? "").trim()
+      ) {
+        errors.push("review thread page cursor가 반환된 node와 일치하지 않습니다.");
       }
       const unresolved = reviewThreads.nodes.filter(
         (thread) => thread?.isResolved !== true,
@@ -435,6 +559,29 @@ export function validateFinalizeSnapshot({
   if (!gitProof || typeof gitProof !== "object" || Array.isArray(gitProof)) {
     errors.push("exact Git object proof가 필요합니다.");
   } else {
+    const expectedRemoteRepository = normalizedRepository.toLowerCase();
+    for (const [label, repositoryValue, urlCount] of [
+      [
+        "fetch",
+        gitProof.originFetchRepository,
+        gitProof.originFetchUrlCount,
+      ],
+      [
+        "push",
+        gitProof.originPushRepository,
+        gitProof.originPushUrlCount,
+      ],
+    ]) {
+      if (
+        urlCount !== 1 ||
+        !REPOSITORY_PATTERN.test(String(repositoryValue ?? "")) ||
+        String(repositoryValue).toLowerCase() !== expectedRemoteRepository
+      ) {
+        errors.push(
+          `origin ${label} URL이 PR source repository 하나에 정확히 귀속되지 않습니다.`,
+        );
+      }
+    }
     if (String(gitProof.base ?? "").toLowerCase() !== String(pr.baseRefOid ?? "").toLowerCase()) {
       errors.push("Git proof의 base commit이 PR base OID와 다릅니다.");
     }
@@ -499,6 +646,9 @@ export function validateFinalizeSnapshot({
       headTree: gitProof.headTree.toLowerCase(),
       branch: pr.headRefName,
       title: pr.title,
+      updatedAt: pr.updatedAt,
+      sourceRepository: headRepository,
+      remote: "origin",
       ...(mergedRecovery
         ? {
             recovery: true,
