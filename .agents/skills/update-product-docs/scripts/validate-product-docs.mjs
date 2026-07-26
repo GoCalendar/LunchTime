@@ -670,6 +670,472 @@ function readVisibleH2Sections(content) {
   }));
 }
 
+const harnessRoutingDocuments = [
+  {
+    file: "AGENTS.md",
+    section: "PR과 작업 완료",
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "8. 병합과 정리",
+  },
+  {
+    file: "docs/development/01_harness_guide.md",
+    section: "규칙 소유와 링크",
+  },
+];
+const harnessDetailOwners = [
+  {
+    label: "이슈·Project 상태 전이",
+    name: "run-github-work-item",
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+  },
+  {
+    label: "PR 쓰기·exact-head finalize·원격·로컬 정리",
+    name: "open-pull-request",
+    file: ".agents/skills/open-pull-request/SKILL.md",
+  },
+];
+const forbiddenFinalizeDetailTokens = [
+  "snapshot-scratch",
+  "snapshot-attempt.json",
+  "pending.omc",
+  "current.omc",
+  "failed-empty",
+  "worktree-quarantine",
+  "beforeRefDelete",
+  "GIT_INDEX_FILE",
+  "statusCheckRollup",
+  "merged-recovery",
+];
+const finalizeDetailOwnerFile =
+  ".agents/skills/open-pull-request/SKILL.md";
+
+function sourceLineNumber(content, offset) {
+  return content.slice(0, offset).split("\n").length;
+}
+
+function maskStrictHarnessCode(file, content) {
+  const fencedRanges = [];
+  let openFence;
+  let offset = 0;
+
+  for (const match of content.matchAll(/[^\n]*(?:\n|$)/g)) {
+    const rawLine = match[0];
+    if (!rawLine) break;
+    const line = rawLine.replace(/\n$/, "");
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+
+    if (!openFence && fence) {
+      const marker = fence[1];
+      if (marker[0] === "`" && fence[2].includes("`")) {
+        errors.push(
+          `${file}:${sourceLineNumber(content, offset)}: backtick fence info에는 backtick을 둘 수 없습니다.`,
+        );
+        fencedRanges.push({
+          start: offset,
+          end: offset + rawLine.length,
+        });
+      } else {
+        openFence = {
+          character: marker[0],
+          length: marker.length,
+          start: offset,
+          line: sourceLineNumber(content, offset),
+        };
+      }
+    } else if (
+      openFence &&
+      fence &&
+      fence[1][0] === openFence.character &&
+      fence[1].length >= openFence.length &&
+      fence[2].trim() === ""
+    ) {
+      fencedRanges.push({
+        start: openFence.start,
+        end: offset + rawLine.length,
+      });
+      openFence = undefined;
+    }
+    offset += rawLine.length;
+  }
+
+  if (openFence) {
+    errors.push(
+      `${file}:${openFence.line}: 하네스 라우팅 문서의 fenced code block이 종결되지 않았습니다.`,
+    );
+    fencedRanges.push({ start: openFence.start, end: content.length });
+  }
+
+  const withoutFences = maskRanges(content, fencedRanges);
+  const escapedBacktick = withoutFences.indexOf("\\`");
+  if (escapedBacktick >= 0) {
+    errors.push(
+      `${file}:${sourceLineNumber(content, escapedBacktick)}: 하네스 라우팅 문서에는 escaped backtick을 사용할 수 없습니다.`,
+    );
+  }
+  const inlineCodeRanges = scanInlineCodeRanges(withoutFences);
+  for (const range of inlineCodeRanges) {
+    if (withoutFences.slice(range.start, range.end).includes("\n")) {
+      errors.push(
+        `${file}:${sourceLineNumber(content, range.start)}: 하네스 라우팅 문서의 inline code span은 한 줄 안에서 종결해야 합니다.`,
+      );
+    }
+  }
+  const withoutCode = maskRanges(withoutFences, inlineCodeRanges);
+  const unmatchedBacktick = withoutCode.indexOf("`");
+  if (unmatchedBacktick >= 0) {
+    errors.push(
+      `${file}:${sourceLineNumber(content, unmatchedBacktick)}: 하네스 라우팅 문서의 inline code span이 종결되지 않았습니다.`,
+    );
+  }
+  const ambiguousFence = withoutCode.match(/`{3,}|~{3,}/);
+  if (ambiguousFence) {
+    errors.push(
+      `${file}:${sourceLineNumber(content, ambiguousFence.index)}: 하네스 라우팅 문서에는 top-level fenced code만 사용할 수 있습니다.`,
+    );
+  }
+  return withoutCode;
+}
+
+function firstPatternMatch(text, pattern) {
+  pattern.lastIndex = 0;
+  return pattern.exec(text);
+}
+
+function validateStrictHarnessSyntax(file, content) {
+  for (const [needle, message] of [
+    ["\r", "CR line ending"],
+    ["\t", "tab"],
+  ]) {
+    const offset = content.indexOf(needle);
+    if (offset >= 0) {
+      errors.push(
+        `${file}:${sourceLineNumber(content, offset)}: 하네스 라우팅 문서에는 ${message}을 사용할 수 없습니다.`,
+      );
+    }
+  }
+
+  const visible = maskStrictHarnessCode(file, content);
+  const syntaxChecks = [
+    {
+      pattern: /[<>]/g,
+      message:
+        "code 밖의 raw HTML·autolink·blockquote 문법을 사용할 수 없습니다.",
+    },
+    {
+      pattern: /\[[^\]\n]+\][ \t]*:/g,
+      message: "reference 정의를 사용할 수 없습니다.",
+    },
+    {
+      pattern: /!?\[[^\]\n]+\](?!\()/g,
+      message:
+        "reference-style·shortcut link를 사용할 수 없습니다. canonical inline link를 사용하세요.",
+    },
+    {
+      pattern:
+        /!?\[[^\]\n]*\]\((?![^()\s]+\))/g,
+      message:
+        "inline link는 공백·괄호·title이 없는 한 줄 canonical target만 사용할 수 있습니다.",
+    },
+    {
+      pattern: /^ {0,3}(?:=+|-+)[ \t]*$/gm,
+      message:
+        "setext heading·thematic break를 사용할 수 없습니다. top-level ATX heading을 사용하세요.",
+    },
+    {
+      pattern:
+        /^\s*(?:[-+*]|\d+[.)])[ \t]+#{1,6}(?:[ \t]+|$)/gm,
+      message:
+        "list container 안에 heading을 둘 수 없습니다. top-level ATX heading을 사용하세요.",
+    },
+    {
+      pattern: /^ {1,3}#{1,6}(?:[ \t]+|$)/gm,
+      message:
+        "들여쓴 ATX heading을 둘 수 없습니다. heading은 column 0에서 시작하세요.",
+    },
+    {
+      pattern: /^#{1,6}[ \t]+.*[ \t]+#+[ \t]*$/gm,
+      message:
+        "ATX heading의 closing # sequence를 사용할 수 없습니다.",
+    },
+    {
+      pattern: /^ {4,}#{1,6}(?:[ \t]+|$)/gm,
+      message:
+        "들여쓴 heading을 둘 수 없습니다. top-level ATX heading을 사용하세요.",
+    },
+  ];
+
+  for (const { pattern, message } of syntaxChecks) {
+    const match = firstPatternMatch(visible, pattern);
+    if (match) {
+      errors.push(
+        `${file}:${sourceLineNumber(content, match.index)}: ${message}`,
+      );
+    }
+  }
+  return visible;
+}
+
+function readStrictH2Sections(content, visibleContent) {
+  const matches = [
+    ...visibleContent.matchAll(/^## (?!#)(.+?)[ \t]*$/gm),
+  ];
+  return matches.map((match, index) => ({
+    heading: match[1],
+    content: content.slice(
+      match.index + match[0].length,
+      matches[index + 1]?.index ?? content.length,
+    ),
+    visibleContent: visibleContent.slice(
+      match.index + match[0].length,
+      matches[index + 1]?.index ?? visibleContent.length,
+    ),
+  }));
+}
+
+function normalizeFinalizeDetailText(text) {
+  const decoded = text
+    .replace(
+      /&#(?:([0-9]{1,7})|[xX]([0-9a-fA-F]{1,6}));/g,
+      (match, decimal, hexadecimal) => {
+        const value = Number.parseInt(
+          decimal ?? hexadecimal,
+          hexadecimal ? 16 : 10,
+        );
+        if (
+          !Number.isInteger(value) ||
+          value < 0 ||
+          value > 0x10ffff ||
+          (value >= 0xd800 && value <= 0xdfff)
+        ) {
+          return match;
+        }
+        return String.fromCodePoint(value);
+      },
+    )
+    .replace(
+      /&(period|hyphen|lowbar|sol|tab|newline);/gi,
+      (match, name) => {
+        const entities = {
+          period: ".",
+          hyphen: "-",
+          lowbar: "_",
+          sol: "/",
+          tab: " ",
+          newline: " ",
+        };
+        return entities[name.toLowerCase()] ?? match;
+      },
+    )
+    .replace(/&[A-Za-z][A-Za-z0-9]+;/g, "")
+    .replace(
+      /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g,
+      "$1",
+    );
+  return decoded
+    .replace(/[\s\p{Cf}`*_~]/gu, "")
+    .toLowerCase();
+}
+
+function finalizeDetailTextVariants(text) {
+  return [
+    normalizeFinalizeDetailText(text),
+    normalizeFinalizeDetailText(
+      text.replace(
+        /!?\[([^\]\n]*)\]\([^)\n]*\)/g,
+        "$1",
+      ),
+    ),
+  ];
+}
+
+function visibleInlineLinkLabels(text) {
+  return text
+    .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "")
+    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1");
+}
+
+function normalizeHarnessHeadingText(text) {
+  return normalizeFinalizeDetailText(
+    visibleInlineLinkLabels(text),
+  );
+}
+
+function validateHarnessOwnerLinks(file, section) {
+  const resources = findVisibleMarkdownResources(
+    section.visibleContent,
+  );
+
+  for (const owner of harnessDetailOwners) {
+    const canonicalTarget = path
+      .relative(path.dirname(file), owner.file)
+      .split(path.sep)
+      .join("/");
+    const literal = `[${owner.name}](${canonicalTarget})`;
+    const literalCount =
+      section.visibleContent.split(literal).length - 1;
+    const labelCount = resources.filter(
+      (resource) => resource.label === owner.name,
+    ).length;
+    const targetCount = resources.filter(
+      (resource) => resource.target === canonicalTarget,
+    ).length;
+    const exactCount = resources.filter(
+      (resource) =>
+        !resource.isImage &&
+        resource.label === owner.name &&
+        resource.target === canonicalTarget,
+    ).length;
+    let ownerIdentity;
+    try {
+      ownerIdentity = fs.realpathSync(path.join(root, owner.file));
+    } catch {
+      ownerIdentity = null;
+    }
+    const physicalTargetCount = resources.filter((resource) => {
+      if (ownerIdentity === null) return false;
+      const resolved = resolveLocalMarkdownTarget(
+        file,
+        resource.target,
+      );
+      if (!resolved) return false;
+      try {
+        return fs.realpathSync(resolved) === ownerIdentity;
+      } catch {
+        return false;
+      }
+    }).length;
+
+    if (
+      literalCount !== 1 ||
+      labelCount !== 1 ||
+      targetCount !== 1 ||
+      exactCount !== 1 ||
+      physicalTargetCount !== 1
+    ) {
+      errors.push(
+        `${file}: ${owner.label}의 canonical inline owner 링크 '${literal}'가 정확히 하나 필요합니다.`,
+      );
+    }
+  }
+}
+
+function validateApprovalZeroContract(file, section) {
+  const normalized = visibleInlineLinkLabels(
+    section.visibleContent,
+  )
+    .trim()
+    .replace(/\s+/g, " ");
+  const compactRaw = normalizeFinalizeDetailText(section.content);
+  const approvalPhrase =
+    "필수 승인 수는 1인 운영을 막지 않도록 0으로 유지합니다.";
+  const threadPhrase =
+    "승인 수와 무관하게 생성된 리뷰 대화는 모두 해결해야 합니다.";
+  const approvalCount = normalized.split(approvalPhrase).length - 1;
+  const threadCount = normalized.split(threadPhrase).length - 1;
+  const approvalMentions =
+    normalized.split("필수 승인 수").length - 1;
+  const threadMentions =
+    normalized.split("승인 수와 무관하게").length - 1;
+  const rawApprovalMentions =
+    compactRaw.split(
+      normalizeFinalizeDetailText("필수 승인 수"),
+    ).length - 1;
+  const rawThreadMentions =
+    compactRaw.split(
+      normalizeFinalizeDetailText("승인 수와 무관하게"),
+    ).length - 1;
+
+  if (
+    approvalCount !== 1 ||
+    threadCount !== 1 ||
+    approvalMentions !== 1 ||
+    threadMentions !== 1 ||
+    rawApprovalMentions !== 1 ||
+    rawThreadMentions !== 1
+  ) {
+    errors.push(
+      `${file}: 병합과 정리에는 필수 승인 수 0과 생성된 리뷰 대화 해결 계약이 각각 정확히 하나 필요합니다.`,
+    );
+  }
+}
+
+function validateHarnessRoutingBoundaries() {
+  const ownerPath = path.join(root, finalizeDetailOwnerFile);
+  const ownerContent = isFile(finalizeDetailOwnerFile)
+    ? fs.readFileSync(ownerPath, "utf8")
+    : "";
+  for (const token of forbiddenFinalizeDetailTokens) {
+    if (!ownerContent.includes(token)) {
+      errors.push(
+        `${finalizeDetailOwnerFile}: finalize 상세 owner 토큰 '${token}'이 없습니다.`,
+      );
+    }
+  }
+
+  for (const { file, section } of harnessRoutingDocuments) {
+    if (!isFile(file)) {
+      errors.push(`필수 하네스 라우팅 문서가 없습니다: ${file}`);
+      continue;
+    }
+
+    const content = fs.readFileSync(path.join(root, file), "utf8");
+    const visibleContent = validateStrictHarnessSyntax(file, content);
+    const normalizedDetailTexts =
+      finalizeDetailTextVariants(content);
+    for (const token of forbiddenFinalizeDetailTokens) {
+      if (
+        !normalizedDetailTexts.some((normalized) =>
+          normalized.includes(normalizeFinalizeDetailText(token)),
+        )
+      ) {
+        continue;
+      }
+      const rawOffset = content
+        .toLowerCase()
+        .indexOf(token.toLowerCase());
+      const location =
+        rawOffset >= 0
+          ? `:${sourceLineNumber(content, rawOffset)}`
+          : "";
+      errors.push(
+        `${file}${location}: finalize 내부 토큰 '${token}'을 재복제할 수 없습니다. 상세 계약은 ${finalizeDetailOwnerFile}가 소유합니다.`,
+      );
+    }
+
+    const allSections = readStrictH2Sections(
+      content,
+      visibleContent,
+    );
+    const sections = allSections.filter(
+      (candidate) => candidate.heading === section,
+    );
+    const headingSource = maskRanges(
+      content,
+      scanFencedBlockRanges(content),
+    );
+    const renderedHeadingCount = [
+      ...headingSource.matchAll(/^## (?!#)(.+?)[ \t]*$/gm),
+    ].filter(
+      (match) =>
+        normalizeHarnessHeadingText(match[1]) ===
+        normalizeHarnessHeadingText(section),
+    ).length;
+    if (sections.length !== 1 || renderedHeadingCount !== 1) {
+      errors.push(
+        `${file}: 하네스 owner 라우팅 구역은 plain-text top-level H2로 정확히 하나여야 합니다: ${section} (canonical ${sections.length}개, rendered ${renderedHeadingCount}개)`,
+      );
+      continue;
+    }
+
+    validateHarnessOwnerLinks(file, sections[0]);
+    if (file === "CONTRIBUTING.md") {
+      validateApprovalZeroContract(file, sections[0]);
+    }
+  }
+}
+
 function validateHarnessSteps(file) {
   const absolutePath = path.join(root, file);
   if (!isFile(file)) return;
@@ -923,7 +1389,8 @@ function validateHarnessOrchestration(file) {
       "사용자 결과·수용 동작",
       "상태·권한·실패·복구·보존·보안",
       "작업 범위·경로·행동 시나리오·검증 계획",
-      "상태 전이·GitHub 쓰기·재조회·복구 명령",
+      "이슈·Project 상태 전이·재조회·복구",
+      "PR 쓰기·exact-head finalize·원격·로컬 정리",
       "PR의 고정 필드",
       "CI의 결정적 증거",
     ];
@@ -1817,6 +2284,7 @@ for (const file of developmentFiles) {
 }
 validateHarnessSteps(developmentFiles[0]);
 validateHarnessOrchestration(developmentFiles[0]);
+validateHarnessRoutingBoundaries();
 validateHarnessSkillContracts();
 
 for (const file of markdownFiles) {

@@ -33,12 +33,10 @@
 9. `commit-work-item`으로 의도한 경로만 stage해 원자적으로 커밋합니다.
 10. `open-pull-request`로 검증된 본문을 만들고 PR과 필수 CI를 통과합니다.
     PR 생성·갱신만 요청받았다면 여기서 멈춥니다.
-11. 완료·병합 요청에서는 같은 Skill이 same-repository source·remote와 전체
-    review snapshot을 먼저 검증합니다. 그 snapshot에 결속된 argv 기반
-    helper로 exact-head squash merge한 뒤 원격 branch CAS,
-    `run-github-work-item complete`, 로컬 정리 순으로 진행합니다. HEAD·local
-    ref OID가 검증한 head와 같은 clean worktree는 `.omc/`만 남았을 때 Git
-    common dir에 원자 보존하고, local branch는 old-OID CAS로 정리합니다.
+11. 완료·병합 요청에서는 같은 Skill이 current head·독립 리뷰·필수 CI와
+    same-repository 경계를 다시 검증합니다. exact-head squash merge 한 번,
+    원격 branch 정리, `run-github-work-item complete`, 사용자 상태를 보존하는
+    로컬 정리 순으로 진행합니다.
 
 어느 단계든 사전 조건이나 검증이 실패하면 다음 단계로 넘어가지 않습니다.
 실패한 명령을 반복 실행하지 않고 실제 상태와 복구 안내를 먼저 확인합니다.
@@ -178,85 +176,30 @@ diff와 실제 테스트 결과를 제공해 수행합니다. 기대 답을 주�
 ## 8. 병합과 정리
 
 - PR 생성·갱신만 요청받았으면 병합하지 않습니다. 완료·병합 또는 end-to-end
-  요청에만 `open-pull-request`의 finalize 계약을 사용합니다.
-- base `main`인 Ready PR의 정확한 현재 head가 독립 리뷰 snapshot과 일치하고,
-  필수 CI가 통과하며 미해결 review thread가 0개이고 제목·본문·종료 참조가
-  재검증된 경우에만 병합합니다. source repository와 canonical `origin`
-  fetch·push가 모두 작업 저장소인 same-repository PR만 자동 finalize합니다.
-  required check는 같은 PR head의 `statusCheckRollup` run에, thread 응답은
-  같은 repo·PR·base·head·source·`updatedAt`에 귀속되고 `totalCount`와
-  반환된 고유 node 수가 같으며 이전·다음 page가 없어야 합니다.
-- merge mutation과 `complete`에는 검증된 repository를 명시적으로 전달해
-  cwd나 `GH_REPO` 환경이 다른 저장소의 같은 PR 번호로 해석되지 않게 합니다.
-- GitHub의 필수 `validate` 상태 검사는 최신 `main`을 기준으로 통과해야
-  합니다. base가 앞서가면 변경을 다시 검증한 뒤에만 병합합니다.
-- 필수 승인 수는 1인 운영을 막지 않도록 0으로 두지만, 생성된 리뷰 대화는
-  모두 해결해야 합니다.
-- `main`에는 squash merge만 사용해 이슈당 하나의 결과가 남게 합니다.
-- squash 제목은 풀 리퀘스트 제목의 커밋 컨벤션을 유지합니다.
-- 검증한 exact head에 대해 squash merge를 한 번만 실행하고, 응답 실패나
-  불명확 상태에서는 재시도하기 전에 PR·원격 branch 상태를 재조회합니다.
-- 이미 `MERGED`인 PR에서 재개할 때는 `mergedAt`·merge commit·exact
-  head/branch·review-head·Ready 본문·종료 참조를 recovery mode로 검증하고,
-  merge commit의 단일 parent가 PR base이고 tree가 exact head와 같으며 제목·
-  actor·`origin/main` first-parent 포함이 일치하는 squash topology도
-  검증합니다. 병합 전용 CI·review thread 입력은 다시 판정하지 않습니다. exact head를
-  저장소를 명시한 `complete --dry-run --head --repo`로 선점·담당자·PR
-  연결을 확인한 뒤 merge를
-  반복하지 않은 채 원격 ref 확인부터 이어갑니다. GitHub auto-close로 이슈가
-  `completed` 종료된 상태는 다시 열지 않습니다. issue worktree가 이미 없으면
-  clean `main` worktree에서 재개할 수 있습니다.
-- 병합된 원격 브랜치는 `finalize-remote-branch.mjs`가 credential 없는
-  canonical fetch·push repository와 고정한 push URL·plan token을 재검증하고
-  현재 OID가 exact head와 같은 경우에만 그 URL로 lease/CAS 삭제합니다.
-  branch·remote 설정이 이동·재생성됐으면 삭제하지 않습니다. 그 뒤에만
-  이슈를 `Done`으로 만들고 후행 이슈의 차단 상태를 갱신합니다.
-- `complete` 성공 뒤 `finalize-local-cleanup.mjs`가 explicit repository를
-  포함한 정확한 main·issue worktree, branch와 두 OID를 다시 확인합니다.
-  `origin` fetch·push는 각각 정확히 하나인 credential 없는 canonical URL이며
-  같은 repository여야 합니다. raw URL은 저장·출력하지 않고 fingerprint는
-  plan token과 runtime canary에만 결속합니다. durable core에는 explicit
-  repository만 두고 archive key는 repo·URL과 무관한 stable local locator
-  identity로 유지합니다. repository 변경은 core collision으로 중단하지만 같은
-  repository의 canonical URL 변경은 새 dry-run으로 복구할 수 있습니다. 일반
-  상태가 clean이고 유일한 ignored root가 `.omc`이면 source를 삭제·이동하지
-  않고 helper-owned 새 inode sealed snapshot을 Git common dir의 append-only
-  generation으로 만들며 content
-  digest, durable intent·receipt와 전체 generation chain을 검증합니다. final
-  namespace 밖 `snapshot-scratch/`의 nonce root에 device/inode ownership과
-  durable attempt를 먼저 결속하고 그 exact bound scratch에서만 copy합니다.
-  nonempty 실패 candidate만 `partial`, 첫 entry 전 실패한 exact empty
-  candidate는 `failed-empty` orphan으로 attempt·root·failed proof를 보존합니다.
-  그 뒤 현재 source가 있으면 preserved generation을, 없으면 truthful empty
-  generation을 append합니다. attempt 전 중단된 empty scratch는 inert residue로
-  보존하고 payload로 채택하지 않습니다. receipt-less preserved intent에서
-  source가 사라져도 exact candidate가 있으면 nonempty partial은 `partial`
-  orphan, exact empty failure는 `failed-empty` orphan, complete candidate는
-  preserved로 봉인하고 truthful empty generation을 잇습니다. source와
-  candidate가 모두 없을 때만 fail-closed합니다. `.omc`가
-  없어도 빈 generation을 만든 뒤 mutable 원본이 남은
-  exact worktree root와
-  `<git-common-dir>/worktrees/<id>` metadata를 각각 append-only quarantine으로
-  atomic no-replace 이동합니다. root `.git` marker와 metadata의
-  `commondir`·`gitdir`·`HEAD` byte digest·inode도 intent에 결속하고 이동 뒤
-  재작성하지 않습니다. `git worktree remove`와 `prune`은 호출하지 않고
-  registration 부재 뒤 old-OID local ref CAS만 수행합니다. origin
-  fingerprint와 archive proof는 identity·pending cleanup, generation
-  intent·container, attempt, copy 시작·종료, scratch→pending, outcome,
-  pending→current, generation receipt, quarantine intent·root·metadata·
-  receipt와 ref CAS의 모든 durable boundary 직전·직후에 확인합니다. root 이동
-  직전에는 origin canary 뒤 일반 residue scan을 마지막 bounded operation으로
-  실행합니다. 이동한 exact root와 current metadata/index를 명시한 post-move
-  scan은 root·metadata·receipt hook 뒤와 ref CAS 직전에 반복합니다. `.omc`
-  밖 residue가 생기면 ref와 residue를 유지하고 사용자가 제거·re-home할 때까지
-  복구를 중단하며 자동 삭제·이동·reset·stash하지 않습니다. 외부 writer freeze
-  lease가 없어 scan과 rename/CAS 사이의 완전한 동결은 보장하지 않습니다. ref
-  CAS 직전에는 fresh full plan과 원래 plan token의 전체 일치를 요구합니다. 다른
-  ignored·untracked·tracked 상태, 신뢰되지 않은 symlink·hardlink·special
-  file, snapshot 중 source 변경, ownership 없는 pending·current, nonempty
-  unbound scratch, empty `partial`, nonempty `failed-empty`, repository·origin
-  drift, archive·quarantine 충돌이나 불명확한 대상은 이동·삭제하지 않습니다.
-  cross-filesystem 이동의 destructive copy fallback은 사용하지 않습니다.
+  요청에만
+  [open-pull-request](.agents/skills/open-pull-request/SKILL.md)의 finalize
+  계약을 사용합니다.
+- base가 `main`인 Ready PR의 현재 head가 독립 리뷰와 일치하고 필수 CI가
+  통과하며 모든 리뷰 대화, 제목·본문·종료 참조와 same-repository 경계가
+  재검증된 경우에만 병합합니다.
+- 필수 승인 수는 1인 운영을 막지 않도록 0으로 유지합니다. 승인 수와 무관하게
+  생성된 리뷰 대화는 모두 해결해야 합니다.
+- `main`에는 PR 제목을 사용한 exact-head squash merge를 한 번만 실행합니다.
+  응답이 실패하거나 불명확하면 현재 PR·branch 상태를 먼저 재조회하고 완료된
+  쓰기를 반복하지 않습니다.
+- PR 쓰기·병합, 원격 branch 정리와 `complete` 뒤 로컬 worktree·branch
+  정리는 `open-pull-request`가 소유합니다. 병합과 원격 branch 정리가 확인된
+  뒤 이슈 레이블·Project 상태·이슈 종료와 후행 의존성 전이는
+  [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)의
+  `complete`가 소유합니다.
+- 병합 또는 `complete`가 이미 확인된 복구에서는 해당 단계를 반복하지 않고
+  검증된 다음 단계부터 재개합니다.
+- 로컬 정리는 정확히 식별한 clean 대상만 다루고 `.omc`와 사용자 소유 상태를
+  보존합니다. dirty·잔여물·신원 drift·불명확한 상태에서는 자동
+  삭제·이동·reset·stash하지 않고 중단합니다.
+- 상세 Ready 검증, finalize, 원격·로컬 정리와 복구 상태의 단일 정본은
+  `open-pull-request` Skill입니다. 이 문서는 기여자가 지켜야 할 순서와 안전
+  경계만 소유합니다.
 
 ## 9. 예외
 
