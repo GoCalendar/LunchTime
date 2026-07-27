@@ -27,6 +27,10 @@ let createStatePath;
 let createLogPath;
 let createBodyPath;
 const mergedHead = "1234567890abcdef1234567890abcdef12345678";
+const toolingTracePrefix =
+  "해당 없음 — 제품 동작·PRD·Policy 추적 대상이 아닌 도구 작업:";
+const toolingSourceGrammarPattern =
+  /tooling-only 비적용 본문은 제한된 fail-closed Markdown 소스 문법만 허용합니다/;
 
 before(() => {
   fixtureDirectory = mkdtempSync(join(tmpdir(), "lunchtime-work-item-"));
@@ -635,6 +639,16 @@ function projectPayload() {
             optionId,
           },
         },
+        ...Array.from(
+          { length: state.projectOtherInProgress || 0 },
+          (_, index) => ({
+            id: "ITEM_OTHER_" + index,
+            fieldValueByName: {
+              name: "In Progress",
+              optionId: "OPTION_IN_PROGRESS",
+            },
+          }),
+        ),
       ],
     },
   };
@@ -650,6 +664,69 @@ function addLabels(number, labels) {
 function removeLabel(number, label) {
   const target = number === 1 ? state.source : state["dependent" + number];
   target.labels = target.labels.filter((current) => current !== label);
+}
+
+function recordStartMutationBoundary() {
+  if (!state.driftAfterStartMutation) return;
+  state.startMutationCount = (state.startMutationCount || 0) + 1;
+  if (state.startMutationCount !== state.driftAfterStartMutation) return;
+  if (state.driftTypeAfterStartMutation) {
+    state.source.labels = state.source.labels.map((current) =>
+      current === "type:chore" ? "type:feat" : current,
+    );
+  }
+  if (state.bodyAfterStartMutation) {
+    state.issueBody = state.bodyAfterStartMutation;
+  }
+  if (state.startBoundaryDrift === "assignee") {
+    state.source.assignees = ["other-user"];
+  } else if (state.startBoundaryDrift === "issue-state") {
+    state.source.state = "closed";
+    state.source.stateReason = "not_planned";
+  } else if (state.startBoundaryDrift === "workflow-label") {
+    state.source.labels = state.source.labels.filter(
+      (label) => !label.startsWith("status:"),
+    );
+    state.source.labels.push("status:done");
+  } else if (state.startBoundaryDrift === "native-blocker") {
+    state.sourceBlockers = [4];
+  } else if (state.startBoundaryDrift === "derived-blocked") {
+    if (!state.source.labels.includes("dependency:blocked")) {
+      state.source.labels.push("dependency:blocked");
+    }
+  } else if (state.startBoundaryDrift === "project-status") {
+    state.projectStatus = "Done";
+  } else if (state.startBoundaryDrift === "project-capacity") {
+    state.projectOtherInProgress = 2;
+  } else if (state.startBoundaryDrift === "claim") {
+    const claim = (state.comments["1"] || []).find((comment) =>
+      comment.body.startsWith("<!-- lunchtime-work-item:start issue=1 "),
+    );
+    if (claim) {
+      const epoch = /epoch=(\\d+)/.exec(claim.body)?.[1];
+      const token = /token=([a-f0-9]{64})/.exec(claim.body)?.[1];
+      const branch = /- Branch: \`([^\`]+)\`/.exec(claim.body)?.[1];
+      const agent = /- Agent: \`([^\`]+)\`/.exec(claim.body)?.[1];
+      state.comments["1"].push({
+        id: state.nextCommentId,
+        user: { login: "fixture-user" },
+        body: [
+          "<!-- lunchtime-work-item:release issue=1 epoch=" +
+            epoch +
+            " token=" +
+            token +
+            " -->",
+          "작업 선점을 해제합니다.",
+          "",
+          "- Branch: \`" + branch + "\`",
+          "- Agent: \`" + agent + "\`",
+          "- Released by: @fixture-user",
+          "- Reason: adversarial drift",
+        ].join("\\n"),
+      });
+      state.nextCommentId += 1;
+    }
+  }
 }
 
 if (args[0] !== "api") {
@@ -688,6 +765,7 @@ if (endpoint === "user") {
         : input.variables.optionId === "OPTION_DONE"
           ? "Done"
           : "Todo";
+    recordStartMutationBoundary();
     save();
     output({
       data: {
@@ -752,13 +830,14 @@ if (endpoint === "user") {
     if (input.assignees) state.source.assignees = [...input.assignees];
     if (input.state) state.source.state = input.state;
     if (input.state_reason) state.source.stateReason = input.state_reason;
+    recordStartMutationBoundary();
     save();
     output(issue(1));
   } else if (blockersMatch) {
     const number = Number(blockersMatch[1]);
     output(
       number === 1
-        ? []
+        ? (state.sourceBlockers || []).map((blocker) => issue(blocker))
         : number === 2
           ? [issue(1)]
           : number === 3
@@ -779,10 +858,12 @@ if (endpoint === "user") {
     };
     state.nextCommentId += 1;
     state.comments[number].push(comment);
+    recordStartMutationBoundary();
     save();
     output(comment);
   } else if (labelsMatch && method === "POST") {
     addLabels(Number(labelsMatch[1]), input.labels);
+    recordStartMutationBoundary();
     save();
     output(labelObjects(input.labels));
   } else if (removeLabelMatch && method === "DELETE") {
@@ -790,6 +871,7 @@ if (endpoint === "user") {
       Number(removeLabelMatch[1]),
       decodeURIComponent(removeLabelMatch[2]),
     );
+    recordStartMutationBoundary();
     save();
     output({});
   } else {
@@ -1079,7 +1161,10 @@ after(() => {
   rmSync(fixtureDirectory, { recursive: true, force: true });
 });
 
-function runCli(args, { mode = "todo", input } = {}) {
+function runCli(
+  args,
+  { mode = "todo", input, extraEnv = {} } = {},
+) {
   writeFileSync(mutationLog, "");
   const useReconcileState =
     mode === "reconcile-remove" || mode === "reconcile-add";
@@ -1101,6 +1186,7 @@ function runCli(args, { mode = "todo", input } = {}) {
         ? { MOCK_RECONCILE_STATE: reconcileStatePath }
         : {}),
       ...(mode === "timeout" ? { WORK_ITEM_TEST_TIMEOUT_MS: "50" } : {}),
+      ...extraEnv,
     },
   });
   return {
@@ -1127,7 +1213,9 @@ function resetLifecycleState() {
       labels: ["status:todo", "dependency:blocked", "custom:dependent"],
     },
     blocker4: { state: "open" },
+    sourceBlockers: [],
     projectStatus: "Todo",
+    projectOtherInProgress: 0,
     comments: { 1: [], 2: [], 3: [] },
     nextCommentId: 100,
   };
@@ -1180,6 +1268,7 @@ function resetCreateState(overrides = {}) {
       "status:done",
       "dependency:blocked",
       "type:docs",
+      "type:chore",
       "area:quality",
     ],
     milestones: [{ number: 3, title: "MVP" }],
@@ -1241,6 +1330,7 @@ function runCreateCli(args) {
 
 function createArgs({
   key = "docs-harness-create",
+  type = "type:docs",
   project = false,
   blockedBy = false,
 } = {}) {
@@ -1255,7 +1345,7 @@ function createArgs({
     "--milestone",
     "MVP",
     "--label",
-    "type:docs",
+    type,
     "--label",
     "area:quality",
     ...(blockedBy ? ["--blocked-by", "7"] : []),
@@ -1326,12 +1416,83 @@ function plannedBody(
     );
 }
 
+function toolingBody({
+  traceReason = "개발 하네스의 검증과 이슈 생명주기 계약만 변경한다.",
+  impactReason = "제품 동작과 PRD·Policy 정본을 변경하지 않는다.",
+  allowedPath = ".agents/skills/run-github-work-item/SKILL.md",
+} = {}) {
+  return validBody()
+    .replace(
+      "## 완료 조건\n충분히 구체적인 작업 설명을 작성합니다.",
+      [
+        "## 완료 조건",
+        "Happy path",
+        "- 조건(Given): 제품 동작과 무관한 도구 작업이다.",
+        "- 행동(When): type:chore로 이슈 본문을 검증한다.",
+        "- 결과(Then): 제품 계약 ID 없이 구체적 비적용 근거를 검증한다.",
+        `- 추적 ID: ${toolingTracePrefix} ${traceReason}`,
+        "- 검증 계획: validate-body와 create dry-run을 실행한다.",
+      ].join("\n"),
+    )
+    .replace(
+      "## 추적성\nPRD-01-FR-01 POL-02-R-04 요구사항을 구현합니다.",
+      `## 추적성\n- ${toolingTracePrefix} ${traceReason}`,
+    )
+    .replace(
+      "## 변경 허용 경로\n충분히 구체적인 작업 설명을 작성합니다.",
+      `## 변경 허용 경로\n- ${allowedPath}`,
+    )
+    .replace(
+      "## 문서 영향\n충분히 구체적인 작업 설명을 작성합니다.",
+      `## 문서 영향\n- 제품 문서: 변경 없음 — ${impactReason}`,
+    );
+}
+
 test("help does not require gh or configuration", () => {
   const result = runCli(["--help"]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /check <issue-number-or-url>/);
   assert.match(result.stdout, /create --idempotency-key/);
+  assert.match(
+    result.stdout,
+    /validate-body <file-or-> \[--label LABEL\.\.\.\]/,
+  );
   assert.equal(result.mutations, "");
+});
+
+test("tooling-only contract stays discoverable from Skill, interface, Issue Form, and owner reference", () => {
+  const skillRoot = resolve(scriptDirectory, "..");
+  const repositoryRoot = resolve(skillRoot, "../../..");
+  const skill = readFileSync(join(skillRoot, "SKILL.md"), "utf8");
+  const issueContract = readFileSync(
+    join(skillRoot, "references/issue-contract.md"),
+    "utf8",
+  );
+  const interfaceYaml = readFileSync(
+    join(skillRoot, "agents/openai.yaml"),
+    "utf8",
+  );
+  const issueForm = readFileSync(
+    join(repositoryRoot, ".github/ISSUE_TEMPLATE/work-item.yml"),
+    "utf8",
+  );
+
+  for (const content of [issueContract, issueForm]) {
+    assert.ok(content.includes(toolingTracePrefix), content);
+    assert.match(content, /type:chore/);
+  }
+  assert.match(skill, /tooling-only 비적용 근거/);
+  assert.match(skill, /validate-body <body-file> \[--label <actual-label>\.\.\.\]/);
+  assert.match(skill, /MVP 일괄[\s\S]*계속 제품 정본 ID/);
+  assert.match(skill, /rendered ID·경로 판정보다 먼저 fail-closed 소스 문법/);
+  assert.match(skill, /CommonMark 전체를 해석하려는 계약이 아니다/);
+  assert.match(interfaceYaml, /type:chore 전용 비적용 근거/);
+  assert.match(interfaceYaml, /실제 label/);
+  assert.match(issueContract, /제품 계약 ID와 혼용하지 않는다/);
+  assert.match(issueContract, /일괄 등록은 계속 제품 정본 ID/);
+  assert.match(issueContract, /선형 fail-closed 소스 scanner/);
+  assert.match(issueContract, /full·collapsed·shortcut reference link/);
+  assert.match(issueContract, /CommonMark 전체를 재해석하는 규칙이 아니라/);
 });
 
 test("create rejects invalid local input and does not expose an assignee option", () => {
@@ -1377,6 +1538,221 @@ test("create dry-run performs live reads, plans exact state, and writes nothing"
     readCreateCalls().some(
       (call) => call.method !== "GET" || call.operation?.startsWith("Add"),
     ),
+    false,
+  );
+});
+
+test("tooling-only create stays unassigned and remains checkable and startable", () => {
+  resetCreateState();
+  writeFileSync(createBodyPath, `${toolingBody()}\n`);
+  const args = createArgs({
+    key: "tooling-harness-create",
+    type: "type:chore",
+    project: true,
+  });
+
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  const dryPayload = JSON.parse(dryRun.stdout);
+  assert.equal(dryPayload.writes, 0);
+  assert.deepEqual(dryPayload.labels, [
+    "area:quality",
+    "status:todo",
+    "type:chore",
+  ]);
+  assert.equal(dryPayload.project, "LunchTime MVP");
+
+  const created = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    dryPayload.planToken,
+  ]);
+  assert.equal(created.status, 0, created.stderr);
+  const state = readCreateState();
+  assert.deepEqual(state.issues[1].assignees, []);
+  assert.deepEqual(
+    state.issues[1].labels.map((label) => label.name).sort(),
+    ["area:quality", "status:todo", "type:chore"],
+  );
+
+  const writesBeforeReadOnlyLifecycle = state.writes.length;
+  writeFileSync(createLogPath, "");
+  const checked = runCreateCli([
+    "check",
+    "8",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--json",
+  ]);
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(JSON.parse(checked.stdout).ready, true);
+
+  const start = runCreateCli([
+    "start",
+    "8",
+    "--branch",
+    "work/issue-8-tooling-trace",
+    "--agent",
+    "codex:tooling-test",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--dry-run",
+    "--json",
+  ]);
+  assert.equal(start.status, 0, start.stderr);
+  assert.equal(
+    readCreateState().writes.length,
+    writesBeforeReadOnlyLifecycle,
+  );
+});
+
+test("tooling-only create rejects non-chore and mixed type labels before GitHub writes", () => {
+  for (const args of [
+    createArgs({ type: "type:feat" }),
+    [...createArgs({ type: "type:chore" }), "--label", "type:feat"],
+  ]) {
+    resetCreateState();
+    writeFileSync(createBodyPath, `${toolingBody()}\n`);
+    const result = runCreateCli([...args, "--dry-run"]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /실제 type label이 type:chore 하나/);
+    assert.equal(readCreateState().writes.length, 0);
+    assert.equal(readCreateCalls().length, 0);
+  }
+});
+
+test("tooling-only check and start reject live type label drift without mutation", () => {
+  resetCreateState();
+  writeFileSync(createBodyPath, `${toolingBody()}\n`);
+  const args = createArgs({
+    key: "tooling-label-drift",
+    type: "type:chore",
+  });
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  const created = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    JSON.parse(dryRun.stdout).planToken,
+  ]);
+  assert.equal(created.status, 0, created.stderr);
+
+  const state = readCreateState();
+  const writesBeforeDriftChecks = state.writes.length;
+  state.issues[1].labels = state.issues[1].labels.map((label) =>
+    label.name === "type:chore" ? { name: "type:feat" } : label,
+  );
+  writeCreateState(state);
+  writeFileSync(createLogPath, "");
+
+  const checked = runCreateCli([
+    "check",
+    "8",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--json",
+  ]);
+  assert.equal(checked.status, 1, checked.stderr);
+  const checkPayload = JSON.parse(checked.stdout);
+  assert.equal(checkPayload.ready, false);
+  assert.match(
+    checkPayload.failures.join("\n"),
+    /실제 type label이 type:chore 하나/,
+  );
+
+  const start = runCreateCli([
+    "start",
+    "8",
+    "--branch",
+    "work/issue-8-tooling-drift",
+    "--agent",
+    "codex:tooling-drift",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--dry-run",
+    "--json",
+  ]);
+  assert.equal(start.status, 1);
+  assert.match(start.stderr, /실제 type label이 type:chore 하나/);
+  assert.equal(
+    readCreateState().writes.length,
+    writesBeforeDriftChecks,
+  );
+  assert.equal(
+    readCreateCalls().some((call) => call.method !== "GET"),
+    false,
+  );
+});
+
+test("tooling-only check and start reject whitespace-wrapped live type labels without mutation", () => {
+  resetCreateState();
+  writeFileSync(createBodyPath, `${toolingBody()}\n`);
+  const args = createArgs({
+    key: "tooling-whitespace-label-drift",
+    type: "type:chore",
+  });
+  const dryRun = runCreateCli([...args, "--dry-run"]);
+  const created = runCreateCli([
+    ...args,
+    "--confirm-plan",
+    JSON.parse(dryRun.stdout).planToken,
+  ]);
+  assert.equal(created.status, 0, created.stderr);
+
+  const state = readCreateState();
+  const writesBeforeDriftChecks = state.writes.length;
+  state.issues[1].labels = state.issues[1].labels.map((label) =>
+    label.name === "type:chore"
+      ? { name: "\ttype:chore " }
+      : label,
+  );
+  writeCreateState(state);
+  writeFileSync(createLogPath, "");
+
+  const checked = runCreateCli([
+    "check",
+    "8",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--json",
+  ]);
+  assert.equal(checked.status, 1, checked.stderr);
+  assert.match(
+    JSON.parse(checked.stdout).failures.join("\n"),
+    /raw 문자열이 정확히 type:chore/,
+  );
+
+  const start = runCreateCli([
+    "start",
+    "8",
+    "--branch",
+    "work/issue-8-tooling-whitespace-drift",
+    "--agent",
+    "codex:tooling-whitespace-drift",
+    "--config",
+    join(fixtureDirectory, "work-management.json"),
+    "--repo",
+    "Example/LunchTime",
+    "--dry-run",
+    "--json",
+  ]);
+  assert.equal(start.status, 1);
+  assert.match(start.stderr, /raw 문자열이 정확히 type:chore/);
+  assert.equal(
+    readCreateState().writes.length,
+    writesBeforeDriftChecks,
+  );
+  assert.equal(
+    readCreateCalls().some((call) => call.method !== "GET"),
     false,
   );
 });
@@ -1785,6 +2161,1248 @@ test("validate-body accepts GitHub Issue Form level-three headings", () => {
   assert.equal(result.mutations, "");
 });
 
+test("validate-body accepts tooling-only traceability only with one type:chore label", () => {
+  const accepted = runCli(
+    [
+      "validate-body",
+      "-",
+      "--label",
+      "type:chore",
+      "--label",
+      "area:quality",
+      "--json",
+    ],
+    { input: toolingBody() },
+  );
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(JSON.parse(accepted.stdout).valid, true);
+
+  for (const labels of [
+    [],
+    ["type:feat"],
+    ["type:docs"],
+    ["type:chore", "type:feat"],
+    [" type:chore"],
+    ["type:chore "],
+    ["\ttype:chore\t"],
+    ["type:chore", " type:feat"],
+  ]) {
+    const result = runCli(
+      [
+        "validate-body",
+        "-",
+        ...labels.flatMap((label) => ["--label", label]),
+        "--json",
+      ],
+      { input: toolingBody() },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      /실제 type label이 type:chore 하나/,
+      labels.join(","),
+    );
+    assert.equal(result.mutations, "");
+  }
+
+  const choreWithProductIds = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    { input: validBody() },
+  );
+  assert.equal(choreWithProductIds.status, 0, choreWithProductIds.stderr);
+});
+
+test("tooling source grammar allows its exact marker, normal blocks, inline code, and complete inline links", () => {
+  const context =
+    "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.";
+  const body = [
+    "<!-- lunchtime-work-item:create key=tooling-source-grammar project=required -->",
+    toolingBody().replace(
+      context,
+      [
+        context,
+        "",
+        "**강조된 일반 문단**과 [GitHub Issue #57](https://github.com/GoCalendar/LunchTime/issues/57)을 사용합니다.",
+        "",
+        "| 종류 | 값 |",
+        "| --- | --- |",
+        "| literal | `<!-- <tag> &amp; ![image][ref] \u200B -->` |",
+        "",
+        "1. ordered list",
+        "- unordered list",
+        "   three-space paragraph",
+        "-    four-space list content",
+        "- - nested list content",
+        String.raw`- escaped literal \[brackets\]`,
+      ].join("\n"),
+    ),
+  ].join("\n\n");
+  const result = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    { input: body },
+  );
+  assert.equal(
+    result.status,
+    0,
+    `${result.stdout}\n${result.stderr}`,
+  );
+  assert.equal(JSON.parse(result.stdout).valid, true);
+});
+
+test("validate-body rejects malformed, hidden, mixed, and product-owning tooling N/A", () => {
+  const reason =
+    "개발 하네스의 검증과 이슈 생명주기 계약만 변경한다.";
+  const traceSection =
+    `## 추적성\n- ${toolingTracePrefix} ${reason}`;
+  const malformedBodies = [
+    toolingBody().replace(
+      traceSection,
+      "## 추적성\n- 해당 없음",
+    ),
+    toolingBody({ traceReason: "TODO" }),
+    toolingBody().replace(
+      traceSection,
+      `## 추적성\n<!-- - ${toolingTracePrefix} ${reason} -->`,
+    ),
+    toolingBody().replace(
+      traceSection,
+      [
+        "## 추적성",
+        "```text",
+        `- ${toolingTracePrefix} ${reason}`,
+        "```",
+      ].join("\n"),
+    ),
+    toolingBody().replace(
+      traceSection,
+      `## 추적성\n![근거](https://example.com/${encodeURIComponent(toolingTracePrefix)})`,
+    ),
+    toolingBody().replace(
+      traceSection,
+      [
+        "## 추적성",
+        `- ${toolingTracePrefix} ${reason}`,
+        "- PRD-01-FR-01",
+      ].join("\n"),
+    ),
+    toolingBody().replace(
+      "- 제품 문서: 변경 없음 — 제품 동작과 PRD·Policy 정본을 변경하지 않는다.",
+      "- 제품 문서: 변경 없음 — TODO",
+    ),
+    toolingBody({ allowedPath: "docs/prd/01_fixture.md" }),
+  ];
+
+  for (const body of malformedBodies) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: body },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(JSON.parse(result.stdout).valid, false);
+    assert.equal(result.mutations, "");
+  }
+});
+
+test("validate-body rejects tooling N/A mixed with visible product IDs anywhere in the body", () => {
+  const visibleProductIds = [
+    "PRD-01-FR-01",
+    String.raw`PRD\-01\-FR\-01`,
+    "PRD—01—FR—01",
+    "PRD―01―FR―01",
+    "_PRD-01-FR-01_",
+    "~~PRD-01-FR-01~~",
+    "PRD~~-01-~~FR-01",
+    "[PRD-01-FR-01](https://example.com/contract)",
+    "`PRD-01-FR-01`",
+    "`![PRD-01-FR-01](https://example.com/contract)`",
+  ];
+  const mixedBodies = visibleProductIds.map((productId) =>
+    toolingBody().replace(
+      "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.",
+      `## 맥락\n${productId} 요구사항도 함께 변경합니다.`,
+    ),
+  );
+  mixedBodies.push(
+    validBody().replace(
+      "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.",
+      `## 맥락\n${toolingTracePrefix} 제품 ID가 없다는 선언을 추가합니다.`,
+    ),
+  );
+  for (const [index, body] of mixedBodies.entries()) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: body },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${visibleProductIds[index] ?? "N/A outside trace"}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      /이슈 본문 전체에서 제품 계약 ID.*비적용 선언을 함께 사용할 수 없습니다/,
+    );
+  }
+
+  for (const rejectedProjectionSyntax of [
+    "PRD&#45;01&#45;FR&#45;01",
+    "PRD&hyphen;01&hyphen;FR&hyphen;01",
+    "PRD&horbar;01&horbar;FR&horbar;01",
+    "PRD&mdash;01&mdash;FR&mdash;01",
+    "P&ZeroWidthSpace;RD-01-FR-01",
+    "P&#8203;RD-01-FR-01",
+    "P\u200BRD-01-FR-01",
+    "&lt;!-- PRD&#45;01&#45;FR&#45;01 --&gt;",
+    "<!-- PRD-01-FR-01 -->",
+    String.raw`<!-- PRD\-01\-FR\-01 -->`,
+    "```text\nPRD-01-FR-01\n```",
+    "```text\nPRD&#45;01&#45;FR&#45;01\n```",
+    "![PRD-01-FR-01](https://example.com/POL-02-R-04)",
+    "![diagram](https://example.com/PRD&#45;01&#45;FR&#45;01)",
+  ]) {
+    const body = toolingBody().replace(
+      "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.",
+      `## 맥락\n충분히 구체적인 작업 설명을 작성합니다.\n${rejectedProjectionSyntax}`,
+    );
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: body },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${rejectedProjectionSyntax}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  for (const hiddenDeclaration of [
+    `<!-- ${toolingTracePrefix} 숨은 선언 -->`,
+    `\`\`\`text\n${toolingTracePrefix} 숨은 선언\n\`\`\``,
+    `![diagram](https://example.com/${toolingTracePrefix}숨은-선언)`,
+  ]) {
+    const body = validBody().replace(
+      "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.",
+      `## 맥락\n충분히 구체적인 작업 설명을 작성합니다.\n${hiddenDeclaration}`,
+    );
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:feat", "--json"],
+      { input: body },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${hiddenDeclaration}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+});
+
+test("tooling grammar rejects hidden product-ID projection syntax but allows inline-code literals", () => {
+  const context =
+    "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.";
+  const withEvidence = (evidence, definitions = "") =>
+    [
+      toolingBody().replace(
+        context,
+        `${context}\n${evidence}`,
+      ),
+      definitions,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+  const renderedEvidence = [
+    {
+      evidence: "[PRD-01-][x][FR-01][y]",
+      definitions: "[x]: https://example.com/x\n[y]: https://example.com/y",
+    },
+    {
+      evidence: String.raw`[PRD\-01\-][X][FR\-01][Y]`,
+      definitions: "[x]: https://example.com/x\n[y]: https://example.com/y",
+    },
+    {
+      evidence: "PRD-01-<em>FR</em>-01",
+    },
+    {
+      evidence: "PRD-01-<kbd data-key=\"safe\">FR</kbd>-01",
+    },
+    {
+      evidence: "<p class=\"safe\">PRD-01-FR-01</p>",
+    },
+    {
+      evidence:
+        'PRD-01-<span data-contract="POL-99-R-99">FR</span>-01',
+    },
+    {
+      evidence: "![PRD-01-FR-01]",
+    },
+    {
+      evidence: "![PRD-01-FR-01][diagram]",
+    },
+    {
+      evidence: String.raw`\![PRD-01-FR-01]`,
+    },
+  ];
+  for (const { evidence, definitions } of renderedEvidence) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: withEvidence(evidence, definitions) },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${evidence}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  const rejectedHiddenEvidence = [
+    {
+      evidence: "[PRD-01-][missing][FR-01][other]",
+    },
+    {
+      evidence: "[PRD-01-][x][FR-01][y]",
+      definitions:
+        "<!-- [x]: https://example.com/x\n[y]: https://example.com/y -->",
+    },
+    {
+      evidence: "[PRD-01-][x][FR-01][y]",
+      definitions:
+        "```text\n[x]: https://example.com/x\n[y]: https://example.com/y\n```",
+    },
+    {
+      evidence: "[PRD-01-][x][FR-01][y]",
+      definitions:
+        "`[x]: https://example.com/x`\n`[y]: https://example.com/y`",
+    },
+    {
+      evidence: "[PRD-01-][x][[FR]-01][y]",
+      definitions: "[x]: https://example.com/x\n[y]: https://example.com/y",
+    },
+    {
+      evidence: String.raw`PRD-01-\<em>FR\</em>-01`,
+    },
+    {
+      evidence: '<span data-contract="PRD-01-FR-01">일반 설명</span>',
+    },
+    {
+      evidence: '<p data-contract="PRD-01-FR-01">일반 설명</p>',
+    },
+    {
+      evidence: "<code>PRD-01-FR-01</code>",
+    },
+    {
+      evidence:
+        '![PRD-01-FR-01](https://example.com/assets/(contract-image) "계약 (이미지)")',
+    },
+    {
+      evidence: "일반 설명",
+      definitions: "[PRD-01-FR-01]: https://example.com/contract",
+    },
+  ];
+  for (const { evidence, definitions } of rejectedHiddenEvidence) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: withEvidence(evidence, definitions) },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${evidence}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  for (const literalInlineCode of [
+    "`PRD-01-<em>FR</em>-01`",
+    "`![PRD-01-<em>FR</em>-01](https://example.com/contract)`",
+    "`PRD&#45;01&#45;FR&#45;01`",
+  ]) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: withEvidence(literalInlineCode) },
+    );
+    assert.equal(
+      result.status,
+      0,
+      `${literalInlineCode}\n${result.stdout}\n${result.stderr}`,
+    );
+  }
+
+  const literalReference = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    {
+      input: withEvidence(
+        "`[PRD-01-][x][FR-01][y]`",
+        "[x]: https://example.com/x\n[y]: https://example.com/y",
+      ),
+    },
+  );
+  assert.equal(literalReference.status, 1);
+  const literalReferenceErrors = JSON.parse(
+    literalReference.stdout,
+  ).errors.join("\n");
+  assert.match(literalReferenceErrors, toolingSourceGrammarPattern);
+});
+
+test("tooling source grammar rejects raw HTML blocks, tags, autolinks, and blockquotes", () => {
+  const context =
+    "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.";
+  const rawBlockEvidence = [
+    "<div>![PRD-01-FR-01](https://example.com/diagram.png)</div>",
+    [
+      "<section>",
+      "![PRD-01-FR-01][diagram]",
+      "</section>",
+      "",
+      "[diagram]: https://example.com/diagram.png",
+    ].join("\n"),
+    [
+      "<table>",
+      "<tr><td>![PRD-01-FR-01](https://example.com/diagram.png)</td></tr>",
+      "</table>",
+    ].join("\n"),
+    [
+      "<div>",
+      "<!-- a nonblank raw HTML line -->",
+      "\u00A0",
+      "![PRD-01-FR-01](https://example.com/diagram.png)",
+      "</div>",
+    ].join("\n"),
+    [
+      "",
+      "<x-contract>",
+      "![PRD-01-FR-01](https://example.com/diagram.png)",
+      "</x-contract>",
+    ].join("\n"),
+    "- <div>raw HTML inside a list</div>",
+    "> blockquote container",
+    "<x-contract>custom element</x-contract>",
+    "<not a valid HTML tag",
+    String.raw`\<em\>escaped raw tag`,
+    "<hr>\n## 구조를 바꾸는 가짜 제목",
+    "<https://example.com/autolink>",
+    "<reviewer@example.com>",
+    "- ```text\n  list backtick fence\n  ```",
+    "- ~~~text\n  list tilde fence\n  ~~~",
+    "1. ~~~text\n   ordered-list tilde fence\n   ~~~",
+    "> ~~~text\n> blockquote tilde fence\n> ~~~",
+    "    top-level indented code block",
+    "\tindented code block with a tab",
+    "- item\n\n      list-contained indented code block",
+    "-     first-block indented code",
+    "1. item\n\n       ordered-list indented code block",
+    "1.\tambiguous tab-padded list item",
+    "- -     nested list-contained indented code",
+    "- -\tnested tab-padded list item",
+    "1. -     ordered nested indented code",
+    "충분한 문장\r    bare-CR indented code block",
+    "[safe\rlabel](https://example.com/destination)",
+  ];
+  for (const evidence of rawBlockEvidence) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      {
+        input: toolingBody().replace(
+          context,
+          `${context}\n${evidence}`,
+        ),
+      },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${evidence}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  const inlineVisible = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    {
+      input: toolingBody().replace(
+        context,
+        `${context}\n일반 문장 <kbd>PRD-01-FR-01</kbd>`,
+      ),
+    },
+  );
+  assert.equal(inlineVisible.status, 1, inlineVisible.stderr);
+  assert.match(
+    JSON.parse(inlineVisible.stdout).errors.join("\n"),
+    toolingSourceGrammarPattern,
+  );
+
+  const inlineImage = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    {
+      input: toolingBody().replace(
+        context,
+        `${context}\n일반 문장 <kbd>![PRD-01-FR-01](https://example.com/diagram.png)</kbd>`,
+      ),
+    },
+  );
+  assert.equal(
+    inlineImage.status,
+    1,
+    `${inlineImage.stdout}\n${inlineImage.stderr}`,
+  );
+  assert.match(
+    JSON.parse(inlineImage.stdout).errors.join("\n"),
+    toolingSourceGrammarPattern,
+  );
+
+  const crlfBody = toolingBody().replaceAll("\n", "\r\n");
+  const crlf = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    { input: crlfBody },
+  );
+  assert.equal(
+    crlf.status,
+    0,
+    `${crlf.stdout}\n${crlf.stderr}`,
+  );
+
+  const afterBlankLine = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    {
+      input: toolingBody().replace(
+        context,
+        [
+          context,
+          "<div>일반 설명</div>",
+          "",
+          "![PRD-01-FR-01](https://example.com/diagram.png)",
+        ].join("\n"),
+      ),
+    },
+  );
+  assert.equal(
+    afterBlankLine.status,
+    1,
+    `${afterBlankLine.stdout}\n${afterBlankLine.stderr}`,
+  );
+  assert.match(
+    JSON.parse(afterBlankLine.stdout).errors.join("\n"),
+    toolingSourceGrammarPattern,
+  );
+
+  for (const hidden of [
+    "<code>PRD-01-FR-01</code>",
+    "<pre>PRD-01-FR-01</pre>",
+    "<script>PRD-01-FR-01</script>",
+    "<style>PRD-01-FR-01</style>",
+    "<template>PRD-01-FR-01</template>",
+    "<textarea>PRD-01-FR-01</textarea>",
+  ]) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      {
+        input: toolingBody().replace(
+          context,
+          `${context}\n${hidden}`,
+        ),
+      },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${hidden}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  const original =
+    "## 변경 허용 경로\n- .agents/skills/run-github-work-item/SKILL.md";
+  const pathBlock = toolingBody().replace(
+    original,
+    [
+      "## 변경 허용 경로",
+      "- .agents/**",
+      "<div>![docs/prd/**](https://example.com/diagram.png)</div>",
+    ].join("\n"),
+  );
+  const pathResult = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    { input: pathBlock },
+  );
+  assert.equal(
+    pathResult.status,
+    1,
+    `${pathResult.stdout}\n${pathResult.stderr}`,
+  );
+  assert.match(
+    JSON.parse(pathResult.stdout).errors.join("\n"),
+    toolingSourceGrammarPattern,
+  );
+});
+
+test("tooling source grammar rejects comments that join evidence and every reference-link form", () => {
+  const context =
+    "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.";
+  const bodies = [
+    toolingBody().replace(
+      context,
+      `${context}\nPRD-01-FR<!-- split -->-01`,
+    ),
+    toolingBody().replace(
+      context,
+      `${context}\ndocs/pr<!-- split -->d/**`,
+    ),
+    toolingBody().replace(
+      context,
+      `${context}\n\\![PRD-01-FR-01]`,
+    ),
+    toolingBody().replace(
+      context,
+      [
+        context,
+        "![PRD-01-FR-01][diagram]",
+        "일반 문단이 계속됩니다.",
+        "[diagram]: https://example.com/diagram.png",
+      ].join("\n"),
+    ),
+    toolingBody().replace(
+      context,
+      [
+        context,
+        "<?hidden",
+        "[diagram]: https://example.com/diagram.png",
+        "?>",
+      ].join("\n"),
+    ),
+    ...[
+      "[label][reference]",
+      "[label][]",
+      "[label]",
+      "[reference]: https://example.com/reference",
+      "[label",
+      "label]",
+    ].map((evidence) =>
+      toolingBody().replace(context, `${context}\n${evidence}`),
+    ),
+    `${toolingBody()}\n![PRD-01-FR-01](invalid destination with spaces`,
+    `${toolingBody()}\n[safe](unterminated-PRD-01-FR-01`,
+    [
+      "<!-- lunchtime-work-item:create key=tooling-source-grammar project=none -->",
+      "<!-- lunchtime-work-item:create key=tooling-source-second project=none -->",
+      toolingBody(),
+    ].join("\n"),
+    [
+      "<!-- ordinary comment is not a create marker -->",
+      toolingBody(),
+    ].join("\n"),
+  ];
+
+  for (const body of bodies) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: body },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${body}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+});
+
+test("tooling source grammar rejects resolved and unresolved Markdown images", () => {
+  const context =
+    "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.";
+  const withEvidence = (evidence, definitions = "") =>
+    [
+      toolingBody().replace(context, `${context}\n${evidence}`),
+      definitions,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+  for (const { evidence, definitions } of [
+    {
+      evidence: "![PRD-01-FR-01][diagram]",
+      definitions: "[diagram]: https://example.com/diagram.png",
+    },
+    {
+      evidence: "![PRD-01-FR-01][]",
+      definitions: "[PRD-01-FR-01]: https://example.com/diagram.png",
+    },
+    {
+      evidence: "![PRD-01-FR-01]",
+      definitions: "[PRD-01-FR-01]: https://example.com/diagram.png",
+    },
+  ]) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: withEvidence(evidence, definitions) },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${evidence}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  for (const evidence of [
+    "![PRD-01-FR-01][missing]",
+    "![PRD-01-FR-01][]",
+    "![PRD-01-FR-01]",
+  ]) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: withEvidence(evidence) },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${evidence}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+});
+
+test("tooling source grammar rejects every reference definition and malformed image", () => {
+  const context =
+    "## 맥락\n충분히 구체적인 작업 설명을 작성합니다.";
+  const withEvidence = (evidence, definition) =>
+    [
+      toolingBody().replace(context, `${context}\n${evidence}`),
+      definition,
+    ].join("\n\n");
+  const validDefinitions = [
+    "[diagram]: <https://example.com/diagram with spaces.png>",
+    "[diagram]: https://example.com/assets/(diagram).png",
+    "[diagram]: https://example.com/assets/(nested/(diagram)).png",
+    '[diagram]: https://example.com/diagram.png "Diagram title"',
+    "[diagram]: https://example.com/diagram.png 'Diagram title'",
+    "[diagram]: https://example.com/diagram.png (Diagram title)",
+    String.raw`[diagram]: https://example.com/diagram.png (Diagram \(v2\))`,
+    [
+      "[diagram]:",
+      "  <https://example.com/diagram with spaces.png>",
+      '  "Diagram title"',
+    ].join("\n"),
+  ];
+  for (const definition of validDefinitions) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      {
+        input: withEvidence(
+          "![PRD-01-FR-01][diagram]",
+          definition,
+        ),
+      },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${definition}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  const invalidDefinitions = [
+    "[diagram]: invalid destination with spaces",
+    "[diagram]: https://example.com/assets/(diagram.png",
+    "[diagram]: <https://example.com/diagram.png",
+    '[diagram]: https://example.com/diagram.png "unterminated',
+    "[diagram]: https://example.com/diagram.png (title) trailing",
+    "[diagram]: https://example.com/diagram.png (Diagram (v2))",
+  ];
+  for (const definition of invalidDefinitions) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      {
+        input: withEvidence(
+          "![PRD-01-FR-01][diagram]",
+          definition,
+        ),
+      },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${definition}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  const invalidDefinitionText = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    {
+      input: withEvidence(
+        "일반 설명",
+        "[PRD-01-FR-01]: invalid destination with spaces",
+      ),
+    },
+  );
+  assert.equal(
+    invalidDefinitionText.status,
+    1,
+    `${invalidDefinitionText.stdout}\n${invalidDefinitionText.stderr}`,
+  );
+  assert.match(
+    JSON.parse(invalidDefinitionText.stdout).errors.join("\n"),
+    toolingSourceGrammarPattern,
+  );
+
+  const original =
+    "## 변경 허용 경로\n- .agents/skills/run-github-work-item/SKILL.md";
+  const invalidPathBody = [
+    toolingBody().replace(
+      original,
+      [
+        "## 변경 허용 경로",
+        "- .agents/** ![docs/prd/**][diagram]",
+      ].join("\n"),
+    ),
+    "[diagram]: invalid destination with spaces",
+  ].join("\n\n");
+  const invalidPath = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    { input: invalidPathBody },
+  );
+  assert.equal(
+    invalidPath.status,
+    1,
+    `${invalidPath.stdout}\n${invalidPath.stderr}`,
+  );
+  assert.match(
+    JSON.parse(invalidPath.stdout).errors.join("\n"),
+    toolingSourceGrammarPattern,
+  );
+});
+
+test("tooling source scanner rejects a near-limit unclosed link within a linear operation bound", () => {
+  const base = `${toolingBody()}\n[safe](`;
+  const targetBytes = 65_000;
+  const unmatchedCount =
+    targetBytes - Buffer.byteLength(base, "utf8");
+  assert.ok(unmatchedCount > 0);
+  const adversarial = `${base}${"a".repeat(unmatchedCount)}`;
+  const bodyBytes = Buffer.byteLength(adversarial, "utf8");
+  assert.ok(bodyBytes >= 64_000 && bodyBytes <= 65_536, `${bodyBytes}`);
+
+  const result = runCli(
+    ["validate-body", "-", "--label", "type:chore", "--json"],
+    {
+      input: adversarial,
+      extraEnv: {
+        WORK_ITEM_TEST_PROJECTION_DIAGNOSTICS: "1",
+      },
+    },
+  );
+  assert.equal(
+    result.status,
+    1,
+    `${result.stdout}\n${result.stderr}`,
+  );
+  const output = JSON.parse(result.stdout);
+  assert.match(output.errors.join("\n"), toolingSourceGrammarPattern);
+  const operations = output.referenceProjectionOperations;
+  assert.equal(Number.isInteger(operations), true);
+  assert.ok(
+    operations <= adversarial.length * 4,
+    `${operations} operations for ${adversarial.length} UTF-16 code units`,
+  );
+});
+
+test("validate-body recognizes rendered-visible contract IDs in traceability", () => {
+  for (const traceability of [
+    String.raw`PRD\-01\-FR\-01 POL\-02\-R\-04`,
+    "PRD&#45;01&#45;FR&#45;01 POL&#45;02&#45;R&#45;04",
+    "_PRD-01-FR-01_ and [POL-02-R-04](https://example.com/policy)",
+    "`PRD-01-FR-01` and `POL-02-R-04`",
+  ]) {
+    const result = runCli(["validate-body", "-", "--json"], {
+      input: validBody(traceability),
+    });
+    assert.equal(
+      result.status,
+      0,
+      `${traceability}\n${result.stdout}\n${result.stderr}`,
+    );
+  }
+});
+
+test("validate-body rejects tooling N/A path scopes that can own product contracts", () => {
+  const oversizedBrace = `docs/{${[
+    ...Array.from({ length: 32 }, (_, index) => `area${index + 1}`),
+    "prd",
+  ].join(",")}}/**`;
+  for (const allowedPath of [
+    "docs/prd/01_fixture.md",
+    "docs/policies/**",
+    "docs/**",
+    "./docs/**",
+    "**",
+    "./**",
+    "docs/*",
+    "docs/{prd,policies}/**",
+    "docs/./prd/**",
+    "tooling/../docs/policies/**",
+    "docs/prd/../policies/**",
+    "[docs/prd/**](https://example.com/scope)",
+    "_docs/prd/**_",
+    "~~docs/prd/**~~",
+    "docs&#47;prd/**",
+    "docs&sol;policies/**",
+    String.raw`docs\/prd/**`,
+    "&#91;docs&#47;prd/**&#93;",
+    "&lbrack;docs/prd/**&rbrack;",
+    "do&ZeroWidthSpace;cs/prd/**",
+    "do&#8203;cs/policies/**",
+    oversizedBrace,
+    "docs/{development,prd/**",
+    "docs/[development/**",
+    "docs/@(development|prd)/**",
+  ]) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: toolingBody({ allowedPath }) },
+    );
+    assert.equal(result.status, 1, `${allowedPath}\n${result.stderr}`);
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      new RegExp(
+        `${toolingSourceGrammarPattern.source}|상위·glob·정규화 경로 범위`,
+      ),
+      allowedPath,
+    );
+  }
+
+  const boundedBrace = `docs/{${Array.from(
+    { length: 32 },
+    (_, index) => `area${index + 1}`,
+  ).join(",")}}/**`;
+  for (const allowedPath of [
+    ".agents/**",
+    "docs/development/**",
+    "docs/prd/../development/**",
+    "docs/prd-old/**",
+    "docs/policies-old/**",
+    "[docs/development/**](https://example.com/scope)",
+    "_docs/development/**_",
+    String.raw`docs\/development/**`,
+    boundedBrace,
+  ]) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: toolingBody({ allowedPath }) },
+    );
+    assert.equal(result.status, 0, `${allowedPath}\n${result.stderr}`);
+  }
+});
+
+test("tooling grammar rejects hidden product-path syntax but allows inline-code literals", () => {
+  const withDefinitions = (allowedPath, definitions = "") =>
+    [toolingBody({ allowedPath }), definitions]
+      .filter(Boolean)
+      .join("\n\n");
+
+  const renderedProductPaths = [
+    {
+      allowedPath: "[do][x][cs/prd/**][y]",
+      definitions: "[x]: https://example.com/x\n[y]: https://example.com/y",
+    },
+    {
+      allowedPath: "[do][x][cs/policies/**][y]",
+      definitions: "[x]: https://example.com/x\n[y]: https://example.com/y",
+    },
+    {
+      allowedPath: "do<em>cs/pr</em>d/**",
+    },
+    {
+      allowedPath: "do<strong>cs/policies</strong>/**",
+    },
+    {
+      allowedPath: "do<kbd data-key=\"safe\">cs/pr</kbd>d/**",
+    },
+    {
+      allowedPath:
+        '<p data-path="docs/development/**">docs/policies/**</p>',
+    },
+    {
+      allowedPath: ".agents/** ![docs/prd/**]",
+    },
+    {
+      allowedPath: ".agents/** ![docs/policies/**][diagram]",
+    },
+    {
+      allowedPath: ".agents/** `docs/prd/**`",
+    },
+  ];
+  for (const { allowedPath, definitions } of renderedProductPaths) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: withDefinitions(allowedPath, definitions) },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${allowedPath}\n${result.stdout}\n${result.stderr}`,
+    );
+    const errors = JSON.parse(result.stdout).errors.join("\n");
+    assert.ok(
+      new RegExp(
+        `${toolingSourceGrammarPattern.source}|상위·glob·정규화 경로 범위`,
+      ).test(errors),
+      `${allowedPath}\n${errors}`,
+    );
+  }
+
+  const rejectedHiddenPaths = [
+    {
+      allowedPath: ".agents/** [do][missing][cs/prd/**][other]",
+    },
+    {
+      allowedPath: ".agents/** [do][x][cs/prd/**][y]",
+      definitions:
+        "<!-- [x]: https://example.com/x\n[y]: https://example.com/y -->",
+    },
+    {
+      allowedPath: ".agents/** [do][x][cs/prd/**][y]",
+      definitions:
+        "```text\n[x]: https://example.com/x\n[y]: https://example.com/y\n```",
+    },
+    {
+      allowedPath: ".agents/** [do][x][cs/prd/**][y]",
+      definitions:
+        "`[x]: https://example.com/x`\n`[y]: https://example.com/y`",
+    },
+    {
+      allowedPath: "do<em>cs/develop</em>ment/**",
+    },
+    {
+      allowedPath:
+        '.agents/** <span data-path="docs/prd/**">docs/development/**</span>',
+    },
+    {
+      allowedPath:
+        '.agents/** <p data-path="docs/prd/**">docs/development/**</p>',
+    },
+    {
+      allowedPath: ".agents/** <code>docs/prd/**</code>",
+    },
+    {
+      allowedPath:
+        '.agents/** ![docs/prd/**](https://example.com/assets/(scope-image) "범위 (이미지)")',
+    },
+  ];
+  for (const { allowedPath, definitions } of rejectedHiddenPaths) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: withDefinitions(allowedPath, definitions) },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${allowedPath}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+
+  for (const literalInlineCodePath of [
+    ".agents/** `![docs/prd/**](https://example.com/scope)`",
+    ".agents/** `do<em>cs/pr</em>d/**`",
+  ]) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: withDefinitions(literalInlineCodePath) },
+    );
+    assert.equal(
+      result.status,
+      0,
+      `${literalInlineCodePath}\n${result.stdout}\n${result.stderr}`,
+    );
+  }
+});
+
+test("tooling allowed-path gate scans paragraphs, ordered lists, tables, and unordered bullets", () => {
+  const original =
+    "## 변경 허용 경로\n- .agents/skills/run-github-work-item/SKILL.md";
+  const renderedProductScopes = [
+    "docs/prd/**",
+    "1. docs/policies/**",
+    [
+      "| 종류 | 경로 |",
+      "| --- | --- |",
+      "| 제품 정본 | docs/prd/01_fixture.md |",
+    ].join("\n"),
+    "- docs/policies/02_fixture.md",
+  ];
+  for (const content of renderedProductScopes) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      {
+        input: toolingBody().replace(
+          original,
+          `## 변경 허용 경로\n${content}`,
+        ),
+      },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${content}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      /상위·glob·정규화 경로 범위/,
+    );
+  }
+});
+
+test("tooling allowed-path grammar permits inline destinations but rejects hidden Markdown syntax", () => {
+  const original =
+    "## 변경 허용 경로\n- .agents/skills/run-github-work-item/SKILL.md";
+  const bodies = [
+    toolingBody().replace(
+      original,
+      [
+        "## 변경 허용 경로",
+        ".agents/** [안전한 링크](https://example.com/docs/prd/**)",
+      ].join("\n"),
+    ),
+    toolingBody().replace(
+      original,
+      [
+        "## 변경 허용 경로",
+        ".agents/** ![docs/prd/**](https://example.com/diagram.png)",
+      ].join("\n"),
+    ),
+    [
+      toolingBody().replace(
+        original,
+        [
+          "## 변경 허용 경로",
+          ".agents/** ![docs/prd/**][diagram]",
+        ].join("\n"),
+      ),
+      "[diagram]: https://example.com/diagram.png",
+    ].join("\n\n"),
+    [
+      toolingBody().replace(
+        original,
+        [
+          "## 변경 허용 경로",
+          ".agents/** ![docs/policies/**]",
+        ].join("\n"),
+      ),
+      "[docs/policies/**]: https://example.com/diagram.png",
+    ].join("\n\n"),
+    toolingBody().replace(
+      original,
+      [
+        "## 변경 허용 경로",
+        ".agents/** <!-- docs/prd/** -->",
+        "<code>docs/policies/**</code>",
+        "```text",
+        "docs/prd/**",
+        "```",
+        "`docs/development/**`",
+      ].join("\n"),
+    ),
+    [
+      toolingBody().replace(
+        original,
+        [
+          "## 변경 허용 경로",
+          ".agents/**",
+        ].join("\n"),
+      ),
+      "[docs/prd/**]: https://example.com/reference-only",
+    ].join("\n\n"),
+    toolingBody().replace(
+      original,
+      [
+        "## 변경 허용 경로",
+        '.agents/** <p data-path="docs/prd/**">docs/development/**</p>',
+      ].join("\n"),
+    ),
+  ];
+
+  for (const [index, body] of bodies.entries()) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      { input: body },
+    );
+    assert.equal(
+      result.status,
+      index === 0 ? 0 : 1,
+      `${body}\n${result.stdout}\n${result.stderr}`,
+    );
+    if (index > 0) {
+      assert.match(
+        JSON.parse(result.stdout).errors.join("\n"),
+        toolingSourceGrammarPattern,
+      );
+    }
+  }
+
+  for (const unresolved of [
+    ".agents/** ![docs/prd/**][missing]",
+    ".agents/** ![docs/policies/**]",
+  ]) {
+    const result = runCli(
+      ["validate-body", "-", "--label", "type:chore", "--json"],
+      {
+        input: toolingBody().replace(
+          original,
+          `## 변경 허용 경로\n${unresolved}`,
+        ),
+      },
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${unresolved}\n${result.stdout}\n${result.stderr}`,
+    );
+    assert.match(
+      JSON.parse(result.stdout).errors.join("\n"),
+      toolingSourceGrammarPattern,
+    );
+  }
+});
+
 test("validate-body accepts namespaced requirement and rule IDs with three-digit suffixes", () => {
   const result = runCli(["validate-body", "-", "--json"], {
     input: plannedBody(),
@@ -2051,7 +3669,7 @@ test("start dry-run plans the claim without mutation", () => {
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout);
   assert.equal(output.dryRun, true);
-  assert.equal(output.planned.length, 4);
+  assert.equal(output.planned.length, 5);
   assert.equal(result.mutations, "");
 });
 
@@ -2406,6 +4024,172 @@ test("reconcile adds a missing blocked label and post-verifies it", () => {
   assert.equal(output.verified, true);
   assert.deepEqual(output.completed, ["add dependency:blocked"]);
   assert.match(result.mutations, /POST .*\/issues\/1\/labels/);
+});
+
+test("start stops at every mutation boundary when live tooling labels drift", () => {
+  const expectedWrites = [
+    "POST repos/Example/LunchTime/issues/1/comments",
+    "PATCH repos/Example/LunchTime/issues/1",
+    "POST repos/Example/LunchTime/issues/1/labels",
+    "DELETE repos/Example/LunchTime/issues/1/labels/status%3Atodo",
+  ];
+  const expectedCompleted = [
+    "publish claim token for branch=work/issue-1-tooling-drift agent=codex:tooling-drift",
+    "assign @fixture-user",
+    "add workflow label status:in-progress",
+    "remove workflow label status:todo",
+  ];
+
+  for (let boundary = 1; boundary <= expectedWrites.length; boundary += 1) {
+    const state = resetLifecycleState();
+    state.issueBody = toolingBody();
+    state.source.labels = ["status:todo", "type:chore", "custom:keep"];
+    state.driftAfterStartMutation = boundary;
+    state.driftTypeAfterStartMutation = true;
+    writeLifecycleState(state);
+
+    const result = runLifecycleCli([
+      "start",
+      "1",
+      "--branch",
+      "work/issue-1-tooling-drift",
+      "--agent",
+      "codex:tooling-drift",
+      "--config",
+      "work-management.json",
+      "--json",
+    ]);
+    assert.equal(result.status, 1, `boundary=${boundary}`);
+    const failure = JSON.parse(result.stderr);
+    assert.match(
+      failure.error,
+      /Live Issue body\/type label contract changed during start/,
+    );
+    assert.match(
+      failure.error,
+      /실제 type label이 type:chore 하나.*type:feat/,
+    );
+    assert.deepEqual(
+      failure.completed,
+      expectedCompleted.slice(0, boundary),
+      `boundary=${boundary}`,
+    );
+    assert.match(failure.repair.join("\n"), /Run check/);
+    assert.deepEqual(
+      lifecycleWrites().map(
+        (call) => call.operation || `${call.method} ${call.endpoint}`,
+      ),
+      expectedWrites.slice(0, boundary),
+      `boundary=${boundary}`,
+    );
+    assert.equal(readLifecycleState().projectStatus, "Todo");
+  }
+});
+
+test("start revalidates the live Issue body before the next mutation", () => {
+  const state = resetLifecycleState();
+  state.issueBody = toolingBody();
+  state.source.labels = ["status:todo", "type:chore", "custom:keep"];
+  state.driftAfterStartMutation = 2;
+  state.bodyAfterStartMutation = toolingBody({ traceReason: "TODO" });
+  writeLifecycleState(state);
+
+  const result = runLifecycleCli([
+    "start",
+    "1",
+    "--branch",
+    "work/issue-1-body-drift",
+    "--agent",
+    "codex:body-drift",
+    "--config",
+    "work-management.json",
+    "--json",
+  ]);
+  assert.equal(result.status, 1);
+  const failure = JSON.parse(result.stderr);
+  assert.match(
+    failure.error,
+    /Live Issue body\/type label contract changed during start/,
+  );
+  assert.match(failure.error, /구체적 사유/);
+  assert.deepEqual(failure.completed, [
+    "publish claim token for branch=work/issue-1-body-drift agent=codex:body-drift",
+    "assign @fixture-user",
+  ]);
+  assert.match(failure.repair.join("\n"), /Run check/);
+  assert.equal(lifecycleWrites().length, 2);
+});
+
+test("start re-reads every live ownership, workflow, blocker, and Project invariant before later writes", () => {
+  const expectedWrites = [
+    "POST repos/Example/LunchTime/issues/1/comments",
+    "PATCH repos/Example/LunchTime/issues/1",
+    "POST repos/Example/LunchTime/issues/1/labels",
+    "DELETE repos/Example/LunchTime/issues/1/labels/status%3Atodo",
+  ];
+  const expectedCompleted = [
+    "publish claim token for branch=work/issue-1-boundary-drift agent=codex:boundary-drift",
+    "assign @fixture-user",
+    "add workflow label status:in-progress",
+    "remove workflow label status:todo",
+  ];
+  const driftCases = [
+    ["claim", /Claim lost|exact active winning claim|requested claim token/],
+    ["assignee", /assigned to \[other-user\]|exclusively @fixture-user/],
+    ["issue-state", /Issue is closed, expected open/],
+    ["workflow-label", /Workflow labels are \[status:done\]/],
+    ["native-blocker", /Open native blockers: #4/],
+    ["derived-blocked", /Derived blocked label dependency:blocked is present/],
+    ["project-status", /Project Status is "Done"/],
+    ["project-capacity", /Project has 2 In Progress item\(s\); limit is 2/],
+  ];
+
+  for (const [drift, errorPattern] of driftCases) {
+    for (let boundary = 1; boundary <= expectedWrites.length; boundary += 1) {
+      const state = resetLifecycleState();
+      state.driftAfterStartMutation = boundary;
+      state.startBoundaryDrift = drift;
+      writeLifecycleState(state);
+
+      const result = runLifecycleCli([
+        "start",
+        "1",
+        "--branch",
+        "work/issue-1-boundary-drift",
+        "--agent",
+        "codex:boundary-drift",
+        "--config",
+        "work-management.json",
+        "--json",
+      ]);
+      assert.equal(
+        result.status,
+        1,
+        `drift=${drift} boundary=${boundary}\n${result.stdout}\n${result.stderr}`,
+      );
+      const failure = JSON.parse(result.stderr);
+      assert.match(
+        failure.error,
+        errorPattern,
+        `drift=${drift} boundary=${boundary}`,
+      );
+      assert.deepEqual(
+        failure.completed,
+        expectedCompleted.slice(
+          0,
+          drift === "claim" && boundary === 1 ? 0 : boundary,
+        ),
+        `drift=${drift} boundary=${boundary}`,
+      );
+      assert.deepEqual(
+        lifecycleWrites().map(
+          (call) => call.operation || `${call.method} ${call.endpoint}`,
+        ),
+        expectedWrites.slice(0, boundary),
+        `drift=${drift} boundary=${boundary}`,
+      );
+    }
+  }
 });
 
 test("stateful start and merge-auto-close completion are idempotent and preserve dependent history", () => {

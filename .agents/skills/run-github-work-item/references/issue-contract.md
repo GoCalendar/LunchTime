@@ -31,11 +31,49 @@ node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <bo
 - 모든 구역에 의미 있는 내용을 작성한다. 한 글자 값, `TBD`, `TODO` 또는 코드 울타리 안에 숨긴 제목은 계약을 충족하지 않는다.
 - `완료 조건`은 행동 시나리오의 정본이다. 각 시나리오를 관찰 가능한
   Given/When/Then 또는 조건/행동/결과로 작성하고 happy path뿐 아니라 적용
-  가능한 error·recovery path를 함께 다룬다. 각 시나리오에 관련 추적 ID와
-  재현 가능한 검증 계획을 연결한다.
+  가능한 error·recovery path를 함께 다룬다. 각 시나리오에 관련 추적 ID 또는
+  아래에서 허용한 tooling-only 비적용 근거와 재현 가능한 검증 계획을 연결한다.
 - `작업 범위`에 포함 작업과 제외 작업을 구체적으로 나열한다.
 - GitHub 기본 `blocked by` / `blocking` 관계를 의존 관계의 정본으로 사용한다. `선행 작업` 문장은 연결 이유를 설명할 뿐 기본 의존 관계를 대신하지 않는다.
 - `추적성`에 적용 가능한 정본 ID를 하나 이상 연결한다. `PRD-NN-FR-NN`, `PRD-NN-AC-NN`, `PRD-NN-SP-NN`, `POL-NN-R-NN`을 사용하며 각 숫자 부분은 두 자리 이상일 수 있다. `D-NN` 결정 ID와 `F-NN` 기능 원장 ID는 보조 이력으로 추가할 수 있지만 PRD 또는 정책 정본을 대신하지 않는다. 접두사 없는 `FR-NN`, `AC-NN`, `SP-NN`, `R-NN`은 사용하지 않는다.
+- 제품 동작, 사용자 결과, PRD 요구사항과 Policy 규칙을 바꾸지 않는 개별
+  tooling-only 작업은 제품 ID 대신 다음 계약을 모두 만족할 수 있다.
+  - 실제 type label의 raw 문자열은 앞뒤 whitespace 정규화 없이
+    `type:chore` 정확히 하나여야 한다. type label 누락, whitespace 변형,
+    다른 type이나 여러 type label은 비적용 근거를 허용하지 않는다.
+  - `추적성`에는 direct bullet 한 줄로
+    `- 해당 없음 — 제품 동작·PRD·Policy 추적 대상이 아닌 도구 작업: <구체적 사유>`
+    를 적는다. 같은 본문에서 제품 계약 ID와 혼용하지 않는다.
+  - `완료 조건`의 각 `- 추적 ID:` 행에도 같은 prefix와 시나리오별 구체적
+    사유를 적고, `문서 영향`에는
+    `- 제품 문서: 변경 없음 — <구체적 근거>` 한 줄을 둔다.
+  - `변경 허용 경로`에 `docs/prd` 또는 `docs/policies` 정본 경로를 넣지
+    않는다. 레이블과 문구는 구조적 gate일 뿐 tooling-only라는 의미 승인이
+    아니므로 독립 리뷰에서 실제 제품 영향이 없는지 확인한다.
+  - exact 비적용 prefix가 있는 본문은 rendered ID·경로 projection보다 먼저
+    선형 fail-closed 소스 scanner를 통과해야 한다. 허용하는 Markdown은 정확한
+    `<!-- lunchtime-work-item:create key=<key> project=<required|none> -->`
+    marker 한 줄, 일반 제목·문단·unordered·ordered list·표, inline code와
+    같은 줄에서 bracket·destination이 모두 닫힌 `[label](destination)`
+    inline link로 제한한다. link destination에는 공백·title을 두지 않는다.
+  - inline code 밖에서는 다른 HTML comment·tag·autolink와 모든 `<`·`>`,
+    HTML entity, default-ignorable Unicode, image, reference definition,
+    full·collapsed·shortcut reference link, blockquote, 4열 이상 소스
+    들여쓰기와 각 nested list marker 뒤 tab·5칸 이상 padding,
+    indented·fenced code, CRLF가 아닌 bare CR, 닫히지 않거나 짝이 맞지
+    않는 link bracket·destination을 거부한다. 이
+    제한은 CommonMark 전체를 재해석하는 규칙이 아니라 렌더링 projection의
+    모호성을 닫는 의도적인 소스 allowlist다. 오류가 지목한 문법을 일반
+    텍스트·inline code 또는 완결된 inline link로 고친다.
+  - 본문만 검사할 때도 실제 생성 예정 label을 함께 전달한다.
+
+    ```bash
+    node .agents/skills/run-github-work-item/scripts/work-item.mjs \
+      validate-body <body-file> --label type:chore
+    ```
+
+  이 예외는 개별 `validate-body`, `create`, `check`, `start`에만 적용한다.
+  `.github/mvp-work-items.json` 일괄 등록은 계속 제품 정본 ID를 요구한다.
 - 같은 이슈와 PR에서 새 PRD·Policy ID를 정의해야 한다면 `추적성`에 정확한
   예상 ID와 `planned — 이 PR에서 정의`를 함께 적는다. 이 예외는 해당 정본
   문서를 같은 변경에서 실제로 만드는 작업에만 사용한다. `변경 허용 경로`와

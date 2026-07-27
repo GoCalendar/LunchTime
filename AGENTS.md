@@ -43,14 +43,13 @@ Skill owner는 [개발 하네스 가이드](docs/development/01_harness_guide.md
 - 이슈의 변경 허용 경로만 수정하고 변경 금지 경로를 침범하지 않습니다.
 - 다른 진행 중 이슈와 공유 계약이나 빌드 매니페스트가 겹치면 먼저 의존성을
   추가하거나 소유 이슈가 병합될 때까지 기다립니다.
-- PRD 요구사항, 수용 기준, 정책 규칙 ID를 코드, 테스트와 PR에서 추적할 수
-  있게 유지합니다.
-- 승인된 결정에 필요한 새 PRD·Policy ID는 이슈가 planned ID와 namespace
-  번호가 일치하는 구체적 `NN_*.md` 정본 파일·인덱스·구현·테스트 경로를
-  소유한 경우 같은 branch와 PR에서 정의할 수 있습니다. README나 재귀
-  glob만으로는 정의 파일 소유가 되지 않습니다. Ready 전에 exact head
-  Git tree의 실제 정의와 validator·구현·테스트·PR 추적성을 확인하며,
-  미결정 제품 선택은 여전히 중단 조건입니다.
+- 적용 가능한 PRD 요구사항, 수용 기준, 정책 규칙 ID를 코드, 테스트와 PR에서
+  추적합니다. tooling-only 비적용 조건은
+  [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)의
+  이슈 계약을 따릅니다.
+- 새 PRD·Policy ID의 문서·구현 동시 작업 조건과 Ready 전 추적성은
+  [update-product-docs](.agents/skills/update-product-docs/SKILL.md)의
+  planned ID 계약을 따릅니다.
 - 자동 재시도는 횟수와 시간 한도가 있는 경우에만 구현합니다. 무한 반복과
   무한 재시도를 추가해서는 안 됩니다.
 - 사용자 소유의 미추적 파일과 작업 범위 밖 변경은 수정하거나 스테이징하지

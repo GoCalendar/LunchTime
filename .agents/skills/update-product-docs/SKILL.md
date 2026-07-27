@@ -7,6 +7,33 @@ description: 사람이 읽기 쉬운 템플릿, 전역 추적 가능한 요구�
 
 제품 의도를 사람이 읽기 쉽고 AI 에이전트가 실행할 수 있게 유지한다. `docs/prd/`는 제품 결과와 요구사항의 정본, `docs/policies/`는 규범적 규칙과 예외의 정본, `docs/product-definition/`은 의사결정 이력으로 취급한다.
 
+## Planned ID 계약
+
+- `planned ID`는 GitHub 이슈의 계획 표식일 뿐 정본 정의가 아니다.
+- 새 ID는 승인된 결정이 있고, 구현 이슈가 planned ID와 namespace 번호가
+  일치하는 구체적 `NN_*.md` 정본 파일, `README·하위 인덱스`, 구현·테스트
+  변경 경로를 소유할 때만 만든다. README나 재귀 glob만으로는 정본 정의
+  파일을 소유한 것으로 보지 않는다.
+- 문서와 구현은 같은 이슈, branch와 PR에서 함께 작성할 수 있으므로
+  별도 문서 이슈나 PR을 만들 필요는 없다.
+- Ready 전에는 exact PR head Git tree에서 실제 ID 정의, `README·하위
+  인덱스`, validator, 구현·테스트와 PR의 양방향 추적을 확인한다. working
+  tree, stale `main`, image alt, raw HTML과 접힌 `<details>` 안의 문자열 또는
+  planned 표식만으로 아직 존재하지 않는 ID를 완료 증거로 사용하지 않는다.
+- 승인된 결정, planned ID 또는 변경 경로 소유가 없거나 미결정 제품 선택이
+  남으면 새 ID를 만들지 않고 중단한다.
+- 이 canonical 구역은 plain top-level H2, direct bullet과 2칸 continuation,
+  inline code만 사용한다. blockquote, image, link, reference definition,
+  fenced·indented code와 raw HTML은 계약 증거가 모호해지므로 사용하지 않는다.
+- owner·routing H2의 보호 이름은 지정된 위치에서 source가 정확히
+  `## <name>`인 plain top-level ATX 한 줄로만 쓴다. 들여쓰기·container·
+  setext·closing `#`, formatting·link·reference·entity·hardbreak와
+  종결되지 않거나 모호한 inline 문법을 보호 이름에 사용할 수 없다.
+- validator는 임의의 CommonMark rendered 동등성을 보장하지 않는다. bounded
+  block scanner가 fenced·indented code와 숨겨진 raw HTML을 후보에서 제외한
+  뒤, 다른 H2 후보의 visible/source skeleton이 보호 이름 token sequence를
+  나타내거나 포함할 수 있으면 실제 rendering과 무관하게 fail-closed한다.
+
 ## 작업 모드 선택
 
 ### 작성 또는 재구성
@@ -16,11 +43,8 @@ description: 사람이 읽기 쉬운 템플릿, 전역 추적 가능한 요구�
 1. 변경 내용을 새 PRD, 기존 PRD, 정책, 제품 정의, 기술 설계, 이슈 중 어디에 기록할지 결정한다.
 2. PRD 작업에는 [PRD 기준](./references/prd-standard.md), [PRD 템플릿](./references/prd-template.md), [가독성과 AI 작업 준비도](./references/readability-and-ai-readiness.md)를 읽는다.
 3. 정책 작업에는 [정책 기준](./references/policy-standard.md), [정책 템플릿](./references/policy-template.md), [가독성과 AI 작업 준비도](./references/readability-and-ai-readiness.md)를 읽는다.
-4. 새 PRD·Policy ID가 필요하면 먼저 승인된 결정이 있는지 확인한다. 구현
-   이슈가 planned ID, namespace 번호가 일치하는 구체적 `NN_*.md` 정본 파일,
-   인덱스·구현·테스트 변경 경로를 소유할 때만 같은 이슈, branch와 PR에서
-   문서와 구현을 함께 작성한다. README나 재귀 glob만으로는 정본 정의 파일을
-   소유한 것으로 보지 않는다.
+4. 새 PRD·Policy ID가 필요하면 [Planned ID 계약](#planned-id-계약)을
+   적용한다.
 5. 승인된 범위에 필요한 문서만 만든다. 자리표시자 디렉터리나 빈 문서를 만들지 않는다.
 
 ### 제안 동작 검토
@@ -29,9 +53,8 @@ description: 사람이 읽기 쉬운 템플릿, 전역 추적 가능한 요구�
 
 1. 관련 PRD, 정책, 제품 정의 결정과 연결된 근거를 읽는다.
 2. 모든 구현 이슈가 제품 요구사항, 수용 기준, 영향을 받는 정책 규칙을 인용할 수 있는지 확인한다.
-3. `main`에 아직 없는 새 ID를 구현과 함께 정의한다면 이슈가 해당 planned
-   ID, 승인된 결정, 정본·README 인덱스·구현·테스트 허용 경로를 명시했는지
-   확인한다. 이를 위해 별도 문서 이슈나 PR을 만들 필요는 없다.
+3. `main`에 아직 없는 새 ID를 구현과 함께 정의한다면
+   [Planned ID 계약](#planned-id-계약)을 확인한다.
 4. 미결정 제품 선택지는 `docs/product-definition/10_decision_backlog.md`에 기록한다. 제품 결정을 이슈나 기술 설계 안에 숨기지 않는다.
 5. 문서 사이의 모순, 중복 규칙, 누락된 실패 조건, 읽기 어려운 구조를 별도의 의미 검토로 확인한다.
 
@@ -47,16 +70,11 @@ description: 사람이 읽기 쉬운 템플릿, 전역 추적 가능한 요구�
    - PRD 영향: 사용자에게 보이는 기능, 흐름, 입력, 출력, 범위, 플랫폼, 제약, 성공 조건, 수용 동작의 변경.
    - 정책 영향: 생명주기, 상태, 권한, 검증, 충돌, 실패, 복구, 동기화, 보존, 암호화, 신뢰, 알림, 예외 상황의 변경.
    - 제품 정의 영향: 명시적 결정, 근거, 가정, 미결정 질문의 변경.
-3. 영향을 받는 모든 정본 문서를 같은 변경에서 갱신한다. planned ID는 같은
-   branch와 PR에서 실제 ID 정의, README·하위 인덱스, validator, 구현·테스트와
-   양방향으로 연결한다.
-4. Ready 전에는 이슈가 선언한 planned ID가 실제 정본에 정의되고 구현·테스트·
-   PR 추적 행에서 참조되는지 exact PR head Git tree로 확인한다. working tree,
-   stale `main`, image alt, raw HTML과 접힌 `<details>` 안의 문자열, planned
-   표식만으로 아직 존재하지 않는 ID를 완료 증거로 사용하지 않는다.
+3. 영향을 받는 모든 정본 문서를 같은 변경에서 갱신하고, 새 ID에는
+   [Planned ID 계약](#planned-id-계약)을 적용한다.
+4. Ready 전 planned ID 검증은 같은 계약의 exact-head 기준을 따른다.
 5. 구현이 승인된 문서와 충돌하거나 제품 결정이 승인되지 않았다면 중단하고
-   충돌 또는 미결정 사항을 보고한다. 같은 이슈·PR 허용은 미결정 제품 선택을
-   임의로 확정하는 권한이 아니다.
+   충돌 또는 미결정 사항을 보고한다.
 
 ## 문서 역할 유지
 
@@ -74,9 +92,7 @@ description: 사람이 읽기 쉬운 템플릿, 전역 추적 가능한 요구�
 - 관련 F-ID와 D-ID 의사결정 이력을 보존한다.
 - 문서를 추가·대체·폐기할 때 `README.md`, `docs/prd/README.md`, `docs/policies/README.md`를 갱신한다.
 - 폐기한 ID를 다른 의미로 재사용하지 않는다.
-- planned ID는 GitHub 이슈의 계획 표식일 뿐 정본 정의가 아니다. Ready
-  상태에서는 해당 ID가 실제 PRD·Policy에 정의되고 validator와 구현·테스트·
-  PR에서 추적되어야 한다.
+- planned ID 수명주기는 [Planned ID 계약](#planned-id-계약)을 따른다.
 
 ## 품질 게이트 실행
 
@@ -119,8 +135,7 @@ description: 사람이 읽기 쉬운 템플릿, 전역 추적 가능한 요구�
 - 문서와 스킬은 한국어를 기본 작성 언어로 사용한다. 자연스러운 표현과 정확한 의미 전달을 우선하며, 계약 ID, 파일 경로, 명령, URL, 코드·API 식별자, 기술 용어와 고유명사는 원문을 사용할 수 있다.
 - 우연한 구현 동작에 맞추려고 제품 결정을 다시 쓰지 않는다.
 - 구현을 진행하려는 목적으로 누락된 결정을 임의로 만들지 않는다.
-- 승인된 결정, planned ID 또는 변경 경로 소유가 하나라도 없으면 새 ID를
-  만들지 않고 중단한다.
+- 새 ID의 중단 조건은 [Planned ID 계약](#planned-id-계약)을 따른다.
 - 커밋할 문서에 비밀, 내부 자격 증명, 개인 컴퓨터 경로, 채팅 내용, 로컬 Git 설정을 넣지 않는다.
 - 관찰 가능한 조건이나 명시적인 미결정 항목 없이 `적절히`, `충분히`, `빠르게` 같은 모호한 승인 표현을 사용하지 않는다.
 - 검증 경로가 없는 요구사항을 추가하지 않는다.
@@ -136,7 +151,7 @@ description: 사람이 읽기 쉬운 템플릿, 전역 추적 가능한 요구�
 - PRD: 변경 문서와 요구사항 ID / 변경 없음
 - 정책: 변경 문서와 규칙 ID / 변경 없음
 - 제품 정의: 변경 결정 / 변경 없음
-- Planned ID: 없음 / 이슈 선언과 실제 정의·구현·테스트·PR 연결
+- Planned ID: 없음 / 계약 검증 결과
 - 미결정 사항: 없음 / ID
 - 결정적 검증: 통과 / 실패
 - 의미 검토: 통과 / 발견 사항
