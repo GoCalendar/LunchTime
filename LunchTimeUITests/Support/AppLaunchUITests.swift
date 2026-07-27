@@ -19,6 +19,9 @@ final class AppLaunchUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    // `XCUIApplication`은 SDK에 따라 `@MainActor`로 격리된다. Swift 6 언어 모드에서
+    // 두 환경 모두 컴파일되도록 테스트를 main actor에 고정한다.
+    @MainActor
     func test_앱을_실행하면_전면_상태가_된다() throws {
         let app = XCUIApplication()
         app.launch()
