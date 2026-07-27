@@ -21,8 +21,8 @@
 11단계 밖에서 수행합니다. 요청 유형별 첫 정본 입력, Skill owner와 종료 지점은
 [개발 하네스 가이드](docs/development/01_harness_guide.md)를 따릅니다.
 
-1. 이슈와 관련 제품 정본의 맥락, 목표, 완료 조건, 추적 ID, 선행 작업과 변경
-   경로를 읽습니다.
+1. 이슈와 관련 제품 정본의 맥락, 목표, 완료 조건, 적용 가능한 추적 ID 또는
+   tooling-only 비적용 근거, 선행 작업과 변경 경로를 읽습니다.
 2. `run-github-work-item check`로 준비 상태를 확인합니다.
 3. 사용할 짧은 수명 브랜치를 정하고 `run-github-work-item start`로 선점합니다.
 4. 선점 성공 뒤 `origin/main`에서 독립 작업 트리와 브랜치를 만듭니다.
@@ -101,20 +101,18 @@ work/issue-17-menu-ack
 
 구현 중 제품 결정이 새로 필요해지면 코드에 임의의 기본값을 넣지 않습니다.
 결정 기록과 PRD·정책을 먼저 갱신하거나 작업을 중단하고 결정을 요청합니다.
-이미 승인된 결정에 필요한 새 ID라면 구현 이슈가 planned ID, namespace
-번호가 일치하는 구체적 `NN_*.md` 정본 파일·인덱스·구현·테스트 경로를
-명시적으로 소유할 때 별도 문서 이슈 없이 같은 branch와 PR에서 정의할 수
-있습니다. README나 재귀 glob만으로는 정의 파일 소유가 되지 않습니다. Ready
-전에는 exact head Git tree에서 새 ID의 실제 정의와 validator,
-구현·테스트·PR의 양방향 추적을 확인합니다.
+새 PRD·Policy ID의 문서·구현 동시 작업 조건과 Ready 전 추적성은
+[update-product-docs](.agents/skills/update-product-docs/SKILL.md)의
+planned ID 계약을 따릅니다.
 
 ## 5. 테스트와 독립 리뷰
 
 행동 시나리오는 이슈의 `완료 조건`이 소유합니다. 구현 전에 PRD·Policy에서
-관찰 가능한 조건·행동·결과와 추적 ID를 도출하고, 모든 단위 테스트에 Gherkin을
-강제하지 않으며 결정적인 단위·구성요소·통합·계약 테스트를 선택합니다. 상세
-축과 흐름은 [BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)을
-따릅니다.
+관찰 가능한 조건·행동·결과와 적용 가능한 추적 ID를 도출합니다. tooling-only
+비적용은 [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)의
+이슈 계약을 따릅니다. 모든 단위 테스트에 Gherkin을 강제하지 않으며 결정적인
+단위·구성요소·통합·계약 테스트를 선택합니다. 상세 축과 흐름은
+[BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)을 따릅니다.
 
 독립 리뷰는 작성 컨텍스트와 분리된 읽기 전용 reviewer에게 원본 요구사항, raw
 diff와 실제 테스트 결과를 제공해 수행합니다. 기대 답을 주입하지 않고

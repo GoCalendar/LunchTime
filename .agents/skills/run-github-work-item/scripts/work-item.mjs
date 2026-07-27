@@ -7,7 +7,6 @@ import { resolve } from "node:path";
 
 import {
   definedProductContractIds,
-  referencedContractIds,
   visibleContractMarkdown,
 } from "../../update-product-docs/scripts/product-contract-ids.mjs";
 
@@ -21,6 +20,18 @@ const CREATE_MARKER_PREFIX = "<!-- lunchtime-work-item:create";
 const CREATE_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{2,79}$/;
 const CREATE_PLAN_PATTERN = /^[a-f0-9]{64}$/;
 const MAX_ISSUE_BODY_BYTES = 65_536;
+const TOOLING_TRACE_PREFIX =
+  "해당 없음 — 제품 동작·PRD·Policy 추적 대상이 아닌 도구 작업:";
+const TOOLING_CREATE_MARKER_LINE_PATTERN =
+  /^<!-- lunchtime-work-item:create key=[a-z0-9][a-z0-9-]{2,79} project=(?:required|none) -->$/;
+const TOOLING_DEFAULT_IGNORABLE_PATTERN =
+  /\p{Default_Ignorable_Code_Point}/u;
+const RENDERED_CONTRACT_ID_PATTERN =
+  /(?<![A-Za-z0-9_-])(?:PRD-\d{2,}-(?:FR|AC|SP)-\d{2,}|POL-\d{2,}-R-\d{2,})(?![A-Za-z0-9_-])/g;
+const COLLECT_REFERENCE_PROJECTION_DIAGNOSTICS =
+  process.env.NODE_ENV === "test" &&
+  process.env.WORK_ITEM_TEST_PROJECTION_DIAGNOSTICS === "1";
+let referenceProjectionOperations = 0;
 const collaboratorPermissionCache = new Map();
 const API_HEADERS = [
   "-H",
@@ -47,7 +58,7 @@ function usage() {
   work-item.mjs complete <issue-number-or-url> --pr <pr-number-or-url> --head SHA [--repo OWNER/REPO] [--config PATH] [--dry-run] [--json]
   work-item.mjs release <issue-number-or-url> --branch NAME --agent MARKER --reason TEXT [--repo OWNER/REPO] [--config PATH] [--dry-run] [--json]
   work-item.mjs reconcile <issue-number-or-url> [--repo OWNER/REPO] [--config PATH] [--dry-run] [--json]
-  work-item.mjs validate-body <file-or-> [--json]
+  work-item.mjs validate-body <file-or-> [--label LABEL...] [--json]
 
 명령:
   check          준비 상태를 읽기 전용으로 확인합니다.
@@ -56,7 +67,7 @@ function usage() {
   complete       풀 리퀘스트가 병합된 이슈를 완료 처리합니다.
   release        소유 중이며 병합되지 않은 선점을 Todo로 돌립니다.
   reconcile      안전한 Todo 이슈의 dependency:blocked를 열린 기본 선행 작업과 맞춥니다.
-  validate-body  LunchTime 이슈 본문의 결정적 계약을 검증합니다.
+  validate-body  LunchTime 이슈 본문과 실제 type label의 결정적 계약을 검증합니다.
 
 옵션:
   --branch NAME  시작 댓글에 기록할 작업 브랜치입니다.
@@ -68,7 +79,7 @@ function usage() {
   --title TEXT    생성할 이슈 제목입니다.
   --body PATH     생성 전 검증할 이슈 본문 파일입니다.
   --milestone TITLE  정확히 일치해야 하는 열린 milestone 제목입니다.
-  --label NAME    추가할 type·area 등 비-workflow label입니다. 반복할 수 있습니다.
+  --label NAME    create가 추가하거나 validate-body가 판정할 실제 type·area 등 비-workflow label입니다. 반복할 수 있습니다.
   --blocked-by ISSUE  연결할 GitHub 기본 선행 이슈입니다. 반복할 수 있습니다.
   --project       설정된 Project에 추가하고 Status를 Todo로 맞춥니다.
   --confirm-plan TOKEN  직전 dry-run이 출력한 create plan token입니다.
@@ -1018,6 +1029,7 @@ function collectReadiness({
   const bodyValidation = validateIssueBody(
     issue.body || "",
     `Issue #${issue.number}`,
+    { labels: issueLabels(issue) },
   );
   for (const error of bodyValidation.errors) {
     failures.push(`Issue body: ${error}`);
@@ -1183,6 +1195,7 @@ function ensureStartable(context, login, token, branch, agent) {
   const bodyValidation = validateIssueBody(
     context.issue.body || "",
     `Issue #${context.issueNumber}`,
+    { labels: issueLabels(context.issue) },
   );
   for (const error of bodyValidation.errors) {
     failures.push(`Issue body: ${error}`);
@@ -1202,7 +1215,9 @@ function ensureStartable(context, login, token, branch, agent) {
       `Active claim belongs to branch=${winner.branch}, agent=${winner.agent}, login=@${winner.login}.`,
     );
   }
-  if (!winner && pristine.ready && failures.length === 0) return;
+  if (!winner && pristine.ready && failures.length === 0) {
+    return { claimState, ownsWinner: false };
+  }
 
   const statuses = statusLabels(context.issue);
   const assignees = assigneeLogins(context.issue);
@@ -1282,6 +1297,108 @@ function ensureStartable(context, login, token, branch, agent) {
       },
     );
   }
+  return { claimState, ownsWinner };
+}
+
+function assertStartMutationBoundary(
+  options,
+  issueValue,
+  login,
+  token,
+  branch,
+  agent,
+  epoch,
+  stage,
+) {
+  const context = readContext(options, issueValue);
+  const issue = context.issue;
+  const validation = validateIssueBody(
+    issue.body || "",
+    `Issue #${context.issueNumber}`,
+    { labels: issueLabels(issue) },
+  );
+  if (validation.errors.length > 0) {
+    throw new WorkItemError(
+      `Live Issue body/type label contract changed during start: ${validation.errors.join(" ")}`,
+      {
+        repair: [
+          "Inspect the live Issue body and actual type labels before resuming start.",
+          "Do not continue later start mutations while the live body contract is invalid.",
+        ],
+      },
+    );
+  }
+  const { claimState, ownsWinner } = ensureStartable(
+    context,
+    login,
+    token,
+    branch,
+    agent,
+  );
+  const failures = [];
+  if (stage === "claim") {
+    if (
+      !ownsWinner &&
+      (claimState.winner ||
+        claimState.barrier !== epoch ||
+        deriveClaimToken(
+          context.repository,
+          context.issueNumber,
+          login,
+          branch,
+          agent,
+          claimState.barrier,
+        ) !== token)
+    ) {
+      failures.push(
+        "The unclaimed Issue no longer has the exact claim generation used by this start command.",
+      );
+    }
+  } else if (!ownsWinner) {
+    failures.push("The requested claim token is not the exact active winning claim.");
+  }
+
+  const assignees = assigneeLogins(issue);
+  if (
+    ["add-in-progress", "remove-todo", "project"].includes(stage) &&
+    (assignees.length !== 1 || assignees[0] !== login)
+  ) {
+    failures.push(
+      `Assignee recovery has not reached exclusive ownership by @${login}: [${assignees.join(", ")}].`,
+    );
+  }
+
+  const statuses = statusLabels(issue);
+  if (
+    ["remove-todo", "project"].includes(stage) &&
+    !statuses.includes(context.config.labels.inProgress)
+  ) {
+    failures.push(
+      `Workflow-label recovery has not added ${context.config.labels.inProgress}: [${statuses.join(", ")}].`,
+    );
+  }
+  if (
+    stage === "project" &&
+    (statuses.length !== 1 ||
+      statuses[0] !== context.config.labels.inProgress)
+  ) {
+    failures.push(
+      `Workflow-label recovery has not reached exactly [${context.config.labels.inProgress}]: [${statuses.join(", ")}].`,
+    );
+  }
+
+  if (failures.length > 0) {
+    throw new WorkItemError(
+      `Start mutation boundary changed before ${stage}: ${failures.join(" ")}`,
+      {
+        repair: [
+          "Run check and inspect the exact winning claim and partial start state.",
+          "Do not continue later start mutations until the live state is reconciled.",
+        ],
+      },
+    );
+  }
+  return context;
 }
 
 function updateIssue(repository, issueNumber, body) {
@@ -1647,30 +1764,6 @@ function readCreateInput(parsed) {
       "--title must be one meaningful line of 4-160 characters without a create marker.",
     );
   }
-  const source = requireCreateOption(parsed.options, "body");
-  let rawBody;
-  try {
-    rawBody = readFileSync(resolve(process.cwd(), source), "utf8");
-  } catch (error) {
-    throw new WorkItemError(`Cannot read Issue body ${source}: ${error.message}`);
-  }
-  if (rawBody.includes(CREATE_MARKER_PREFIX)) {
-    throw new WorkItemError(
-      "The input body must not contain a reserved create marker.",
-    );
-  }
-  const validation = validateIssueBody(rawBody, source);
-  if (validation.errors.length > 0) {
-    throw new WorkItemError(
-      `Issue body validation failed:\n- ${validation.errors.join("\n- ")}`,
-    );
-  }
-  const milestone = requireCreateOption(parsed.options, "milestone");
-  if (milestone.length > 100 || /[\r\n]/.test(milestone)) {
-    throw new WorkItemError(
-      "--milestone must be one exact title no longer than 100 characters.",
-    );
-  }
   const labels = parsed.options.labels.map((label) => label.trim());
   if (labels.length === 0) {
     throw new WorkItemError("create requires at least one --label NAME.");
@@ -1692,6 +1785,30 @@ function readCreateInput(parsed) {
         `Invalid --label "${label}". Workflow and dependency labels are derived by create.`,
       );
     }
+  }
+  const source = requireCreateOption(parsed.options, "body");
+  let rawBody;
+  try {
+    rawBody = readFileSync(resolve(process.cwd(), source), "utf8");
+  } catch (error) {
+    throw new WorkItemError(`Cannot read Issue body ${source}: ${error.message}`);
+  }
+  if (rawBody.includes(CREATE_MARKER_PREFIX)) {
+    throw new WorkItemError(
+      "The input body must not contain a reserved create marker.",
+    );
+  }
+  const validation = validateIssueBody(rawBody, source, { labels });
+  if (validation.errors.length > 0) {
+    throw new WorkItemError(
+      `Issue body validation failed:\n- ${validation.errors.join("\n- ")}`,
+    );
+  }
+  const milestone = requireCreateOption(parsed.options, "milestone");
+  if (milestone.length > 100 || /[\r\n]/.test(milestone)) {
+    throw new WorkItemError(
+      "--milestone must be one exact title no longer than 100 characters.",
+    );
   }
   const blockedBy = parsed.options.blockedBy.map((value) => value.trim());
   if (
@@ -2270,6 +2387,17 @@ function startCommand(parsed) {
     parsed.options.branch,
     parsed.options.agent,
   );
+  const verifyMutationBoundary = (stage) =>
+    assertStartMutationBoundary(
+      parsed.options,
+      issueValue,
+      login,
+      token,
+      parsed.options.branch,
+      parsed.options.agent,
+      epoch,
+      stage,
+    );
 
   try {
     mutateOrPlan({
@@ -2284,6 +2412,7 @@ function startCommand(parsed) {
         login,
       ),
       action: () => {
+        verifyMutationBoundary("claim");
         addCommentOnceExact(
           context.repository,
           context.issueNumber,
@@ -2307,14 +2436,8 @@ function startCommand(parsed) {
         assigneeLogins(context.issue).length === 1 &&
         assigneeLogins(context.issue)[0] === login,
       action: () => {
-        assertWinningClaim(context.repository, context.issueNumber, {
-          token,
-          branch: parsed.options.branch,
-          agent: parsed.options.agent,
-          login,
-        });
-        const current = getIssue(context.repository, context.issueNumber);
-        const assignees = assigneeLogins(current);
+        const live = verifyMutationBoundary("assign");
+        const assignees = assigneeLogins(live.issue);
         if (
           assignees.length > 1 ||
           (assignees.length === 1 && assignees[0] !== login)
@@ -2323,31 +2446,51 @@ function startCommand(parsed) {
             `Assignee changed before claim: [${assignees.join(", ")}].`,
           );
         }
-        updateIssue(context.repository, context.issueNumber, {
-          assignees: [login],
-        });
+        if (assignees.length === 0) {
+          updateIssue(context.repository, context.issueNumber, {
+            assignees: [login],
+          });
+        }
       },
     });
     mutateOrPlan({
       dryRun: parsed.options.dryRun,
       planned,
       completed,
-      description: `set workflow label to ${context.config.labels.inProgress}`,
-      alreadyDone:
-        statusLabels(context.issue).length === 1 &&
-        statusLabels(context.issue)[0] === context.config.labels.inProgress,
+      description: `add workflow label ${context.config.labels.inProgress}`,
+      alreadyDone: issueLabels(context.issue).includes(
+        context.config.labels.inProgress,
+      ),
       action: () => {
-        assertWinningClaim(context.repository, context.issueNumber, {
-          token,
-          branch: parsed.options.branch,
-          agent: parsed.options.agent,
-          login,
-        });
-        transitionWorkflowLabel(
-          context.repository,
-          context.issueNumber,
-          context.config.labels.inProgress,
-        );
+        const live = verifyMutationBoundary("add-in-progress");
+        if (
+          !issueLabels(live.issue).includes(context.config.labels.inProgress)
+        ) {
+          addLabel(
+            context.repository,
+            context.issueNumber,
+            context.config.labels.inProgress,
+          );
+        }
+      },
+    });
+    mutateOrPlan({
+      dryRun: parsed.options.dryRun,
+      planned,
+      completed,
+      description: `remove workflow label ${context.config.labels.todo}`,
+      alreadyDone: !issueLabels(context.issue).includes(
+        context.config.labels.todo,
+      ),
+      action: () => {
+        const live = verifyMutationBoundary("remove-todo");
+        if (issueLabels(live.issue).includes(context.config.labels.todo)) {
+          removeLabel(
+            context.repository,
+            context.issueNumber,
+            context.config.labels.todo,
+          );
+        }
       },
     });
     if (context.project) {
@@ -2360,16 +2503,16 @@ function startCommand(parsed) {
           context.project.itemStatus ===
           context.config.project.statusOptions.inProgress,
         action: () => {
-          assertWinningClaim(context.repository, context.issueNumber, {
-            token,
-            branch: parsed.options.branch,
-            agent: parsed.options.agent,
-            login,
-          });
-          updateProjectStatus(
-            context.project,
-            context.project.optionIds.inProgress,
-          );
+          const live = verifyMutationBoundary("project");
+          if (
+            live.project.itemStatus !==
+            live.config.project.statusOptions.inProgress
+          ) {
+            updateProjectStatus(
+              live.project,
+              live.project.optionIds.inProgress,
+            );
+          }
         },
       });
     }
@@ -2392,6 +2535,14 @@ function startCommand(parsed) {
 
   const verified = readContext(parsed.options, issueValue);
   const verificationFailures = [];
+  const verifiedBodyValidation = validateIssueBody(
+    verified.issue.body || "",
+    `Issue #${verified.issueNumber}`,
+    { labels: issueLabels(verified.issue) },
+  );
+  for (const error of verifiedBodyValidation.errors) {
+    verificationFailures.push(`Issue body: ${error}`);
+  }
   if (verified.issue.state !== "open") {
     verificationFailures.push(`Issue state is ${verified.issue.state}.`);
   }
@@ -2444,6 +2595,11 @@ function startCommand(parsed) {
   if (verifiedOpenBlockers.length > 0) {
     verificationFailures.push(
       `Open blockers appeared: ${verifiedOpenBlockers.map((n) => `#${n}`).join(", ")}.`,
+    );
+  }
+  if (issueLabels(verified.issue).includes(verified.config.labels.blocked)) {
+    verificationFailures.push(
+      `Derived blocked label ${verified.config.labels.blocked} appeared.`,
     );
   }
 
@@ -3573,19 +3729,44 @@ function validateBodyCommand(parsed) {
     throw new WorkItemError(`Cannot read Issue body ${source}: ${error.message}`);
   }
 
-  const validation = validateIssueBody(body, source);
+  if (COLLECT_REFERENCE_PROJECTION_DIAGNOSTICS) {
+    referenceProjectionOperations = 0;
+  }
+  const validation = validateIssueBody(body, source, {
+    labels: parsed.options.labels,
+  });
   return {
     command: "validate-body",
     source,
+    labels: parsed.options.labels,
     valid: validation.errors.length === 0,
     errors: validation.errors,
     requiredHeadings: REQUIRED_BODY_HEADINGS,
+    ...(COLLECT_REFERENCE_PROJECTION_DIAGNOSTICS
+      ? { referenceProjectionOperations }
+      : {}),
   };
 }
 
-function validateIssueBody(body, source) {
-  const visibleBody = visibleContractMarkdown(body);
+function validateIssueBody(body, source, { labels = [] } = {}) {
+  if (String(body ?? "").includes(TOOLING_TRACE_PREFIX)) {
+    const sourceGrammarViolation = toolingSourceGrammarViolation(body);
+    if (sourceGrammarViolation) {
+      return {
+        source,
+        errors: [
+          `tooling-only 비적용 본문은 제한된 fail-closed Markdown 소스 문법만 허용합니다(줄 ${sourceGrammarViolation.line}): ${sourceGrammarViolation.reason} 일반 텍스트·제목·목록·표·inline code 또는 같은 줄에서 완결된 "[label](destination)" 링크로 고치고 숨김·참조 문법을 제거하세요.`,
+        ],
+      };
+    }
+  }
+
+  const visibleBody = visibleContractMarkdownPreservingInlineCode(
+    maskMarkdownImages(body, referenceResolutionVisibleMarkdown(body)),
+  );
+  const renderedEvidenceBody = renderedVisibleContractMarkdown(body);
   const parsed = parseIssueBody(visibleBody);
+  const renderedParsed = parseIssueBody(renderedEvidenceBody);
   const headings = parsed.headings.map(({ name }) => name);
   const errors = [];
   for (const heading of REQUIRED_BODY_HEADINGS) {
@@ -3620,13 +3801,17 @@ function validateIssueBody(body, source) {
 
   for (const heading of REQUIRED_BODY_HEADINGS) {
     const content = parsed.sections.get(heading) || "";
-    if (!isMeaningfulSection(content)) {
+    const renderedContent = renderedParsed.sections.get(heading) || "";
+    if (
+      !isMeaningfulSection(content) &&
+      !isMeaningfulSection(renderedContent)
+    ) {
       errors.push(
         `"${heading}" 섹션에는 의미 있는 내용이 필요하며 자리표시자와 한 글자 값은 허용하지 않습니다.`,
       );
     }
   }
-  const bareTraceIds = findBareTraceabilityIds(visibleBody);
+  const bareTraceIds = findBareTraceabilityIds(renderedEvidenceBody);
   if (bareTraceIds.length > 0) {
     errors.push(
       `추적성 ID에는 전역 네임스페이스가 필요합니다. 발견된 값: ${bareTraceIds.join(
@@ -3635,31 +3820,1638 @@ function validateIssueBody(body, source) {
     );
   }
   const traceability = parsed.sections.get("추적성") || "";
-  if (referencedContractIds(traceability).size === 0) {
+  const renderedTraceability =
+    renderedParsed.sections.get("추적성") || "";
+  const contractIds = renderedContractIds(renderedTraceability);
+  const toolingTrace = parseToolingTraceability(traceability);
+  const bodyContractIds = renderedContractIds(renderedEvidenceBody);
+  const bodyHasToolingDeclaration =
+    renderedEvidenceBody.includes(TOOLING_TRACE_PREFIX) ||
+    renderedEvidenceBody.includes(
+      TOOLING_TRACE_PREFIX.replaceAll("—", "-"),
+    );
+  if (bodyHasToolingDeclaration && bodyContractIds.size > 0) {
     errors.push(
-      '"추적성" 섹션에는 전역 네임스페이스가 있는 PRD 또는 정책 ID가 하나 이상 필요합니다.',
+      `이슈 본문 전체에서 제품 계약 ID와 "${TOOLING_TRACE_PREFIX}" 비적용 선언을 함께 사용할 수 없습니다.`,
     );
   }
-  validatePlannedTraceability(parsed, errors);
+  if (contractIds.size === 0) {
+    validateToolingTraceability(
+      parsed,
+      renderedParsed,
+      labels,
+      toolingTrace,
+      errors,
+    );
+  } else {
+    if (toolingTrace.present) {
+      errors.push(
+        `"추적성" 섹션은 제품 계약 ID와 "${TOOLING_TRACE_PREFIX}" 비적용 선언을 함께 사용할 수 없습니다.`,
+      );
+    }
+    validatePlannedTraceability(parsed, renderedParsed, errors);
+  }
   return {
     source,
     errors,
   };
 }
 
-function validatePlannedTraceability(parsed, errors) {
-  const traceability = visibleContractMarkdown(
-    parsed.sections.get("추적성") || "",
+function toolingSourceGrammarViolation(markdown) {
+  const source = String(markdown ?? "");
+  let index = 0;
+  let line = 1;
+  let atLineStart = true;
+  let createMarkerCount = 0;
+  let backslashRun = 0;
+  let linkState = "text";
+  let destinationDepth = 0;
+
+  while (index < source.length) {
+    if (atLineStart) {
+      const newline = source.indexOf("\n", index);
+      const lineEnd = newline < 0 ? source.length : newline;
+      const sourceLine = source.slice(index, lineEnd);
+      const hasCrlf =
+        newline >= 0 && sourceLine.endsWith("\r");
+      const rawLine = hasCrlf
+        ? sourceLine.slice(0, -1)
+        : sourceLine;
+      countReferenceProjectionOperation(rawLine.length + 1);
+      if (rawLine.includes("\r")) {
+        return {
+          line,
+          reason:
+            "CRLF가 아닌 bare CR 줄바꿈은 소스 경계와 inline link 완결성을 우회할 수 있어 허용되지 않습니다.",
+        };
+      }
+      if (TOOLING_CREATE_MARKER_LINE_PATTERN.test(rawLine)) {
+        createMarkerCount += 1;
+        if (createMarkerCount > 1) {
+          return {
+            line,
+            reason:
+              "정확한 create marker HTML comment도 본문 전체에서 한 줄만 허용됩니다.",
+          };
+        }
+        index = newline < 0 ? source.length : newline + 1;
+        line += newline < 0 ? 0 : 1;
+        atLineStart = true;
+        backslashRun = 0;
+        continue;
+      }
+      const leadingIndentColumns =
+        toolingSourceLeadingIndentColumns(rawLine);
+      if (
+        rawLine.trim() &&
+        leadingIndentColumns >= 4
+      ) {
+        return {
+          line,
+          reason:
+            "4열 이상의 소스 들여쓰기는 top-level·list-contained indented code와 구별하지 않고 거부합니다.",
+        };
+      }
+      if (toolingSourceHasUnsafeListPadding(rawLine)) {
+        return {
+          line,
+          reason:
+            "각 nested list marker 뒤의 tab 또는 5칸 이상 padding은 list-contained indented code와 구별하지 않고 거부합니다.",
+        };
+      }
+      if (/^ {0,3}(?:`{3,}|~{3,})/.test(rawLine)) {
+        return {
+          line,
+          reason: "fenced code block은 허용되지 않습니다.",
+        };
+      }
+      atLineStart = false;
+    }
+
+    countReferenceProjectionOperation();
+    const codePoint = source.codePointAt(index);
+    const character = String.fromCodePoint(codePoint);
+    const width = character.length;
+
+    if (character === "\n") {
+      if (linkState !== "text") {
+        return {
+          line,
+          reason:
+            "inline Markdown 링크의 label과 destination은 같은 줄에서 모두 닫혀야 합니다.",
+        };
+      }
+      index += width;
+      line += 1;
+      atLineStart = true;
+      backslashRun = 0;
+      continue;
+    }
+    if (character === "\\") {
+      backslashRun += 1;
+      index += width;
+      continue;
+    }
+
+    const escaped = backslashRun % 2 === 1;
+    backslashRun = 0;
+
+    if (character === "`") {
+      let delimiterLength = 1;
+      while (
+        source[index + delimiterLength] === "`"
+      ) {
+        countReferenceProjectionOperation();
+        delimiterLength += 1;
+      }
+      if (delimiterLength >= 3) {
+        return {
+          line,
+          reason:
+            "세 개 이상의 backtick delimiter는 fenced code와 구별하지 않고 거부합니다.",
+        };
+      }
+      if (escaped) {
+        index += delimiterLength;
+        continue;
+      }
+      if (linkState === "destination") {
+        return {
+          line,
+          reason:
+            "inline code는 링크 destination 안에서 사용할 수 없습니다.",
+        };
+      }
+      const closing = closingToolingInlineCode(
+        source,
+        index + delimiterLength,
+        delimiterLength,
+      );
+      if (closing < 0) {
+        return {
+          line,
+          reason:
+            "inline code delimiter는 같은 줄에서 같은 길이로 닫혀야 합니다.",
+        };
+      }
+      index = closing + delimiterLength;
+      continue;
+    }
+    if (character === "~") {
+      let delimiterLength = 1;
+      while (
+        source[index + delimiterLength] === "~"
+      ) {
+        countReferenceProjectionOperation();
+        delimiterLength += 1;
+      }
+      if (delimiterLength >= 3) {
+        return {
+          line,
+          reason:
+            "세 개 이상의 tilde delimiter는 list·blockquote container 안에서도 fenced code로 보고 거부합니다.",
+        };
+      }
+      index += delimiterLength;
+      continue;
+    }
+
+    if (character === "<" || character === ">") {
+      return {
+        line,
+        reason:
+          "`<`와 `>`는 create marker 또는 inline code 밖에서 허용되지 않으므로 HTML comment·tag·autolink·blockquote를 사용할 수 없습니다.",
+      };
+    }
+    if (TOOLING_DEFAULT_IGNORABLE_PATTERN.test(character)) {
+      return {
+        line,
+        reason:
+          "default-ignorable Unicode 문자는 inline code 밖에서 허용되지 않습니다.",
+      };
+    }
+    if (
+      character === "&" &&
+      toolingHtmlEntityLength(source, index) > 0
+    ) {
+      return {
+        line,
+        reason:
+          "HTML entity 문법은 inline code 밖에서 허용되지 않습니다.",
+      };
+    }
+    if (character === "!" && source[index + 1] === "[") {
+      return {
+        line,
+        reason:
+          "escape 여부와 관계없이 Markdown image 문법은 허용되지 않습니다.",
+      };
+    }
+
+    if (character === "[") {
+      if (escaped) {
+        index += width;
+        continue;
+      }
+      if (linkState !== "text") {
+        return {
+          line,
+          reason:
+            "중첩·reference Markdown link bracket은 허용되지 않습니다.",
+        };
+      }
+      linkState = "label";
+      index += width;
+      continue;
+    }
+    if (character === "]") {
+      if (escaped) {
+        index += width;
+        continue;
+      }
+      if (linkState !== "label") {
+        return {
+          line,
+          reason:
+            "짝이 없는 Markdown link closing bracket은 허용되지 않습니다.",
+        };
+      }
+      if (source[index + width] !== "(") {
+        return {
+          line,
+          reason:
+            "reference definition과 full·collapsed·shortcut reference link는 허용되지 않으며 inline link는 `](`가 바로 이어져야 합니다.",
+        };
+      }
+      linkState = "destination";
+      destinationDepth = 1;
+      index += width + 1;
+      continue;
+    }
+    if (linkState === "destination") {
+      if (/\s/u.test(character)) {
+        return {
+          line,
+          reason:
+            "inline link destination은 공백·title 없이 같은 줄에서 완결되어야 합니다.",
+        };
+      }
+      if (!escaped && (character === "[" || character === "]")) {
+        return {
+          line,
+          reason:
+            "inline link destination 안의 Markdown bracket은 허용되지 않습니다.",
+        };
+      }
+      if (!escaped && character === "(") {
+        destinationDepth += 1;
+      } else if (!escaped && character === ")") {
+        destinationDepth -= 1;
+        if (destinationDepth === 0) {
+          linkState = "text";
+        }
+      }
+    }
+
+    index += width;
+  }
+
+  if (linkState === "label") {
+    return {
+      line,
+      reason:
+        "inline Markdown link label의 closing bracket과 destination이 없습니다.",
+    };
+  }
+  if (linkState === "destination") {
+    return {
+      line,
+      reason:
+        "inline Markdown link destination의 closing parenthesis가 없습니다.",
+    };
+  }
+  return null;
+}
+
+function toolingSourceLeadingIndentColumns(line) {
+  let columns = 0;
+  for (const character of line) {
+    if (character === " ") {
+      columns += 1;
+      continue;
+    }
+    if (character === "\t") {
+      columns += 4 - (columns % 4);
+      continue;
+    }
+    break;
+  }
+  return columns;
+}
+
+function toolingSourceHasUnsafeListPadding(line) {
+  let cursor = 0;
+  while (cursor < 3 && line[cursor] === " ") {
+    cursor += 1;
+  }
+  while (cursor < line.length) {
+    const marker = line
+      .slice(cursor)
+      .match(/^(?:[-+*]|\d{1,9}[.)])([ \t]+)/);
+    if (!marker) return false;
+    const padding = marker[1];
+    if (
+      padding.includes("\t") ||
+      padding.length >= 5
+    ) {
+      return true;
+    }
+    cursor += marker[0].length;
+  }
+  return false;
+}
+
+function closingToolingInlineCode(source, start, delimiterLength) {
+  let cursor = start;
+  while (cursor < source.length && source[cursor] !== "\n") {
+    countReferenceProjectionOperation();
+    if (source[cursor] !== "`") {
+      cursor += 1;
+      continue;
+    }
+    let runLength = 1;
+    while (source[cursor + runLength] === "`") {
+      countReferenceProjectionOperation();
+      runLength += 1;
+    }
+    if (runLength === delimiterLength) return cursor;
+    cursor += runLength;
+  }
+  return -1;
+}
+
+function toolingHtmlEntityLength(source, opening) {
+  let cursor = opening + 1;
+  const first = source[cursor];
+  if (first === "#") {
+    cursor += 1;
+    const hexadecimal =
+      source[cursor] === "x" || source[cursor] === "X";
+    if (hexadecimal) cursor += 1;
+    const digitStart = cursor;
+    const maximumDigits = hexadecimal ? 6 : 7;
+    while (
+      cursor - digitStart < maximumDigits &&
+      (hexadecimal
+        ? /[0-9A-Fa-f]/.test(source[cursor] || "")
+        : /[0-9]/.test(source[cursor] || ""))
+    ) {
+      countReferenceProjectionOperation();
+      cursor += 1;
+    }
+    return cursor > digitStart && source[cursor] === ";"
+      ? cursor - opening + 1
+      : 0;
+  }
+  if (!/[A-Za-z]/.test(first || "")) return 0;
+  const nameStart = cursor;
+  while (
+    cursor - nameStart < 32 &&
+    /[A-Za-z0-9]/.test(source[cursor] || "")
+  ) {
+    countReferenceProjectionOperation();
+    cursor += 1;
+  }
+  return source[cursor] === ";" ? cursor - opening + 1 : 0;
+}
+
+function maskMarkdownImages(markdown, visibility = markdown) {
+  const source = String(markdown ?? "");
+  const visible = String(visibility ?? "");
+  const bracketPairs = markdownDelimiterPairs(visible, "[", "]");
+  const ranges = [];
+  let cursor = 0;
+  while (cursor < visible.length - 1) {
+    countReferenceProjectionOperation();
+    const opening = visible.indexOf("![", cursor);
+    if (opening < 0) break;
+    let backslashes = 0;
+    for (
+      let index = opening - 1;
+      index >= 0 && source[index] === "\\";
+      index -= 1
+    ) {
+      backslashes += 1;
+    }
+    if (backslashes % 2 === 1) {
+      cursor = opening + 2;
+      continue;
+    }
+
+    const labelEnd = bracketPairs[opening + 1] ?? -1;
+    if (labelEnd < 0) {
+      cursor = opening + 2;
+      continue;
+    }
+    const destinationOpening = labelEnd + 1;
+    if (visible[destinationOpening] !== "(") {
+      cursor = destinationOpening;
+      continue;
+    }
+    const destinationEnd = closingMarkdownLinkDestination(
+      visible,
+      destinationOpening,
+    );
+    if (destinationEnd < 0) {
+      cursor = destinationOpening + 1;
+      continue;
+    }
+    ranges.push({ start: opening, end: destinationEnd + 1 });
+    cursor = destinationEnd + 1;
+  }
+
+  return maskMarkdownRanges(source, ranges);
+}
+
+function closingMarkdownDelimiter(source, opening, open, close) {
+  let depth = 1;
+  for (let index = opening + 1; index < source.length; index += 1) {
+    countReferenceProjectionOperation();
+    if (source[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (source[index] === open) depth += 1;
+    if (source[index] === close) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function countReferenceProjectionOperation(count = 1) {
+  if (COLLECT_REFERENCE_PROJECTION_DIAGNOSTICS) {
+    referenceProjectionOperations += count;
+  }
+}
+
+function markdownDelimiterPairs(source, open, close) {
+  const text = String(source ?? "");
+  const pairs = new Int32Array(text.length);
+  pairs.fill(-1);
+  const openings = [];
+  for (let index = 0; index < text.length; index += 1) {
+    countReferenceProjectionOperation();
+    if (text[index] === "\\") {
+      if (index + 1 < text.length) {
+        countReferenceProjectionOperation();
+        index += 1;
+      }
+      continue;
+    }
+    if (text[index] === open) {
+      openings.push(index);
+      continue;
+    }
+    if (text[index] === close && openings.length > 0) {
+      pairs[openings.pop()] = index;
+    }
+  }
+  return pairs;
+}
+
+function closingMarkdownLinkDestination(source, opening) {
+  let depth = 1;
+  let quote = "";
+  let angleDestination = false;
+  for (let index = opening + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\") {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = "";
+      continue;
+    }
+    if (angleDestination) {
+      if (character === ">") angleDestination = false;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "<") {
+      angleDestination = true;
+      continue;
+    }
+    if (character === "(") depth += 1;
+    if (character === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function renderedVisibleContractMarkdown(markdown) {
+  const protectedRawHtml = protectRenderedRawHtmlBlocks(markdown);
+  const prepared = prepareRenderedEvidenceMarkdown(
+    protectedRawHtml.markdown,
   );
-  const allowedPaths = visibleContractMarkdown(
-    parsed.sections.get("변경 허용 경로") || "",
+  const protectedDefinitions =
+    protectRenderedLiteralReferenceDefinitions(prepared);
+  const protectedCode = protectRenderedInlineCode(
+    protectedDefinitions.markdown,
   );
-  const forbiddenPaths = visibleContractMarkdown(
-    parsed.sections.get("변경 금지 경로") || "",
+  const visible = visibleContractMarkdown(protectedCode.markdown);
+  const labelsOnly = preserveRenderedLinkLabels(visible);
+  const entitiesDecoded = stripRenderedDefaultIgnorables(
+    decodeRenderedHtmlEntities(labelsOnly, {
+      collapseUnknownNamedEntities: true,
+    }),
   );
-  const documentImpact = visibleContractMarkdown(
-    parsed.sections.get("문서 영향") || "",
+  const escapesDecoded = preserveRenderedLinkLabels(
+    decodeRenderedMarkdownEscapes(entitiesDecoded),
   );
+  const punctuationNormalized =
+    normalizeRenderedPunctuation(escapesDecoded);
+  return protectedRawHtml.restore(
+    protectedDefinitions.restore(
+      protectedCode.restore(
+        stripRenderedMarkdownEmphasis(punctuationNormalized),
+      ),
+    ),
+  );
+}
+
+function renderedContractIds(markdown) {
+  const normalized = String(markdown ?? "").replace(
+    /[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g,
+    "-",
+  );
+  return new Set(
+    normalized.match(RENDERED_CONTRACT_ID_PATTERN) ?? [],
+  );
+}
+
+function preserveRenderedLinkLabels(markdown) {
+  return String(markdown ?? "").replace(
+    /\[([^\]\n]+)]\([^\n)]*\)/g,
+    "$1",
+  );
+}
+
+const RENDERED_HIDDEN_HTML_ELEMENTS = new Set([
+  "code",
+  "pre",
+  "script",
+  "style",
+  "template",
+  "textarea",
+]);
+
+const RENDERED_RAW_HTML_BLOCK_ELEMENTS = new Set([
+  "address",
+  "article",
+  "aside",
+  "base",
+  "basefont",
+  "blockquote",
+  "body",
+  "caption",
+  "center",
+  "col",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "dir",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "frame",
+  "frameset",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hr",
+  "html",
+  "iframe",
+  "legend",
+  "li",
+  "link",
+  "main",
+  "menu",
+  "menuitem",
+  "nav",
+  "noframes",
+  "ol",
+  "optgroup",
+  "option",
+  "p",
+  "param",
+  "search",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "title",
+  "tr",
+  "track",
+  "ul",
+]);
+
+function protectRenderedRawHtmlBlocks(markdown) {
+  const source = String(markdown ?? "");
+  const visibility = maskRenderedHiddenHtmlContainers(
+    maskMarkdownFencedBlocks(maskMarkdownHtmlComments(source)),
+  );
+  const ranges = renderedRawHtmlBlockRanges(source, visibility);
+  if (ranges.length === 0) {
+    return {
+      markdown: source,
+      restore: (value) => String(value ?? ""),
+    };
+  }
+
+  let marker = "\uE000LTHTML";
+  while (source.includes(marker)) marker = `\uE000${marker}`;
+  const replacements = [];
+  let protectedMarkdown = "";
+  let cursor = 0;
+  for (const [index, range] of ranges.entries()) {
+    const token = `${marker}${index}\uE001`;
+    protectedMarkdown += source.slice(cursor, range.start);
+    protectedMarkdown += token;
+    replacements.push({
+      token,
+      literal: renderedLiteralHtmlBlockText(
+        source.slice(range.start, range.end),
+      ),
+    });
+    cursor = range.end;
+  }
+  protectedMarkdown += source.slice(cursor);
+
+  return {
+    markdown: protectedMarkdown,
+    restore(value) {
+      let restored = String(value ?? "");
+      for (const replacement of replacements) {
+        restored = restored
+          .split(replacement.token)
+          .join(replacement.literal);
+      }
+      return restored;
+    },
+  };
+}
+
+function renderedRawHtmlBlockRanges(source, visibility) {
+  const lines = [...String(source ?? "").matchAll(/[^\n]*(?:\n|$)/g)]
+    .filter((match) => match[0]);
+  const ranges = [];
+  let previousLineBlank = true;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const rawLine = line[0].replace(/\n$/, "");
+    const visibleLine = visibility.slice(
+      line.index,
+      line.index + rawLine.length,
+    );
+    const typeSix = /^ {0,3}<\/?([A-Za-z][A-Za-z0-9-]*)(?=[\t\f\r />]|$)/
+      .exec(visibleLine);
+    const typeSeven =
+      previousLineBlank && isCompleteRawHtmlTagLine(visibleLine);
+    if (
+      !(
+        (typeSix &&
+          RENDERED_RAW_HTML_BLOCK_ELEMENTS.has(
+            typeSix[1].toLowerCase(),
+          )) ||
+        typeSeven
+      )
+    ) {
+      previousLineBlank = isCommonMarkBlankLine(rawLine);
+      continue;
+    }
+
+    let end = line.index + line[0].length;
+    let finalIndex = index;
+    while (finalIndex + 1 < lines.length) {
+      const next = lines[finalIndex + 1];
+      const nextRaw = next[0].replace(/\n$/, "");
+      if (isCommonMarkBlankLine(nextRaw)) break;
+      finalIndex += 1;
+      end = next.index + next[0].length;
+    }
+    ranges.push({ start: line.index, end });
+    index = finalIndex;
+    previousLineBlank = true;
+  }
+  return ranges;
+}
+
+function isCommonMarkBlankLine(line) {
+  return /^[ \t]*$/.test(String(line ?? ""));
+}
+
+function isCompleteRawHtmlTagLine(line) {
+  const source = String(line ?? "");
+  const leading = /^ {0,3}/.exec(source)?.[0].length ?? 0;
+  if (source[leading] !== "<") return false;
+  const tags = scanRenderedHtmlTags(source);
+  if (tags.length !== 1 || tags[0].start !== leading) return false;
+  return source.slice(tags[0].end).trim() === "";
+}
+
+function renderedLiteralHtmlBlockText(markdown) {
+  const withoutComments = maskMarkdownHtmlComments(markdown);
+  const withoutHidden =
+    maskRenderedHiddenHtmlContainers(withoutComments);
+  const withoutTags = removeMarkdownRanges(
+    withoutHidden,
+    scanRenderedHtmlTags(withoutHidden)
+      .map(({ start, end }) => ({ start, end })),
+  );
+  const normalized = normalizeRenderedPunctuation(
+    stripRenderedDefaultIgnorables(
+      decodeRenderedHtmlEntities(withoutTags, {
+        collapseUnknownNamedEntities: true,
+      }),
+    ),
+  );
+  return normalized.replace(/^/gm, "\u00A0");
+}
+
+function prepareRenderedEvidenceMarkdown(markdown) {
+  const source = String(markdown ?? "");
+  const resolutionVisibility =
+    referenceResolutionVisibleMarkdown(source);
+  const definitions = collectVisibleReferenceDefinitions(
+    source,
+    resolutionVisibility,
+  );
+  const withoutDefinitions = maskMarkdownRanges(
+    source,
+    definitions.ranges,
+  );
+  const withoutDefinitionsVisibility = maskMarkdownRanges(
+    resolutionVisibility,
+    definitions.ranges,
+  );
+  const resolvedLinks = collapseResolvedReferenceLinks(
+    withoutDefinitions,
+    withoutDefinitionsVisibility,
+    definitions.labels,
+  );
+  const withoutInlineHtml = stripRenderedInlineHtmlTags(resolvedLinks);
+  const imageVisibility =
+    referenceResolutionVisibleMarkdown(withoutInlineHtml);
+  const withoutInlineImages = maskMarkdownImages(
+    withoutInlineHtml,
+    imageVisibility,
+  );
+  return preserveRenderedReferenceImageLabels(
+    withoutInlineImages,
+    referenceResolutionVisibleMarkdown(withoutInlineImages),
+    definitions.labels,
+  );
+}
+
+function protectRenderedLiteralReferenceDefinitions(markdown) {
+  const source = String(markdown ?? "");
+  const colonOffsets = [];
+  for (const match of source.matchAll(/^ {0,3}\[[^\]\n]+](:)/gm)) {
+    colonOffsets.push(match.index + match[0].length - 1);
+  }
+  if (colonOffsets.length === 0) {
+    return {
+      markdown: source,
+      restore: (value) => String(value ?? ""),
+    };
+  }
+
+  let marker = "\uE000LTREFCOLON";
+  while (source.includes(marker)) marker = `\uE000${marker}`;
+  let protectedMarkdown = "";
+  let cursor = 0;
+  for (const [index, offset] of colonOffsets.entries()) {
+    const token = `${marker}${index}\uE001`;
+    protectedMarkdown += source.slice(cursor, offset);
+    protectedMarkdown += token;
+    cursor = offset + 1;
+  }
+  protectedMarkdown += source.slice(cursor);
+  return {
+    markdown: protectedMarkdown,
+    restore(value) {
+      let restored = String(value ?? "");
+      for (let index = 0; index < colonOffsets.length; index += 1) {
+        restored = restored
+          .split(`${marker}${index}\uE001`)
+          .join(":");
+      }
+      return restored;
+    },
+  };
+}
+
+function referenceResolutionVisibleMarkdown(markdown) {
+  const withoutComments = maskMarkdownHtmlComments(markdown);
+  const withoutFences = maskMarkdownFencedBlocks(withoutComments);
+  const withoutInlineCode = maskMarkdownInlineCode(withoutFences);
+  return maskRenderedHiddenHtmlContainers(withoutInlineCode);
+}
+
+function maskMarkdownRanges(markdown, ranges) {
+  const source = String(markdown ?? "");
+  if (ranges.length === 0) return source;
+  let result = "";
+  let cursor = 0;
+  for (const range of [...ranges].sort((left, right) => left.start - right.start)) {
+    if (range.end <= cursor) continue;
+    const start = Math.max(cursor, range.start);
+    result += source.slice(cursor, start);
+    result += source.slice(start, range.end).replace(/[^\n]/g, " ");
+    cursor = range.end;
+  }
+  return result + source.slice(cursor);
+}
+
+function removeMarkdownRanges(markdown, ranges) {
+  const source = String(markdown ?? "");
+  if (ranges.length === 0) return source;
+  let result = "";
+  let cursor = 0;
+  for (const range of [...ranges].sort((left, right) => left.start - right.start)) {
+    if (range.end <= cursor) continue;
+    result += source.slice(cursor, Math.max(cursor, range.start));
+    cursor = Math.max(cursor, range.end);
+  }
+  return result + source.slice(cursor);
+}
+
+function maskMarkdownHtmlComments(markdown) {
+  const source = String(markdown ?? "");
+  const ranges = [];
+  let cursor = 0;
+  while (cursor < source.length) {
+    const start = source.indexOf("<!--", cursor);
+    if (start < 0) break;
+    const closing = source.indexOf("-->", start + 4);
+    const end = closing < 0 ? source.length : closing + 3;
+    ranges.push({ start, end });
+    cursor = end;
+  }
+  return maskMarkdownRanges(source, ranges);
+}
+
+function maskMarkdownFencedBlocks(markdown) {
+  const source = String(markdown ?? "");
+  const ranges = [];
+  let open;
+  let offset = 0;
+  for (const match of source.matchAll(/[^\n]*(?:\n|$)/g)) {
+    const rawLine = match[0];
+    if (!rawLine) break;
+    const line = rawLine.replace(/\n$/, "");
+    const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      const marker = fence[1];
+      if (!open) {
+        open = {
+          character: marker[0],
+          length: marker.length,
+          start: offset,
+        };
+      } else if (
+        marker[0] === open.character &&
+        marker.length >= open.length &&
+        fence[2].trim() === ""
+      ) {
+        ranges.push({ start: open.start, end: offset + rawLine.length });
+        open = undefined;
+      }
+    }
+    offset += rawLine.length;
+  }
+  if (open) ranges.push({ start: open.start, end: source.length });
+  return maskMarkdownRanges(source, ranges);
+}
+
+function markdownInlineCodeRanges(markdown, visibility = markdown) {
+  const source = String(markdown ?? "");
+  const visible = String(visibility ?? "");
+  const ranges = [];
+  let cursor = 0;
+  while (cursor < visible.length) {
+    const opening = visible.indexOf("`", cursor);
+    if (opening < 0) break;
+    if (isEscapedMarkdownCharacter(source, opening)) {
+      cursor = opening + 1;
+      continue;
+    }
+    let openingEnd = opening;
+    while (visible[openingEnd] === "`") openingEnd += 1;
+    const delimiterLength = openingEnd - opening;
+    let candidate = openingEnd;
+    let closing = -1;
+    while (candidate < visible.length) {
+      candidate = visible.indexOf("`", candidate);
+      if (candidate < 0) break;
+      let candidateEnd = candidate;
+      while (visible[candidateEnd] === "`") candidateEnd += 1;
+      if (
+        candidateEnd - candidate === delimiterLength &&
+        !isEscapedMarkdownCharacter(source, candidate)
+      ) {
+        closing = candidate;
+        break;
+      }
+      candidate = candidateEnd;
+    }
+    if (closing < 0) {
+      cursor = openingEnd;
+      continue;
+    }
+    const end = closing + delimiterLength;
+    ranges.push({ start: opening, end });
+    cursor = end;
+  }
+  return ranges;
+}
+
+function maskMarkdownInlineCode(markdown) {
+  const source = String(markdown ?? "");
+  const ranges = markdownInlineCodeRanges(source);
+  return maskMarkdownRanges(source, ranges);
+}
+
+function protectRenderedInlineCode(markdown) {
+  const source = String(markdown ?? "");
+  const withoutComments = maskMarkdownHtmlComments(source);
+  const visibility = maskRenderedHiddenHtmlContainers(
+    maskMarkdownFencedBlocks(withoutComments),
+  );
+  const ranges = markdownInlineCodeRanges(source, visibility);
+  if (ranges.length === 0) {
+    return {
+      markdown: source,
+      restore: (value) => String(value ?? ""),
+    };
+  }
+
+  let marker = "\uE000LTCODE";
+  while (source.includes(marker)) marker = `\uE000${marker}`;
+  const replacements = [];
+  let protectedMarkdown = "";
+  let cursor = 0;
+  for (const [index, range] of ranges.entries()) {
+    const token = `${marker}${index}\uE001`;
+    protectedMarkdown += source.slice(cursor, range.start);
+    protectedMarkdown += token;
+    replacements.push({
+      token,
+      raw: source.slice(range.start, range.end),
+    });
+    cursor = range.end;
+  }
+  protectedMarkdown += source.slice(cursor);
+
+  return {
+    markdown: protectedMarkdown,
+    restore(value) {
+      let restored = String(value ?? "");
+      for (const replacement of replacements) {
+        restored = restored.split(replacement.token).join(replacement.raw);
+      }
+      return restored;
+    },
+  };
+}
+
+function visibleContractMarkdownPreservingInlineCode(markdown) {
+  const protectedCode = protectRenderedInlineCode(markdown);
+  return protectedCode.restore(
+    visibleContractMarkdown(protectedCode.markdown),
+  );
+}
+
+function isEscapedMarkdownCharacter(source, index) {
+  let backslashes = 0;
+  for (
+    let cursor = index - 1;
+    cursor >= 0 && source[cursor] === "\\";
+    cursor -= 1
+  ) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function scanRenderedHtmlTags(markdown) {
+  const source = String(markdown ?? "");
+  const tags = [];
+  let cursor = 0;
+  while (cursor < source.length) {
+    const start = source.indexOf("<", cursor);
+    if (start < 0) break;
+    if (isEscapedMarkdownCharacter(source, start)) {
+      cursor = start + 1;
+      continue;
+    }
+    let index = start + 1;
+    if (source[index] === "/") index += 1;
+    if (!/[A-Za-z]/.test(source[index] ?? "")) {
+      cursor = start + 1;
+      continue;
+    }
+    let quote = "";
+    while (index < source.length) {
+      const character = source[index];
+      if (quote) {
+        if (character === quote) quote = "";
+      } else if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === ">") {
+        break;
+      }
+      index += 1;
+    }
+    if (index >= source.length) {
+      cursor = start + 1;
+      continue;
+    }
+    const raw = source.slice(start, index + 1);
+    const parsed =
+      /^<\/?\s*([A-Za-z][A-Za-z0-9-]*)(?=[\t\n\f\r />])/.exec(raw);
+    if (parsed) {
+      tags.push({
+        start,
+        end: index + 1,
+        name: parsed[1].toLowerCase(),
+        closing: /^<\//.test(raw),
+        selfClosing: /\/\s*>$/.test(raw),
+      });
+    }
+    cursor = index + 1;
+  }
+  return tags;
+}
+
+function maskRenderedHiddenHtmlContainers(markdown) {
+  const source = String(markdown ?? "");
+  const ranges = [];
+  const stack = [];
+  for (const tag of scanRenderedHtmlTags(source)) {
+    if (!RENDERED_HIDDEN_HTML_ELEMENTS.has(tag.name)) continue;
+    if (!tag.closing && !tag.selfClosing) {
+      stack.push(tag);
+      continue;
+    }
+    if (!tag.closing) continue;
+    const openingIndex = stack
+      .map((opening) => opening.name)
+      .lastIndexOf(tag.name);
+    if (openingIndex < 0) continue;
+    const [opening] = stack.splice(openingIndex, 1);
+    ranges.push({ start: opening.start, end: tag.end });
+  }
+  for (const opening of stack) {
+    ranges.push({ start: opening.start, end: source.length });
+  }
+  return maskMarkdownRanges(source, ranges);
+}
+
+function collectVisibleReferenceDefinitions(source, visibility) {
+  const lines = [...String(source ?? "").matchAll(/[^\n]*(?:\n|$)/g)].filter(
+    (match) => match[0],
+  );
+  const labels = new Set();
+  const ranges = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const rawLine = line[0].replace(/\n$/, "");
+    const visibleLine = visibility
+      .slice(line.index, line.index + rawLine.length);
+    const opening = /^ {0,3}\[/.exec(visibleLine);
+    if (!opening) continue;
+    const labelOpening = opening[0].length - 1;
+    const labelEnd = closingMarkdownDelimiter(
+      visibleLine,
+      labelOpening,
+      "[",
+      "]",
+    );
+    if (labelEnd < 0 || visibleLine[labelEnd + 1] !== ":") continue;
+
+    const rawLabel = rawLine.slice(labelOpening + 1, labelEnd);
+    const normalized = normalizeReferenceLabel(
+      rawLabel,
+    );
+    if (
+      !normalized ||
+      [...rawLabel].length > 999 ||
+      containsUnescapedMarkdownDelimiter(rawLabel, "[", "]")
+    ) {
+      continue;
+    }
+
+    let destinationLineIndex = index;
+    let destinationText = visibleLine.slice(labelEnd + 2);
+    if (/^[ \t]*$/.test(destinationText)) {
+      destinationLineIndex += 1;
+      if (!lines[destinationLineIndex]) continue;
+      const continuation = visibleLineAt(
+        visibility,
+        lines[destinationLineIndex],
+      );
+      if (!/^ {0,3}\S/.test(continuation)) continue;
+      destinationText = continuation;
+    }
+    const parsedDestination =
+      parseCommonMarkReferenceDestinationAndTitle(destinationText);
+    if (!parsedDestination.valid) continue;
+
+    let finalLineIndex = destinationLineIndex;
+    if (
+      !parsedDestination.hasTitle &&
+      lines[finalLineIndex + 1]
+    ) {
+      const possibleTitle = visibleLineAt(
+        visibility,
+        lines[finalLineIndex + 1],
+      );
+      if (
+        /^ {0,3}\S/.test(possibleTitle) &&
+        parseCommonMarkReferenceTitle(possibleTitle.trim()).valid
+      ) {
+        finalLineIndex += 1;
+      }
+    }
+
+    const definitionEnd =
+      lines[finalLineIndex].index + lines[finalLineIndex][0].length;
+    labels.add(normalized);
+    ranges.push({ start: line.index, end: definitionEnd });
+    index = finalLineIndex;
+  }
+  return { labels, ranges };
+}
+
+function visibleLineAt(visibility, line) {
+  const rawLine = line[0].replace(/\n$/, "");
+  return visibility.slice(line.index, line.index + rawLine.length);
+}
+
+function containsUnescapedMarkdownDelimiter(source, ...delimiters) {
+  const values = new Set(delimiters);
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (values.has(source[index])) return true;
+  }
+  return false;
+}
+
+function parseCommonMarkReferenceDestinationAndTitle(value) {
+  const source = String(value ?? "");
+  let cursor = 0;
+  while (source[cursor] === " " || source[cursor] === "\t") cursor += 1;
+  if (cursor >= source.length) return { valid: false, hasTitle: false };
+
+  if (source[cursor] === "<") {
+    cursor += 1;
+    let closed = false;
+    while (cursor < source.length) {
+      const character = source[cursor];
+      if (character === "\\") {
+        cursor += Math.min(2, source.length - cursor);
+        continue;
+      }
+      if (character === "<") {
+        return { valid: false, hasTitle: false };
+      }
+      if (character === ">") {
+        cursor += 1;
+        closed = true;
+        break;
+      }
+      cursor += 1;
+    }
+    if (!closed) return { valid: false, hasTitle: false };
+  } else {
+    const destinationStart = cursor;
+    let depth = 0;
+    while (
+      cursor < source.length &&
+      source[cursor] !== " " &&
+      source[cursor] !== "\t"
+    ) {
+      const character = source[cursor];
+      if (/[\u0000-\u001F\u007F]/.test(character)) {
+        return { valid: false, hasTitle: false };
+      }
+      if (character === "\\") {
+        cursor += Math.min(2, source.length - cursor);
+        continue;
+      }
+      if (character === "(") depth += 1;
+      if (character === ")") {
+        if (depth === 0) return { valid: false, hasTitle: false };
+        depth -= 1;
+      }
+      cursor += 1;
+    }
+    if (cursor === destinationStart || depth !== 0) {
+      return { valid: false, hasTitle: false };
+    }
+  }
+
+  if (cursor >= source.length) return { valid: true, hasTitle: false };
+  if (source[cursor] !== " " && source[cursor] !== "\t") {
+    return { valid: false, hasTitle: false };
+  }
+  while (source[cursor] === " " || source[cursor] === "\t") cursor += 1;
+  if (cursor >= source.length) return { valid: true, hasTitle: false };
+  const title = parseCommonMarkReferenceTitle(source.slice(cursor));
+  return {
+    valid: title.valid,
+    hasTitle: title.valid,
+  };
+}
+
+function parseCommonMarkReferenceTitle(value) {
+  const source = String(value ?? "");
+  const opening = source[0];
+  const closing =
+    opening === "(" ? ")" : opening === '"' || opening === "'" ? opening : "";
+  if (!closing) return { valid: false };
+  for (let cursor = 1; cursor < source.length; cursor += 1) {
+    if (source[cursor] === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (opening === "(" && source[cursor] === "(") {
+      return { valid: false };
+    }
+    if (source[cursor] !== closing) continue;
+    return {
+      valid: /^[ \t]*$/.test(source.slice(cursor + 1)),
+    };
+  }
+  return { valid: false };
+}
+
+function normalizeReferenceLabel(label) {
+  const normalized = decodeRenderedMarkdownEscapes(
+    decodeRenderedHtmlEntities(String(label ?? "")),
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return normalized && [...normalized].length <= 999 ? normalized : "";
+}
+
+function collapseResolvedReferenceLinks(source, visibility, definitions) {
+  if (definitions.size === 0) return source;
+  const bracketPairs = markdownDelimiterPairs(visibility, "[", "]");
+  let result = "";
+  let copiedThrough = 0;
+  let cursor = 0;
+  while (cursor < source.length) {
+    countReferenceProjectionOperation();
+    const labelOpening = visibility.indexOf("[", cursor);
+    if (labelOpening < 0) break;
+    if (
+      isEscapedMarkdownCharacter(source, labelOpening) ||
+      (source[labelOpening - 1] === "!" &&
+        !isEscapedMarkdownCharacter(source, labelOpening - 1))
+    ) {
+      cursor = labelOpening + 1;
+      continue;
+    }
+    const labelEnd = bracketPairs[labelOpening] ?? -1;
+    if (labelEnd < 0 || visibility[labelEnd + 1] !== "[") {
+      cursor = labelOpening + 1;
+      continue;
+    }
+    const keyOpening = labelEnd + 1;
+    const keyEnd = bracketPairs[keyOpening] ?? -1;
+    if (keyEnd < 0) {
+      cursor = labelOpening + 1;
+      continue;
+    }
+    const rawLabel = source.slice(labelOpening + 1, labelEnd);
+    const rawKey = source.slice(keyOpening + 1, keyEnd);
+    const key = normalizeReferenceLabel(rawKey || rawLabel);
+    if (!definitions.has(key)) {
+      cursor = keyEnd + 1;
+      continue;
+    }
+    result += source.slice(copiedThrough, labelOpening);
+    result += rawLabel;
+    copiedThrough = keyEnd + 1;
+    cursor = copiedThrough;
+  }
+  return result + source.slice(copiedThrough);
+}
+
+function stripRenderedInlineHtmlTags(markdown) {
+  const source = String(markdown ?? "");
+  const visibility = referenceResolutionVisibleMarkdown(source);
+  const ranges = scanRenderedHtmlTags(visibility)
+    .map(({ start, end }) => ({ start, end }));
+  return removeMarkdownRanges(source, ranges);
+}
+
+function preserveRenderedReferenceImageLabels(
+  markdown,
+  visibility = markdown,
+  definitions = new Set(),
+) {
+  const source = String(markdown ?? "");
+  const visible = String(visibility ?? "");
+  const bracketPairs = markdownDelimiterPairs(visible, "[", "]");
+  let result = "";
+  let copiedThrough = 0;
+  let cursor = 0;
+  while (cursor < visible.length - 1) {
+    countReferenceProjectionOperation();
+    const opening = visible.indexOf("![", cursor);
+    if (opening < 0) break;
+    const labelOpening = opening + 1;
+    const labelEnd = bracketPairs[labelOpening] ?? -1;
+    if (labelEnd < 0) {
+      cursor = opening + 2;
+      continue;
+    }
+    const rawLabel = source.slice(labelOpening + 1, labelEnd);
+    let rawKey = rawLabel;
+    let end = labelEnd + 1;
+    if (visible[end] === "[") {
+      const keyEnd = bracketPairs[end] ?? -1;
+      if (keyEnd >= 0) {
+        rawKey = source.slice(end + 1, keyEnd) || rawLabel;
+        end = keyEnd + 1;
+      }
+    }
+    result += source.slice(copiedThrough, opening);
+    if (definitions.has(normalizeReferenceLabel(rawKey))) {
+      result += source.slice(opening, end).replace(/[^\n]/g, " ");
+    } else {
+      result += rawLabel;
+    }
+    copiedThrough = end;
+    cursor = end;
+  }
+  return result + source.slice(copiedThrough);
+}
+
+const RENDERED_NAMED_ENTITIES = new Map([
+  ["amp", "&"],
+  ["apos", "'"],
+  ["ast", "*"],
+  ["bsol", "\\"],
+  ["colon", ":"],
+  ["dash", "-"],
+  ["frasl", "/"],
+  ["gt", ">"],
+  ["horbar", "―"],
+  ["hyphen", "-"],
+  ["lowbar", "_"],
+  ["lt", "<"],
+  ["mdash", "—"],
+  ["minus", "-"],
+  ["nbsp", " "],
+  ["ndash", "-"],
+  ["period", "."],
+  ["quot", '"'],
+  ["sol", "/"],
+]);
+
+function decodeRenderedHtmlEntities(
+  markdown,
+  { collapseUnknownNamedEntities = false } = {},
+) {
+  return String(markdown ?? "").replace(
+    /&(?:#([0-9]{1,7})|#x([0-9A-Fa-f]{1,6})|([A-Za-z][A-Za-z0-9]{1,31}));/g,
+    (entity, decimal, hexadecimal, named) => {
+      if (named) {
+        return (
+          RENDERED_NAMED_ENTITIES.get(named.toLowerCase()) ??
+          (collapseUnknownNamedEntities ? "" : entity)
+        );
+      }
+      const codePoint = Number.parseInt(decimal ?? hexadecimal, decimal ? 10 : 16);
+      if (
+        !Number.isInteger(codePoint) ||
+        codePoint <= 0 ||
+        codePoint > 0x10ffff ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        return "\uFFFD";
+      }
+      return String.fromCodePoint(codePoint);
+    },
+  );
+}
+
+function stripRenderedDefaultIgnorables(markdown) {
+  return String(markdown ?? "")
+    .replace(/\p{Default_Ignorable_Code_Point}+/gu, "");
+}
+
+function normalizeRenderedPunctuation(markdown) {
+  return String(markdown ?? "")
+    .replace(/[\u2010-\u2013\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-")
+    .replace(/[\u2044\u2215\u29F8\uFF0F]/g, "/");
+}
+
+function decodeRenderedMarkdownEscapes(markdown) {
+  const source = String(markdown ?? "");
+  let result = "";
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    const codePoint = next?.codePointAt(0) ?? 0;
+    const escapable =
+      (codePoint >= 33 && codePoint <= 47) ||
+      (codePoint >= 58 && codePoint <= 64) ||
+      (codePoint >= 91 && codePoint <= 96) ||
+      (codePoint >= 123 && codePoint <= 126);
+    if (character === "\\" && escapable) {
+      result += next;
+      index += 1;
+    } else {
+      result += character;
+    }
+  }
+  return result;
+}
+
+function stripRenderedMarkdownEmphasis(markdown) {
+  let result = String(markdown ?? "");
+  for (let pass = 0; pass < 4; pass += 1) {
+    const stripped = result
+      .replace(
+        /(?<![A-Za-z0-9_])(_{1,2})(?=\S)([^\n]*?\S)\1(?![A-Za-z0-9_])/g,
+        "$2",
+      )
+      .replace(
+        /(?<![A-Za-z0-9*])(\*{1,3})(?=\S)([^\n]*?\S)\1(?![A-Za-z0-9*])/g,
+        "$2",
+      )
+      .replace(
+        /(?<!~)~~(?=\S)([^\n]*?\S)~~(?!~)/g,
+        "$1",
+      );
+    if (stripped === result) break;
+    result = stripped;
+  }
+  return result;
+}
+
+function parseToolingTraceability(traceability) {
+  const lines = traceability.split(/\r?\n/);
+  const matching = lines.filter((line) =>
+    line.trimStart().startsWith(`- ${TOOLING_TRACE_PREFIX}`),
+  );
+  if (matching.length !== 1) {
+    return {
+      present: matching.length > 0 || traceability.includes(TOOLING_TRACE_PREFIX),
+      valid: false,
+      reason: "",
+    };
+  }
+  const line = matching[0];
+  const canonicalPrefix = `- ${TOOLING_TRACE_PREFIX} `;
+  const reason = line.startsWith(canonicalPrefix)
+    ? line.slice(canonicalPrefix.length).trim()
+    : "";
+  return {
+    present: true,
+    valid:
+      line === `${canonicalPrefix}${reason}` &&
+      isMeaningfulSection(reason),
+    reason,
+  };
+}
+
+function validateToolingTraceability(
+  parsed,
+  renderedParsed,
+  labels,
+  toolingTrace,
+  errors,
+) {
+  if (!toolingTrace.valid) {
+    errors.push(
+      `"추적성" 섹션에는 전역 네임스페이스가 있는 PRD 또는 정책 ID가 하나 이상 필요합니다. 제품 계약 비적용은 실제 type:chore 레이블과 "- ${TOOLING_TRACE_PREFIX} <구체적 사유>" 한 줄을 사용해야 합니다.`,
+    );
+    return;
+  }
+
+  const rawLabels = labels.map((label) => String(label));
+  const typeLabels = rawLabels
+    .filter((label) => label.startsWith("type:"));
+  const nonCanonicalTypeLabels = rawLabels.filter(
+    (label) =>
+      label !== label.trim() &&
+      label.trim().startsWith("type:"),
+  );
+  if (
+    nonCanonicalTypeLabels.length > 0 ||
+    typeLabels.length !== 1 ||
+    typeLabels[0] !== "type:chore"
+  ) {
+    errors.push(
+      `"${TOOLING_TRACE_PREFIX}" 비적용 선언은 실제 type label이 type:chore 하나일 때만 사용할 수 있으며 raw 문자열이 정확히 type:chore여야 합니다. 현재 canonical-prefix labels: ${JSON.stringify(typeLabels)}, whitespace 변형 type-like labels: ${nonCanonicalTypeLabels.length}.`,
+    );
+  }
+
+  const acceptance = parsed.sections.get("완료 조건") || "";
+  const renderedAcceptance =
+    renderedParsed.sections.get("완료 조건") || "";
+  const acceptanceTraceLines = acceptance
+    .split(/\r?\n/)
+    .filter((line) => /^- 추적 ID:\s*/.test(line));
+  if (
+    acceptanceTraceLines.length === 0 ||
+    acceptanceTraceLines.some((line) => {
+      const prefix = `- 추적 ID: ${TOOLING_TRACE_PREFIX} `;
+      const reason = line.startsWith(prefix)
+        ? line.slice(prefix.length).trim()
+        : "";
+      return line !== `${prefix}${reason}` || !isMeaningfulSection(reason);
+    })
+  ) {
+    errors.push(
+      `"완료 조건"의 각 "- 추적 ID:" 행은 "${TOOLING_TRACE_PREFIX} <구체적 사유>" 형식이어야 합니다.`,
+    );
+  }
+  if (
+    renderedContractIds(renderedAcceptance).size > 0
+  ) {
+    errors.push(
+      `"완료 조건"은 제품 계약 ID와 "${TOOLING_TRACE_PREFIX}" 비적용 선언을 함께 사용할 수 없습니다.`,
+    );
+  }
+
+  const documentImpact = parsed.sections.get("문서 영향") || "";
+  const documentImpactLines = documentImpact
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("- 제품 문서: 변경 없음 — "));
+  if (
+    documentImpactLines.length !== 1 ||
+    !isMeaningfulSection(
+      documentImpactLines[0]?.slice(
+        "- 제품 문서: 변경 없음 — ".length,
+      ) || "",
+    )
+  ) {
+    errors.push(
+      `"문서 영향"에는 "- 제품 문서: 변경 없음 — <구체적 근거>" 한 줄이 필요합니다.`,
+    );
+  }
+
+  const allowedPaths =
+    renderedParsed.sections.get("변경 허용 경로") || "";
+  if (allowedPathScopesIntersectProductContracts(allowedPaths)) {
+    errors.push(
+      `"${TOOLING_TRACE_PREFIX}" 비적용 이슈는 "변경 허용 경로"에 docs/prd 또는 docs/policies 정본과 교차하는 상위·glob·정규화 경로 범위를 포함할 수 없습니다.`,
+    );
+  }
+}
+
+function validatePlannedTraceability(parsed, renderedParsed, errors) {
+  const traceability = renderedParsed.sections.get("추적성") || "";
+  const allowedPaths =
+    renderedParsed.sections.get("변경 허용 경로") || "";
+  const forbiddenPaths =
+    renderedParsed.sections.get("변경 금지 경로") || "";
+  const documentImpact =
+    renderedParsed.sections.get("문서 영향") || "";
   const allowedPathScopes = productPathScopes(allowedPaths);
   const forbiddenPathScopes = productPathScopes(forbiddenPaths);
   const documentImpactScopes = productPathScopes(documentImpact);
@@ -3672,11 +5464,11 @@ function validatePlannedTraceability(parsed, errors) {
     return;
   }
 
-  for (const id of referencedContractIds(traceability)) {
+  for (const id of renderedContractIds(traceability)) {
     const line =
       traceability
         .split(/\r?\n/)
-        .find((candidate) => candidate.includes(id)) ?? "";
+        .find((candidate) => renderedContractIds(candidate).has(id)) ?? "";
     const planned = new RegExp(
       `${escapeRegex(id)} planned — 이 PR에서 정의(?![A-Za-z0-9가-힣_-])`,
     ).test(line);
@@ -3689,7 +5481,7 @@ function validatePlannedTraceability(parsed, errors) {
     const impactOwnsDefinition = documentImpact
       .split(/\r?\n/)
       .some((impactLine) => {
-        if (!referencedContractIds(impactLine).has(id)) return false;
+        if (!renderedContractIds(impactLine).has(id)) return false;
         return productPathScopes(impactLine).some((scope) =>
           isCanonicalContractDefinitionScope(scope, id, directory),
         );
@@ -3774,9 +5566,268 @@ function productPathScopes(markdown) {
   return scopes;
 }
 
+const PRODUCT_CONTRACT_PATH_SCOPES = [
+  { path: "docs/prd", recursive: true },
+  { path: "docs/policies", recursive: true },
+];
+
+function allowedPathScopesIntersectProductContracts(markdown) {
+  for (const token of renderedScopeTokens(markdown)) {
+    const scope = normalizeAllowedPathScope(token);
+    if (!scope) continue;
+    if (scope.invalid || scope.escapedRoot) return true;
+    if (scope.globPatterns) {
+      if (
+        scope.globPatterns.some((globPattern) =>
+          PRODUCT_CONTRACT_PATH_SCOPES.some((productScope) =>
+            globScopeIntersectsPath(
+              globPattern,
+              productScope.path.split("/"),
+            ),
+          ),
+        )
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (
+      PRODUCT_CONTRACT_PATH_SCOPES.some((productScope) =>
+        pathScopesOverlap(scope, productScope),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function renderedScopeTokens(markdown) {
+  const tokens = [];
+  for (const line of String(markdown ?? "").split(/\r?\n/)) {
+    for (const match of line.matchAll(/`[^`\n]+`|[^\s|]+/g)) {
+      const inlineCode =
+        match[0].startsWith("`") && match[0].endsWith("`");
+      if (!inlineCode) {
+        for (const fragment of match[0].matchAll(
+          /(?<![A-Za-z0-9._/-])((?:\.\/)?docs(?:\/(?:[A-Za-z0-9._-]+|\*\*))+\/?)(?![A-Za-z0-9._/-])/g,
+        )) {
+          tokens.push(fragment[1]);
+        }
+      }
+      const token = match[0]
+        .replace(/^`+|`+$/g, "")
+        .replace(/^[("'“‘]+/, "")
+        .replace(/[)"'”’、,;:]+$/, "")
+        .replace(/^\[+|\]+$/g, "");
+      if (token) tokens.push(token);
+    }
+  }
+  return tokens;
+}
+
+function normalizeAllowedPathScope(token) {
+  let value = String(token ?? "").trim();
+  if (
+    !value ||
+    value.includes("://")
+  ) {
+    return null;
+  }
+  if (
+    value.length > 512 ||
+    value.startsWith("/") ||
+    value.startsWith("~") ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    value.includes("\\") ||
+    /[@+?!*]\(/.test(value) ||
+    (value.includes("|") && /[()]/.test(value))
+  ) {
+    return { invalid: true };
+  }
+
+  const recursive = value.endsWith("/");
+  const segments = [];
+  let escapedRoot = false;
+  for (const segment of value.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length > 0) {
+        segments.pop();
+      } else {
+        escapedRoot = true;
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  if (segments.length > 64) return { invalid: true };
+
+  const path = segments.join("/");
+  const hasGlob = segments.some((segment) => /[*?[\]{}]/.test(segment));
+  const expandedGlob = hasGlob
+    ? expandConservativeGlobPatterns(segments)
+    : null;
+  if (expandedGlob && !expandedGlob.valid) {
+    return { invalid: true };
+  }
+  return {
+    path,
+    recursive: recursive || path === "" || !hasGlob,
+    escapedRoot,
+    globPatterns: expandedGlob?.patterns ?? null,
+  };
+}
+
+const MAX_GLOB_ALTERNATIVES = 32;
+
+function expandConservativeGlobPatterns(segments) {
+  let patterns = [[]];
+  for (const segment of segments) {
+    const expansion = expandConservativeBraceSegment(segment);
+    if (!expansion.valid) return { valid: false, patterns: [] };
+    const next = [];
+    for (const prefix of patterns) {
+      for (const alternative of expansion.alternatives) {
+        if (!isSupportedGlobSegment(alternative)) {
+          return { valid: false, patterns: [] };
+        }
+        next.push([...prefix, alternative]);
+        if (next.length > MAX_GLOB_ALTERNATIVES) {
+          return { valid: false, patterns: [] };
+        }
+      }
+    }
+    patterns = next;
+  }
+  return { valid: true, patterns };
+}
+
+function expandConservativeBraceSegment(segment) {
+  let alternatives = [segment];
+  while (alternatives.some((value) => /[{}]/.test(value))) {
+    const next = [];
+    for (const value of alternatives) {
+      const opening = value.indexOf("{");
+      const strayClosing = value.indexOf("}");
+      if (opening < 0 || (strayClosing >= 0 && strayClosing < opening)) {
+        return { valid: false, alternatives: [] };
+      }
+      const closing = value.indexOf("}", opening + 1);
+      if (
+        closing < 0 ||
+        value.slice(opening + 1, closing).includes("{")
+      ) {
+        return { valid: false, alternatives: [] };
+      }
+      const choices = value.slice(opening + 1, closing).split(",");
+      if (
+        choices.length < 2 ||
+        choices.some((choice) => choice.length === 0)
+      ) {
+        return { valid: false, alternatives: [] };
+      }
+      for (const choice of choices) {
+        next.push(
+          `${value.slice(0, opening)}${choice}${value.slice(closing + 1)}`,
+        );
+        if (next.length > MAX_GLOB_ALTERNATIVES) {
+          return { valid: false, alternatives: [] };
+        }
+      }
+    }
+    alternatives = next;
+  }
+  return { valid: true, alternatives };
+}
+
+function isSupportedGlobSegment(segment) {
+  for (let index = 0; index < segment.length; index += 1) {
+    if (segment[index] === "]") return false;
+    if (segment[index] !== "[") continue;
+    const closing = segment.indexOf("]", index + 1);
+    if (closing < 0) return false;
+    let content = segment.slice(index + 1, closing);
+    if (content.startsWith("!") || content.startsWith("^")) {
+      content = content.slice(1);
+    }
+    if (!content || content.includes("[")) return false;
+    index = closing;
+  }
+  return true;
+}
+
+function globScopeIntersectsPath(patternSegments, targetSegments) {
+  const memo = new Map();
+  function visit(patternIndex, targetIndex) {
+    const key = `${patternIndex}:${targetIndex}`;
+    if (memo.has(key)) return memo.get(key);
+    if (patternIndex === patternSegments.length) {
+      memo.set(key, true);
+      return true;
+    }
+
+    const pattern = patternSegments[patternIndex];
+    let result;
+    if (pattern === "**") {
+      result =
+        visit(patternIndex + 1, targetIndex) ||
+        (targetIndex < targetSegments.length &&
+          visit(patternIndex, targetIndex + 1));
+    } else if (targetIndex < targetSegments.length) {
+      result =
+        globSegmentMatches(pattern, targetSegments[targetIndex]) &&
+        visit(patternIndex + 1, targetIndex + 1);
+    } else {
+      result =
+        globSegmentCanMatch(pattern) &&
+        visit(patternIndex + 1, targetIndex);
+    }
+    memo.set(key, result);
+    return result;
+  }
+  return visit(0, 0);
+}
+
+function globSegmentMatches(pattern, value) {
+  let expression = "^";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (character === "*") {
+      expression += ".*";
+    } else if (character === "?") {
+      expression += ".";
+    } else if (character === "[") {
+      const close = pattern.indexOf("]", index + 1);
+      let content = pattern.slice(index + 1, close);
+      if (content.startsWith("!")) {
+        content = `^${content.slice(1)}`;
+      } else if (content.startsWith("^")) {
+        content = `\\${content}`;
+      } else {
+        content = content.replace(/\\/g, "\\\\");
+      }
+      expression += `[${content}]`;
+      index = close;
+    } else {
+      expression += escapeRegex(character);
+    }
+  }
+  try {
+    return new RegExp(`${expression}$`).test(value);
+  } catch {
+    return true;
+  }
+}
+
+function globSegmentCanMatch(pattern) {
+  return pattern.length > 0;
+}
+
 function pathScopeContains(scope, candidate) {
   return (
     scope.path === candidate.path ||
+    (scope.recursive && scope.path === "") ||
     (scope.recursive &&
       candidate.path.startsWith(`${scope.path}/`))
   );

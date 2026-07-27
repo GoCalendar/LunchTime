@@ -37,7 +37,7 @@ flowchart TD
 |---|---|---|---|
 | 새 이슈 작성·감사 | 승인된 PRD·Policy·결정, 이슈 양식 | [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md)의 이슈 작성·`create` | 검증된 이슈·Project 등록 상태를 인계한다. 이 on-demand 이슈 생성은 아래 11단계 밖의 준비 작업이다. |
 | 기존 이슈 구현·재개 | 이슈 본문, 정본 ID, 기본 의존 관계, 허용·금지 경로 | `run-github-work-item check`·`start` 뒤 STEP 01~09 소유 Skill | 검증된 commit을 PR 단계에 인계한다. |
-| 제품 문서 작성·변경 | 승인된 결정, PRD·Policy 인덱스, 관련 이슈 경로 계약 | [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 실제 정의된 ID와 구현·테스트 추적성을 같은 변경에 인계한다. |
+| 제품 문서 작성·변경 | 승인된 결정, PRD·Policy 인덱스, 관련 이슈 경로 계약 | [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 문서 영향 판정과 planned ID 계약 결과를 구현 단계에 인계한다. |
 | commit 작성 | 이슈 범위, raw diff, 테스트·리뷰·문서 영향 증거 | [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) | push하지 않은 원자적 commit을 인계한다. |
 | PR 생성·갱신만 | clean issue branch, PR 본문 계약, 검증 증거 | [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md)의 PR 모드 | PR 생성·갱신과 재조회에서 멈추고 병합하지 않는다. |
 | 작업 완료·병합 | Ready PR, 현재 head·CI·review snapshot, 명시적인 완료 요청 | [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md)의 finalize 모드와 [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md)의 `complete` | 한 번의 squash merge·원격 branch 삭제·완료 전이 뒤 안전한 로컬 정리 결과를 인계한다. |
@@ -53,7 +53,8 @@ flowchart TD
 |---|---|---|
 | 사용자 결과·수용 동작 | [PRD](../prd/README.md) | STEP 입력으로 연결 |
 | 상태·권한·실패·복구·보존·보안 | [Policy](../policies/README.md) | STEP 입력으로 연결 |
-| 작업 범위·경로·행동 시나리오·검증 계획 | [MVP 작업 이슈 양식](../../.github/ISSUE_TEMPLATE/work-item.yml)과 생성된 이슈 | 구현·리뷰 입력으로 연결 |
+| PRD·Policy planned ID 수명주기 | [update-product-docs](../../.agents/skills/update-product-docs/SKILL.md) | 새 ID 요청을 단일 owner로 라우팅 |
+| 작업 범위·경로·행동 시나리오·검증 계획 | [run-github-work-item 이슈 계약](../../.agents/skills/run-github-work-item/references/issue-contract.md) | 이슈 양식·제품 추적 적용 경계·구현·리뷰 입력을 단일 계약으로 라우팅 |
 | 이슈·Project 상태 전이·재조회·복구 | [run-github-work-item](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈·Project 요청을 단일 owner로 라우팅 |
 | PR 쓰기·exact-head finalize·원격·로컬 정리 | [open-pull-request](../../.agents/skills/open-pull-request/SKILL.md) | PR 수명주기 요청을 단일 owner로 라우팅 |
 | PR의 고정 필드 | [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md)과 [PR 본문 계약](../../.agents/skills/open-pull-request/references/pr-body-contract.md) | STEP 10·11 입력으로 연결 |
@@ -80,11 +81,11 @@ flowchart TD
 
 - **목적:** 구현할 결과 하나와 그 결과를 지배하는 제품·경로 계약을 대화 이력 없이 복원한다.
 
-- **핵심 입력:** GitHub 이슈의 11개 본문 구역, [PRD](../prd/README.md), [Policy](../policies/README.md), 결정 이력, 기본 의존 관계와 변경 허용·금지 경로이며 새 ID는 승인된 결정과 이 이슈의 planned ID·namespace 번호가 일치하는 구체적 `NN_*.md` 정본 파일·인덱스·구현·테스트 경로 소유 선언이 필요하다. README나 재귀 glob만으로는 정의 파일을 소유하지 않는다.
+- **핵심 입력:** GitHub 이슈의 11개 본문 구역, [PRD](../prd/README.md), [Policy](../policies/README.md), 결정 이력, 기본 의존 관계, 변경 허용·금지 경로와 `update-product-docs`의 planned ID 계약이다.
 
-- **완료 조건:** 목표·범위·기존 또는 planned 추적 ID·선행 작업·행동 중심 `완료 조건`·검증·문서 영향을 설명할 수 있고, 누락된 제품 결정이 없다.
+- **완료 조건:** 목표·범위·적용 가능한 기존·planned 추적 ID 또는 tooling-only 비적용 근거·선행 작업·행동 중심 `완료 조건`·검증·문서 영향을 설명할 수 있고, 누락된 제품 결정이 없다.
 
-- **대표 실패·중단 조건:** 이슈 계약이 불완전하거나 정본끼리 충돌하거나 제품 결정을 추측해야 하거나 planned ID의 승인·경로 소유가 없거나 작업 경로가 다른 진행 중 이슈와 겹친다.
+- **대표 실패·중단 조건:** 이슈 계약이 불완전하거나 정본끼리 충돌하거나 제품 결정을 추측해야 하거나 planned ID 계약을 충족하지 못하거나 작업 경로가 다른 진행 중 이슈와 겹친다.
 
 ## STEP 02. `check`로 준비 상태 검증
 
@@ -120,9 +121,9 @@ flowchart TD
 
 - **목적:** 구현 전에 관찰 가능한 성공·실패·복구 결과와 그 증거를 확정한다.
 
-- **핵심 입력:** 이슈의 `완료 조건`, 추적된 PRD·Policy ID와 [BDD/ATDD 테스트 표준](./02_testing_standard.md)의 시나리오 축·테스트 계층이다.
+- **핵심 입력:** 이슈의 `완료 조건`, 적용 가능한 PRD·Policy ID 또는 `run-github-work-item` 이슈 계약이 허용한 tooling-only 비적용 근거와 [BDD/ATDD 테스트 표준](./02_testing_standard.md)의 시나리오 축·테스트 계층이다.
 
-- **완료 조건:** 적용 가능한 happy·error·recovery 시나리오가 조건·행동·결과와 추적 ID로 연결되고, 각 시나리오의 결정적 검증 방법이 이슈 `검증` 계획과 일치한다.
+- **완료 조건:** 적용 가능한 happy·error·recovery 시나리오가 조건·행동·결과와 추적 ID 또는 tooling-only 비적용 근거로 연결되고, 각 시나리오의 결정적 검증 방법이 이슈 `검증` 계획과 일치한다.
 
 - **대표 실패·중단 조건:** 구현 세부사항만 검사하거나 error·recovery path가 없거나 실제 시간·무한 재시도·flaky rerun에 의존하거나 제품 결과를 이슈에서 새로 정한다.
 
@@ -140,11 +141,11 @@ flowchart TD
 
 - **목적:** 구현이 사용자 결과나 상태·권한·실패·복구·보존·보안 계약을 바꾸는지 commit 전에 판정한다.
 
-- **핵심 입력:** 전체 raw diff, 이슈의 기존·planned 추적 ID와 문서·구현·테스트 허용 경로, [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md)의 구현 영향 확인 절차다.
+- **핵심 입력:** 전체 raw diff, 이슈의 기존·planned 추적 ID와 변경 허용 경로, [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md)의 문서 영향·planned ID 계약이다.
 
-- **완료 조건:** 영향을 받는 정본을 같은 branch와 PR에서 갱신하고 planned ID를 실제 정의·validator·구현·테스트·PR에 양방향 연결했거나, 제품 동작이 바뀌지 않는 구체적인 근거를 기록했다.
+- **완료 조건:** 영향을 받는 정본과 planned ID 계약을 같은 변경에서 충족했거나, 제품 동작이 바뀌지 않는 구체적인 근거를 기록했다.
 
-- **대표 실패·중단 조건:** 정본 갱신이 허용 경로 밖이거나 Ready 전에도 planned ID가 정의되지 않았거나 정본 충돌·미결정 제품 선택이 있거나 validator 통과만으로 의미상 정확성을 단정한다.
+- **대표 실패·중단 조건:** 정본 갱신이 허용 경로 밖이거나 Ready 전에도 planned ID 계약을 충족하지 못했거나 정본 충돌·미결정 제품 선택이 있거나 validator 통과만으로 의미상 정확성을 단정한다.
 
 ## STEP 08. 독립 리뷰
 

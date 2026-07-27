@@ -99,7 +99,7 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
 
 ## 제품 문서 갱신 절차
 
-구현을 마치고 PR을 만들기 전에는 [`update-product-docs` 스킬(Skill)](.agents/skills/update-product-docs/SKILL.md)로 변경사항이 PRD·정책 문서에 미치는 영향을 확인합니다. 제품 동작이나 보장 범위가 달라졌다면 코드와 정본 문서를 같은 변경에서 갱신합니다. 승인된 결정의 새 ID는 구현 이슈가 planned ID와 namespace 번호가 일치하는 구체적 `NN_*.md` 정본 파일·관련 경로를 소유한 경우에만 같은 branch와 PR에서 실제 정의하고 exact head Git tree 기준으로 추적합니다.
+구현을 마치고 PR을 만들기 전에는 [update-product-docs](.agents/skills/update-product-docs/SKILL.md) 스킬(Skill)로 변경사항이 PRD·정책 문서에 미치는 영향을 확인합니다. 제품 동작이나 보장 범위가 달라졌다면 코드와 정본 문서를 같은 변경에서 갱신합니다. 새 PRD·Policy ID의 문서·구현 동시 작업 조건과 Ready 전 추적성은 같은 Skill의 planned ID 계약을 따릅니다.
 
 스킬의 단일 원본은 `.agents/skills/`에 두며, Claude에서도 같은 스킬을 사용하도록 `.claude/skills`를 해당 디렉터리의 심볼릭 링크로 연결합니다.
 

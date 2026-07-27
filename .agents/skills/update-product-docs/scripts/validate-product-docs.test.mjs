@@ -48,6 +48,79 @@ const harnessDetailOwners = [
     file: ".agents/skills/open-pull-request/SKILL.md",
   },
 ];
+const plannedIdDetailOwner = {
+  name: "update-product-docs",
+  file: ".agents/skills/update-product-docs/SKILL.md",
+};
+const plannedIdRoutingDocuments = [
+  {
+    file: "AGENTS.md",
+    section: "구현과 충돌 방지",
+  },
+  {
+    file: "README.md",
+    section: "제품 문서 갱신 절차",
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "4. 개발 템플릿",
+  },
+  {
+    file: developmentFiles[0],
+    section: "규칙 소유와 링크",
+  },
+];
+const plannedIdDetailExamples = [
+  {
+    label: "planned ID marker와 정본 정의 경계",
+    content:
+      "`planned ID`는 GitHub 이슈의 계획 표식일 뿐 정본 정의가 아니다.",
+  },
+  {
+    label: "planned ID의 구체적 정본 파일 소유",
+    content:
+      "planned ID의 namespace 번호와 일치하는 구체적 `NN_*.md`를 소유한다.",
+  },
+  {
+    label: "README·재귀 glob의 정의 파일 소유 한계",
+    content:
+      "README와 재귀 glob만으로는 정의 파일을 소유하지 않는다.",
+  },
+  {
+    label: "planned ID의 실제 정의·validator·구현·테스트·PR 추적",
+    content:
+      "planned ID를 실제 정의하고 validator, 구현, 테스트와 PR에 추적한다.",
+  },
+  {
+    label: "exact-head 비가시 정의 제외",
+    content:
+      "exact PR head Git tree에서 image alt와 <details>를 정의에서 제외한다.",
+  },
+  {
+    label: "exact-head 실제 정본 정의",
+    content:
+      "PR을 열기 직전 exact head Git tree에서 새 ID가 실제 정본에 정의됐는지 확인한다.",
+  },
+  {
+    label: "exact PR head 실제 정본 정의",
+    content:
+      "exact PR head Git tree에서 새 ID가 실제 정본에 정의됐는지 확인한다.",
+  },
+  {
+    label: "Ready 전 planned ID 실제 정의",
+    content:
+      "Ready 전에는 planned ID가 실제 정본에 정의되어야 한다.",
+  },
+  {
+    label: "planned ID 승인·경로 소유",
+    content:
+      "새 ID는 승인된 결정과 planned ID가 있고 변경 경로를 소유할 때만 만든다.",
+  },
+  {
+    label: "planned ID의 같은 branch·PR 동시 작업",
+    content: "planned ID는 같은 branch와 PR에서 다룬다.",
+  },
+];
 const forbiddenFinalizeDetailTokens = [
   "snapshot-scratch",
   "snapshot-attempt.json",
@@ -73,12 +146,26 @@ const harnessFields = [
   "대표 실패·중단 조건",
 ];
 const updateProductDocsFixtureContract = [
-  "승인된 결정과 planned ID가 있을 때 같은 이슈, branch와 PR에서 작성한다.",
-  "별도 문서 이슈나 PR을 만들 필요는 없다.",
-  "Ready 전 planned ID를 실제 ID 정의, README·하위 인덱스, validator와 구현·테스트에 연결한다.",
-  "namespace에 맞는 `NN_*.md` concrete planned definition file을 소유하며 README와 재귀 glob만으로는 정의하지 않는다.",
-  "exact PR head Git tree에서 정의를 읽고 image alt, raw HTML과 <details>를 제외한다.",
-  "미결정 제품 선택이 남으면 중단한다.",
+  "## Planned ID 계약",
+  "",
+  "- `planned ID`는 GitHub 이슈의 계획 표식일 뿐 정본 정의가 아니다.",
+  "- 승인된 결정과 planned ID가 있을 때 같은 이슈, branch와 PR에서 작성한다.",
+  "- 별도 문서 이슈나 PR을 만들 필요는 없다.",
+  "- Ready 전 planned ID를 실제 ID 정의, README·하위 인덱스, validator와 구현·테스트에 연결한다.",
+  "- namespace에 맞는 `NN_*.md` concrete planned definition file을 소유하며 README와 재귀 glob만으로는 정의하지 않는다.",
+  "- exact PR head Git tree에서 정의를 읽고 image alt, raw HTML과 `<details>`를 제외한다.",
+  "- 미결정 제품 선택이 남으면 중단한다.",
+  "- 이 canonical 구역은 plain top-level H2, direct bullet과 2칸 continuation,",
+  "  inline code만 사용한다. blockquote, image, link, reference definition,",
+  "  fenced·indented code와 raw HTML은 계약 증거가 모호해지므로 사용하지 않는다.",
+  "- owner·routing H2의 보호 이름은 지정된 위치에서 source가 정확히",
+  "  `## <name>`인 plain top-level ATX 한 줄로만 쓴다. 들여쓰기·container·",
+  "  setext·closing `#`, formatting·link·reference·entity·hardbreak와",
+  "  종결되지 않거나 모호한 inline 문법을 보호 이름에 사용할 수 없다.",
+  "- validator는 임의의 CommonMark rendered 동등성을 보장하지 않는다. bounded",
+  "  block scanner가 fenced·indented code와 숨겨진 raw HTML을 후보에서 제외한",
+  "  뒤, 다른 H2 후보의 visible/source skeleton이 보호 이름 token sequence를",
+  "  나타내거나 포함할 수 있으면 실제 rendering과 무관하게 fail-closed한다.",
 ];
 const runGithubWorkItemFixtureContract = [
   "요청·파생 label의 정확한 집합을 요구하며 요청하지 않은 label은 보존한다.",
@@ -174,6 +261,10 @@ function createFixture() {
       ".github/ISSUE_TEMPLATE/work-item.yml",
       ".github/PULL_REQUEST_TEMPLATE.md",
       ".github/workflows/validate-harness.yml",
+      "",
+      "## 제품 문서 갱신 절차",
+      "",
+      "새 ID 작업은 [update-product-docs](.agents/skills/update-product-docs/SKILL.md)의 planned ID 계약으로 라우팅한다.",
       "",
     ].join("\n"),
   );
@@ -284,7 +375,8 @@ function createFixture() {
     "|---|---|---|",
     "| 사용자 결과·수용 동작 | PRD | STEP 입력으로 연결 |",
     "| 상태·권한·실패·복구·보존·보안 | Policy | STEP 입력으로 연결 |",
-    "| 작업 범위·경로·행동 시나리오·검증 계획 | GitHub 이슈 | 구현 입력으로 연결 |",
+    "| 작업 범위·경로·행동 시나리오·검증 계획 | [run-github-work-item 이슈 계약](../../.agents/skills/run-github-work-item/references/issue-contract.md) | 이슈 양식·제품 추적 적용 경계·구현·리뷰 입력을 단일 계약으로 라우팅 |",
+    "| PRD·Policy planned ID 수명주기 | [update-product-docs](../../.agents/skills/update-product-docs/SKILL.md) | 새 ID 요청을 단일 owner로 라우팅 |",
     "| 이슈·Project 상태 전이·재조회·복구 | [run-github-work-item](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈·Project 요청을 단일 owner로 라우팅 |",
     "| PR 쓰기·exact-head finalize·원격·로컬 정리 | [open-pull-request](../../.agents/skills/open-pull-request/SKILL.md) | PR 수명주기 요청을 단일 owner로 라우팅 |",
     "| PR의 고정 필드 | PR 템플릿과 본문 계약 | STEP 10·11 입력으로 연결 |",
@@ -296,6 +388,10 @@ function createFixture() {
     "AGENTS.md",
     [
       "# AI 작업 지침",
+      "",
+      "## 구현과 충돌 방지",
+      "",
+      "- 새 ID 작업은 [update-product-docs](.agents/skills/update-product-docs/SKILL.md)의 planned ID 계약으로 라우팅한다.",
       "",
       "## PR과 작업 완료",
       "",
@@ -309,6 +405,10 @@ function createFixture() {
     "CONTRIBUTING.md",
     [
       "# 기여 지침",
+      "",
+      "## 4. 개발 템플릿",
+      "",
+      "- 새 ID 작업은 [update-product-docs](.agents/skills/update-product-docs/SKILL.md)의 planned ID 계약으로 라우팅한다.",
       "",
       "## 8. 병합과 정리",
       "",
@@ -400,6 +500,11 @@ function createFixture() {
       ].join("\n"),
     );
   }
+  write(
+    root,
+    ".agents/skills/run-github-work-item/references/issue-contract.md",
+    "# GitHub 이슈 계약\n\n제품 추적 적용 경계를 정의한다.\n",
+  );
   write(
     root,
     ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
@@ -1121,6 +1226,1622 @@ test("owner Skill의 symlink alias도 canonical 링크 중복으로 거부한다
   });
 });
 
+test("네 planned ID 라우팅 구역은 update-product-docs canonical owner 링크를 정확히 하나 요구한다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    const literal = canonicalOwnerLink(
+      document.file,
+      plannedIdDetailOwner,
+    );
+    const mutations = [
+      () => "",
+      () => literal.replace(
+        "[update-product-docs]",
+        "[wrong-owner]",
+      ),
+      () => literal.replace(/\([^)]+\)$/, "(README.md)"),
+      () => `${literal} ${literal}`,
+      () => `${literal} !${literal}`,
+      () => `\`${literal}\``,
+      () => literal.replace("[", "\\["),
+    ];
+
+    for (const mutate of mutations) {
+      withFixture((root) => {
+        const target = path.join(root, document.file);
+        const content = fs.readFileSync(target, "utf8");
+        const changed = mutateH2Section(
+          content,
+          document.section,
+          (section) => {
+            assert.ok(
+              section.includes(literal),
+              `fixture owner link missing: ${literal}`,
+            );
+            return section.replace(literal, mutate());
+          },
+        );
+        fs.writeFileSync(target, changed);
+
+        const result = runValidator(root);
+        assert.equal(
+          result.status,
+          1,
+          `${document.file}: ${mutate()}\n${result.stderr}`,
+        );
+        assert.match(
+          result.stderr,
+          /PRD·Policy planned ID 수명주기.*canonical inline owner 링크.*정확히 하나/,
+        );
+      });
+    }
+  }
+});
+
+test("top-level indented code의 planned ID owner 링크를 canonical 링크로 세지 않는다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const literal = canonicalOwnerLink(
+        document.file,
+        plannedIdDetailOwner,
+      );
+      const target = path.join(root, document.file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          document.section,
+          (section) =>
+            section
+              .split("\n")
+              .map((line) =>
+                line.includes(literal) ? `    ${line}` : line,
+              )
+              .join("\n"),
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        1,
+        `${document.file}\n${result.stderr}`,
+      );
+      assert.match(
+        result.stderr,
+        /PRD·Policy planned ID 수명주기.*canonical inline owner 링크.*정확히 하나/,
+      );
+    });
+  }
+});
+
+test("container code·image metadata를 planned ID owner 링크 증거로 세지 않는다", () => {
+  const document = plannedIdRoutingDocuments.find(
+    ({ file }) => file === "README.md",
+  );
+  assert.ok(document, "README planned ID routing fixture missing");
+  const literal = canonicalOwnerLink(
+    document.file,
+    plannedIdDetailOwner,
+  );
+  const mutations = [
+    (line) => `>     ${line.trim()}`,
+    (line) => `-     ${line.trim()}`,
+    (line) =>
+      line.replace(
+        literal,
+        `![owner image\n${literal}\n](https://example.com/owner.png)`,
+      ),
+    (line) =>
+      `${line.replace(literal, "")}\n[hidden]: https://example.com "${literal}"`,
+    () =>
+      `- [hidden-owner]: https://example.com "${literal}"`,
+    (line) => `-\t\t${line.trim()}`,
+    (line) =>
+      `- ~~~\n  ${line.trim()}`,
+    (line) =>
+      `\\\\![owner image\n${line.trim()}\n](https://example.com/owner.png)`,
+  ];
+
+  for (const [mutationIndex, mutate] of mutations.entries()) {
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          document.section,
+          (section) =>
+            section
+              .split("\n")
+              .map((line) =>
+                line.includes(literal) ? mutate(line) : line,
+              )
+              .join("\n"),
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        1,
+        `mutation ${mutationIndex}\n${result.stderr}`,
+      );
+      assert.match(
+        result.stderr,
+        /planned ID owner 라우팅 구역에는/,
+      );
+    });
+  }
+});
+
+test("planned ID owner Skill의 symlink alias도 canonical 링크 중복으로 거부한다", () => {
+  withFixture((root) => {
+    const alias = "planned-id-owner-alias.md";
+    fs.symlinkSync(plannedIdDetailOwner.file, path.join(root, alias));
+    const target = path.join(root, "AGENTS.md");
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(
+      target,
+      mutateH2Section(
+        content,
+        "구현과 충돌 방지",
+        (section) => `${section}\n[alias](${alias})\n`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /PRD·Policy planned ID 수명주기.*canonical inline owner 링크.*정확히 하나/,
+    );
+  });
+});
+
+test("balanced·escaped inline destination의 symlink owner alias도 canonical 링크 중복으로 거부한다", () => {
+  for (const aliasLink of [
+    "[owner alias](planned(alias).md)",
+    "[owner alias](planned(alias).md \"title )\")",
+    "[owner alias](planned\\(alias\\).md)",
+  ]) {
+    withFixture((root) => {
+      const alias = "planned(alias).md";
+      fs.symlinkSync(
+        plannedIdDetailOwner.file,
+        path.join(root, alias),
+      );
+      const target = path.join(root, "AGENTS.md");
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          "구현과 충돌 방지",
+          (section) => `${section}\n${aliasLink}\n`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /PRD·Policy planned ID 수명주기.*canonical inline owner 링크.*정확히 하나/,
+        aliasLink,
+      );
+    });
+  }
+});
+
+test("collapsed·shortcut reference로 숨긴 planned ID owner alias를 네 문서에서 거부한다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    for (const usage of ["[planned-owner][]", "[planned-owner]"]) {
+      withFixture((root) => {
+        const alias = "planned-id-owner-alias.md";
+        fs.symlinkSync(
+          plannedIdDetailOwner.file,
+          path.join(root, alias),
+        );
+        const relativeAlias = path
+          .relative(path.dirname(document.file), alias)
+          .split(path.sep)
+          .join("/");
+        const target = path.join(root, document.file);
+        const content = fs.readFileSync(target, "utf8");
+        fs.writeFileSync(
+          target,
+          mutateH2Section(
+            content,
+            document.section,
+            (section) =>
+              `${section}\n${usage}\n\n[planned-owner]: ${relativeAlias}\n`,
+          ),
+        );
+
+        const result = runValidator(root);
+        assert.equal(
+          result.status,
+          1,
+          `${document.file}: ${usage}\n${result.stderr}`,
+        );
+        assert.match(
+          result.stderr,
+          /PRD·Policy planned ID 수명주기.*canonical inline owner 링크.*정확히 하나/,
+        );
+      });
+    }
+  }
+});
+
+test("구역 밖 전역 정의를 사용하는 shortcut owner alias도 네 문서에서 거부한다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const alias = "planned-id-owner-alias.md";
+      fs.symlinkSync(
+        plannedIdDetailOwner.file,
+        path.join(root, alias),
+      );
+      const relativeAlias = path
+        .relative(path.dirname(document.file), alias)
+        .split(path.sep)
+        .join("/");
+      const target = path.join(root, document.file);
+      const content = fs.readFileSync(target, "utf8");
+      const changed = mutateH2Section(
+        content,
+        document.section,
+        (section) => `${section}\n[planned-owner]\n`,
+      );
+      fs.writeFileSync(
+        target,
+        `${changed}\n[planned-owner]: ${relativeAlias}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /PRD·Policy planned ID 수명주기.*canonical inline owner 링크.*정확히 하나/,
+      );
+    });
+  }
+});
+
+test("container·multiline 전역 정의를 쓰는 shortcut owner alias도 거부한다", () => {
+  for (const definition of [
+    "> [planned-owner]: planned-id-owner-alias.md",
+    "[planned-owner]:\n  planned-id-owner-alias.md",
+  ]) {
+    withFixture((root) => {
+      const alias = "planned-id-owner-alias.md";
+      fs.symlinkSync(
+        plannedIdDetailOwner.file,
+        path.join(root, alias),
+      );
+      const target = path.join(root, "README.md");
+      const content = fs.readFileSync(target, "utf8");
+      const changed = mutateH2Section(
+        content,
+        "제품 문서 갱신 절차",
+        (section) => `${section}\n[planned-owner]\n`,
+      );
+      fs.writeFileSync(
+        target,
+        `${changed}\n## 다른 절\n\n${definition}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID owner 라우팅 구역에는 reference-style·collapsed·shortcut link usage/,
+      );
+    });
+  }
+});
+
+test("planned ID owner 구역의 raw HTML alias를 네 문서에서 거부한다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          document.section,
+          (section) =>
+            `${section}\n<a href=\"owner-alias.md\">planned-owner</a>\n`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID owner 라우팅 구역에는 raw HTML·autolink/,
+      );
+    });
+  }
+});
+
+test("raw HTML block으로 planned ID owner H2를 감출 수 없다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        content.replace(
+          `## ${document.section}`,
+          `<script>\n## ${document.section}`,
+        ) + "\n</script>\n",
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID 라우팅 문서에는 code 밖의 raw HTML·autolink/,
+      );
+    });
+  }
+});
+
+test("닫히지 않은 raw HTML block으로 planned ID owner H2를 감출 수 없다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        content.replace(
+          `## ${document.section}`,
+          `<script\n## ${document.section}`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID 라우팅 문서에는 code 밖의 raw HTML·autolink/,
+      );
+    });
+  }
+});
+
+test("네 planned ID owner 라우팅 H2는 plain-text top-level에 정확히 하나여야 한다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        content.replace(
+          `## ${document.section}`,
+          `## ${document.section} 변경됨`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /planned ID owner 라우팅 구역은.*정확히 하나/,
+      );
+    });
+
+    withFixture((root) => {
+      const target = path.join(root, document.file);
+      fs.appendFileSync(target, `\n## **${document.section}**\n`);
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /planned ID owner 라우팅 구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("비정본 H2 source 변형으로 planned ID 라우팅 owner H2 중복을 숨길 수 없다", () => {
+  for (const document of plannedIdRoutingDocuments) {
+    const setextLabel =
+      /^\d{1,9}[.)][ \t]+/.test(document.section)
+        ? `[${document.section}](#duplicate)`
+        : document.section;
+    for (const alternateHeading of [
+      `${setextLabel}\n---`,
+      ` ## ${document.section}`,
+      `  ## ${document.section}`,
+      `   ## ${document.section}`,
+      `##\t${document.section}`,
+      `## ${document.section} ##`,
+    ]) {
+      withFixture((root) => {
+        const target = path.join(root, document.file);
+        fs.appendFileSync(
+          target,
+          `\n${alternateHeading}\n`,
+        );
+
+        const result = runValidator(root);
+        assert.equal(
+          result.status,
+          1,
+          `${document.file}: ${alternateHeading}\n${result.stderr}`,
+        );
+        assert.match(
+          result.stderr,
+          /planned ID owner 라우팅 구역은.*보호 후보 2개/,
+        );
+      });
+    }
+  }
+});
+
+test("README의 container-prefixed planned ID 라우팅 H2 중복을 숨길 수 없다", () => {
+  const section = "제품 문서 갱신 절차";
+  for (const alternateHeading of [
+    `> ## ${section}`,
+    `> -\t> ## ${section} ##`,
+    `> ${section}\n> ---`,
+    `- ${section}\n  ---`,
+    `-\t${section}\n\t---`,
+    `> - ${section}\n>   ---`,
+    `> \`\`\`markdown\n> <!--\n> \`\`\`\n> ## ${section}`,
+  ]) {
+    withFixture((root) => {
+      const target = path.join(root, "README.md");
+      fs.appendFileSync(
+        target,
+        `\n## container heading fixture\n\n${alternateHeading}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        1,
+        `${alternateHeading}\n${result.stderr}`,
+      );
+      assert.match(
+        result.stderr,
+        /README\.md: planned ID owner 라우팅 구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("README YAML frontmatter의 owner 문구를 보호 H2 후보로 세지 않는다", () => {
+  withFixture((root) => {
+    const document = plannedIdRoutingDocuments.find(
+      ({ file }) => file === "README.md",
+    );
+    assert.ok(document, "README routing document missing");
+    const target = path.join(root, document.file);
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(
+      target,
+      `---\n${document.section}\n---\n${content}`,
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("bare CR fence로 README의 planned ID owner 링크를 숨길 수 없다", () => {
+  withFixture((root) => {
+    const target = path.join(root, "README.md");
+    const content = fs.readFileSync(target, "utf8");
+    const ownerParagraph = content
+      .split("\n")
+      .find((line) =>
+        line.includes(
+          "[update-product-docs](.agents/skills/update-product-docs/SKILL.md)",
+        ),
+      );
+    assert.ok(ownerParagraph, "fixture owner paragraph missing");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        ownerParagraph,
+        `~~~text\r${ownerParagraph}\r~~~`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /README\.md: planned ID 라우팅 문서에는 CRLF가 아닌 bare CR 줄바꿈을 사용할 수 없습니다/,
+    );
+  });
+});
+
+test("planned ID 세부 계약은 네 라우팅 문서 전체에 복제할 수 없다", () => {
+  for (const { file, section } of plannedIdRoutingDocuments) {
+    for (const example of plannedIdDetailExamples) {
+      withFixture((root) => {
+        const target = path.join(root, file);
+        const content = fs.readFileSync(target, "utf8");
+        fs.writeFileSync(
+          target,
+          mutateH2Section(
+            content,
+            section,
+            (ownerSection) =>
+              `${ownerSection}\n${example.content}\n`,
+          ),
+        );
+
+        const result = runValidator(root);
+        assert.equal(result.status, 1, `${file}: ${example.content}`);
+        assert.ok(
+          result.stderr.includes(
+            `planned ID 내부 상세 '${example.label}'`,
+          ),
+          result.stderr,
+        );
+      });
+    }
+  }
+});
+
+test("planned ID 세부 계약을 다른 H2로 옮겨도 whole-file 경계를 우회할 수 없다", () => {
+  const detail = plannedIdDetailExamples[0];
+
+  for (const { file } of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      fs.appendFileSync(
+        target,
+        `\n## 관련 참고\n\n${detail.content}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, `${file}\n${result.stderr}`);
+      assert.ok(
+        result.stderr.includes(
+          `planned ID 내부 상세 '${detail.label}'`,
+        ),
+        result.stderr,
+      );
+    });
+  }
+});
+
+test("HTML comment 분할과 fragment 역순으로 planned ID 상세 재복제를 숨길 수 없다", () => {
+  for (const content of [
+    "planned<!--detail--> ID의 namespace 번호와 일치하는 구체적 `NN_*.md`를 소유한다.",
+    "`NN_*.md` 정본 파일을 소유하려면 namespace 번호를 planned ID와 일치시킨다.",
+  ]) {
+    withFixture((root) => {
+      fs.appendFileSync(
+        path.join(root, "README.md"),
+        `\n## 상세 재복제 fixture\n\n${content}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID 내부 상세 'planned ID의 구체적 정본 파일 소유'을 재복제할 수 없습니다/,
+      );
+    });
+  }
+});
+
+test("reference-style link label로 planned ID 상세 재복제를 숨길 수 없다", () => {
+  withFixture((root) => {
+    fs.appendFileSync(
+      path.join(root, "README.md"),
+      [
+        "",
+        "## reference label 상세 fixture",
+        "",
+        "[planned][term] ID의 namespace 번호와 일치하는 구체적 `NN_*.md`를 소유한다.",
+        "",
+        "[planned]: https://example.com/planned",
+        "[term]: https://example.com/term",
+        "",
+      ].join("\n"),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 내부 상세 'planned ID의 구체적 정본 파일 소유'을 재복제할 수 없습니다/,
+    );
+  });
+});
+
+test("hard-wrap·inline code·link label·entity·emphasis로 분리한 planned ID 세부도 거부한다", () => {
+  const disguisedDetail = [
+    "**planned**",
+    "`ID`의 name&#x73;pace 번호와 [NN_*](README.md).md",
+    "",
+  ].join("\n");
+
+  for (const { file, section } of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          section,
+          (ownerSection) =>
+            `${ownerSection}\n${disguisedDetail}`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, `${file}\n${result.stderr}`);
+      assert.match(
+        result.stderr,
+        /planned ID 내부 상세 'planned ID의 구체적 정본 파일 소유'/,
+      );
+    });
+  }
+});
+
+test("balanced inline link로 분리한 planned ID 상세 재복제를 거부한다", () => {
+  for (const disguisedDetail of [
+    "[planned](#owner(and)alias) [ID](#other(and)alias)의 namespace 번호와 일치하는 구체적 `NN_*.md`를 소유한다.",
+    "[planned](#owner \"title )\") [ID](#other\\(and\\)alias)의 namespace 번호와 일치하는 구체적 `NN_*.md`를 소유한다.",
+  ]) {
+    withFixture((root) => {
+      fs.appendFileSync(
+        path.join(root, "README.md"),
+        `\n## balanced link 상세 fixture\n\n${disguisedDetail}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID 내부 상세 'planned ID의 구체적 정본 파일 소유'을 재복제할 수 없습니다/,
+        disguisedDetail,
+      );
+    });
+  }
+});
+
+test("balanced destination을 가진 무관한 inline link를 planned ID 상세로 오인하지 않는다", () => {
+  withFixture((root) => {
+    fs.appendFileSync(
+      path.join(root, "README.md"),
+      [
+        "",
+        "## balanced link 비계약 fixture",
+        "",
+        "[planned elsewhere](#owner(and)alias) [ID index](#other \"title )\")를 참고한다.",
+        "",
+      ].join("\n"),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("fenced code에 넣은 planned ID 세부도 문서 복제로 거부한다", () => {
+  const trackedDetail = plannedIdDetailExamples.find(
+    (example) =>
+      example.label ===
+      "planned ID의 실제 정의·validator·구현·테스트·PR 추적",
+  );
+  assert.ok(trackedDetail, "fixture tracked planned ID detail missing");
+  const fencedDetail = [
+    "```text",
+    trackedDetail.content,
+    "```",
+    "",
+  ].join("\n");
+
+  for (const { file, section } of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          section,
+          (ownerSection) => `${ownerSection}\n${fencedDetail}`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, `${file}\n${result.stderr}`);
+      assert.match(
+        result.stderr,
+        /planned ID 내부 상세 'planned ID의 실제 정의·validator·구현·테스트·PR 추적'/,
+      );
+    });
+  }
+});
+
+test("named entity로 감싼 exact-head planned ID 세부도 거부한다", () => {
+  const detail =
+    "exact PR head Git tree에서 image alt와 &lt;details&gt;를 정의에서 제외한다.";
+
+  for (const { file, section } of plannedIdRoutingDocuments) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          section,
+          (ownerSection) => `${ownerSection}\n${detail}\n`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, `${file}\n${result.stderr}`);
+      assert.match(
+        result.stderr,
+        /planned ID 내부 상세 'exact-head 비가시 정의 제외'/,
+      );
+    });
+  }
+});
+
+test("하네스 소유 표는 planned ID 수명주기 owner 행을 정확히 하나 요구한다", () => {
+  const row =
+    "| PRD·Policy planned ID 수명주기 | [update-product-docs](../../.agents/skills/update-product-docs/SKILL.md) | 새 ID 요청을 단일 owner로 라우팅 |";
+  for (const replacement of ["", `${row}\n${row}`]) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(row), "fixture owner row missing");
+      fs.writeFileSync(target, content.replace(row, replacement));
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /규칙 소유와 링크 표에 'PRD·Policy planned ID 수명주기' 행이 정확히 하나/,
+      );
+    });
+  }
+});
+
+test("planned ID 수명주기 owner 링크는 소유 표의 정확한 행에 결합되어야 한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, developmentFiles[0]);
+    const content = fs.readFileSync(target, "utf8");
+    const plannedRow =
+      "| PRD·Policy planned ID 수명주기 | [update-product-docs](../../.agents/skills/update-product-docs/SKILL.md) | 새 ID 요청을 단일 owner로 라우팅 |";
+    const productRow =
+      "| 사용자 결과·수용 동작 | PRD | STEP 입력으로 연결 |";
+    fs.writeFileSync(
+      target,
+      content
+        .replace(
+          plannedRow,
+          "| PRD·Policy planned ID 수명주기 | PRD | STEP 입력으로 연결 |",
+        )
+        .replace(
+          productRow,
+          "| 사용자 결과·수용 동작 | [update-product-docs](../../.agents/skills/update-product-docs/SKILL.md) | 새 ID 요청을 단일 owner로 라우팅 |",
+        ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /PRD·Policy planned ID 수명주기.*canonical update-product-docs owner.*결합/,
+    );
+  });
+});
+
+test("이슈 추적 적용 경계는 run-github-work-item 이슈 계약 행에 결합되어야 한다", () => {
+  withFixture((root) => {
+    const target = path.join(root, developmentFiles[0]);
+    const content = fs.readFileSync(target, "utf8");
+    const issueRow =
+      "| 작업 범위·경로·행동 시나리오·검증 계획 | [run-github-work-item 이슈 계약](../../.agents/skills/run-github-work-item/references/issue-contract.md) | 이슈 양식·제품 추적 적용 경계·구현·리뷰 입력을 단일 계약으로 라우팅 |";
+    const projectRow =
+      "| 이슈·Project 상태 전이·재조회·복구 | [run-github-work-item](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈·Project 요청을 단일 owner로 라우팅 |";
+    fs.writeFileSync(
+      target,
+      content
+        .replace(
+          issueRow,
+          "| 작업 범위·경로·행동 시나리오·검증 계획 | [run-github-work-item](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈·Project 요청을 단일 owner로 라우팅 |",
+        )
+        .replace(
+          projectRow,
+          "| 이슈·Project 상태 전이·재조회·복구 | [run-github-work-item 이슈 계약](../../.agents/skills/run-github-work-item/references/issue-contract.md) | 이슈 양식·제품 추적 적용 경계·구현·리뷰 입력을 단일 계약으로 라우팅 |",
+        ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /작업 범위·경로·행동 시나리오·검증 계획 행은 canonical run-github-work-item 이슈 계약과 제품 추적 적용 경계/,
+    );
+  });
+});
+
+test("planned ID 상세 owner는 visible canonical H2 하나에만 계약을 둔다", () => {
+  const skillFile =
+    ".agents/skills/update-product-docs/SKILL.md";
+
+  for (const mutate of [
+    (content) =>
+      content.replace(
+        "## Planned ID 계약",
+        "## Planned ID 계약 변경됨",
+      ),
+    (content) =>
+      `${content}\n## **Planned ID 계약**\n`,
+  ]) {
+    withFixture((root) => {
+      const target = path.join(root, skillFile);
+      fs.writeFileSync(
+        target,
+        mutate(fs.readFileSync(target, "utf8")),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역은.*정확히 하나/,
+      );
+    });
+  }
+
+  withFixture((root) => {
+    const target = path.join(root, skillFile);
+    fs.appendFileSync(
+      target,
+      "\n## 다른 절\n\nplanned ID는 같은 branch와 PR에서 다룬다.\n",
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 내부 상세 'planned ID의 같은 branch·PR 동시 작업'.*Planned ID 계약/,
+    );
+  });
+});
+
+test("planned ID 상세 owner의 fenced code는 visible 계약 증거가 아니다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    const detail = updateProductDocsFixtureContract.find((line) =>
+      line.includes("exact PR head Git tree"),
+    );
+    assert.ok(detail, "fixture exact-head contract missing");
+    fs.writeFileSync(
+      target,
+      content.replace(detail, `\`\`\`text\n${detail}\n\`\`\``),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner 구역의 각 visible line은 '- ' direct bullet 또는 그 bullet의 정확히 2칸 continuation/,
+    );
+  });
+});
+
+test("planned ID 상세 owner의 list-contained fence를 inline code로 오인하지 않는다", () => {
+  for (const marker of ["```text", "~~~text"]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      const detail = updateProductDocsFixtureContract.find((line) =>
+        line.includes("승인된 결정과 planned ID"),
+      );
+      assert.ok(detail, "fixture planned ID marker contract missing");
+      const closingMarker = marker.startsWith("`") ? "```" : "~~~";
+      fs.writeFileSync(
+        target,
+        content.replace(
+          detail,
+          [
+            `- ${marker}`,
+            `  ${detail.slice(2)}`,
+            `  ${closingMarker}`,
+          ].join("\n"),
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역에는 direct bullet·2칸 continuation에 넣은 fenced code marker를 사용할 수 없습니다/,
+      );
+    });
+  }
+});
+
+test("planned ID 상세 owner의 indented code는 visible 계약 증거가 아니다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    const detail = updateProductDocsFixtureContract.find((line) =>
+      line.includes("exact PR head Git tree"),
+    );
+    assert.ok(detail, "fixture exact-head contract missing");
+    fs.writeFileSync(
+      target,
+      content.replace(detail, `    ${detail}`),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner 구역의 각 visible line은 '- ' direct bullet 또는 그 bullet의 정확히 2칸 continuation/,
+    );
+  });
+});
+
+test("planned ID 상세 owner의 4칸 continuation은 fail-closed한다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    const detail =
+      "별도 문서 이슈나 PR을 만들 필요는 없다.";
+    assert.ok(content.includes(detail), "fixture separate Issue contract missing");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        detail,
+        `- 문서와 구현은 함께 작성한다.\n    ${detail}`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner 구역의 각 visible line은 '- ' direct bullet 또는 그 bullet의 정확히 2칸 continuation/,
+    );
+  });
+});
+
+test("planned ID 상세 owner의 reference·image metadata는 fail-closed한다", () => {
+  const detail =
+    "별도 문서 이슈나 PR을 만들 필요는 없다.";
+  const replacements = [
+    `![${detail}][hidden-image]\n\n[hidden-image]: https://example.com/image.png`,
+    `> [hidden-contract]: https://example.com "${detail}"`,
+    `[hidden\\]]: https://example.com "${detail}"`,
+    `[visible-contract]: not a valid reference definition ${detail}`,
+  ];
+
+  for (const replacement of replacements) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(detail), "fixture separate Issue contract missing");
+      fs.writeFileSync(target, content.replace(detail, replacement));
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역(?:의 각 visible line은|에는 inline code 밖의 Markdown formatting)/,
+      );
+    });
+  }
+});
+
+test("planned ID 상세 owner의 nested·tab·container code와 escaped raw HTML은 fail-closed한다", () => {
+  const detail =
+    "별도 문서 이슈나 PR을 만들 필요는 없다.";
+  const mutations = [
+    () => `-\t\t${detail}`,
+    () => `- parent\n  - ${detail}`,
+    () => `- ~~~\n  ${detail}`,
+    () => `- \\` + `<img alt="${detail}">` + "\\`",
+  ];
+
+  for (const mutate of mutations) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        content
+          .split("\n")
+          .map((line) => line.includes(detail) ? mutate() : line)
+          .join("\n"),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역/,
+      );
+    });
+  }
+});
+
+test("planned ID 상세 owner의 bare CR 줄바꿈은 fail-closed한다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    const detail =
+      "별도 문서 이슈나 PR을 만들 필요는 없다.";
+    assert.ok(content.includes(detail), "fixture separate Issue contract missing");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        detail,
+        `visible owner contract\r\r      ${detail}`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner에는 CRLF가 아닌 bare CR 줄바꿈을 사용할 수 없습니다/,
+    );
+  });
+});
+
+test("sibling list item fence의 문구는 planned ID 상세 owner 계약 증거가 아니다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    const detail =
+      "- 별도 문서 이슈나 PR을 만들 필요는 없다.";
+    assert.ok(content.includes(detail), "fixture separate Issue contract missing");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        detail,
+        [
+          "- ```",
+          "  별도 문서 이슈나 PR을 만들 필요는 없다.",
+          "- ```",
+        ].join("\n"),
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /하네스 수명주기 계약이 없습니다: 별도 문서 이슈 불필요/,
+    );
+  });
+});
+
+test("planned ID 상세 owner는 CRLF Markdown에서도 검증된다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(target, content.replaceAll("\n", "\r\n"));
+
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("planned ID 상세 owner의 canonical grammar 문장은 필수다", () => {
+  for (const { pattern, message } of [
+    {
+      pattern:
+        /- 이 canonical 구역은 plain top-level H2[\s\S]*?사용하지 않는다\.\n/,
+      message:
+        /하네스 수명주기 계약이 없습니다: canonical owner grammar/,
+    },
+    {
+      pattern:
+        /- owner·routing H2의 보호 이름은[\s\S]*?사용할 수 없다\.\n/,
+      message:
+        /하네스 수명주기 계약이 없습니다: fail-closed owner H2 source grammar/,
+    },
+    {
+      pattern:
+        /- validator는 임의의 CommonMark rendered 동등성을[\s\S]*?fail-closed한다\.\n/,
+      message:
+        /하네스 수명주기 계약이 없습니다: bounded owner H2 scanner/,
+    },
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      const changed = content.replace(pattern, "");
+      assert.notEqual(changed, content, `fixture pattern missing: ${pattern}`);
+      fs.writeFileSync(target, changed);
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("reference definition metadata는 visible planned ID 계약 증거가 아니다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    const detail =
+      "별도 문서 이슈나 PR을 만들 필요는 없다.";
+    assert.ok(content.includes(detail), "fixture separate Issue contract missing");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        detail,
+        `[hidden-contract]: https://example.com "${detail}"`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner 구역에는 inline code 밖의 Markdown formatting·link·image·reference·raw HTML/,
+    );
+  });
+});
+
+test("planned ID 상세 owner의 image alt와 link destination은 계약 증거가 아니다", () => {
+  const skillFile =
+    ".agents/skills/update-product-docs/SKILL.md";
+
+  withFixture((root) => {
+    const target = path.join(root, skillFile);
+    const content = fs.readFileSync(target, "utf8");
+    const detail = updateProductDocsFixtureContract.find((line) =>
+      line.includes("exact PR head Git tree"),
+    );
+    assert.ok(detail, "fixture exact-head contract missing");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        detail,
+        `![${detail}](https://example.com/owner.png)`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /하네스 수명주기 계약이 없습니다: exact-head product definitions/,
+    );
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, skillFile);
+    const content = fs.readFileSync(target, "utf8");
+    const detail =
+      "별도 문서 이슈나 PR을 만들 필요는 없다.";
+    assert.ok(content.includes(detail), "fixture separate Issue contract missing");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        detail,
+        `[참고](https://example.com \"${detail}\")`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /하네스 수명주기 계약이 없습니다: 별도 문서 이슈 불필요/,
+    );
+  });
+});
+
+test("raw HTML block으로 planned ID 상세 owner H2를 감출 수 없다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        "## Planned ID 계약",
+        "<script>\n## Planned ID 계약",
+      ) + "\n</script>\n",
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner에는 code 밖의 raw HTML·autolink/,
+    );
+  });
+});
+
+test("reference-style owner H2를 보호 이름 후보에서 숨길 수 없다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    fs.appendFileSync(
+      target,
+      "\n## [Planned ID 계약][duplicate]\n\n[duplicate]: #planned-id-계약\n",
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner의 H2는 Markdown formatting·link가 없는 plain text/,
+    );
+  });
+});
+
+test("balanced-parentheses link destination으로 planned ID owner H2 중복을 숨길 수 없다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    fs.appendFileSync(
+      target,
+      "\n## [Planned ID 계약](owner(and)alias)\n",
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner의 H2는 Markdown formatting·link가 없는 plain text/,
+    );
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner 구역은.*보호 후보 2개/,
+    );
+  });
+});
+
+test("비정본 H2 source 변형으로 planned ID 상세 owner H2 중복을 숨길 수 없다", () => {
+  for (const alternateHeading of [
+    "Planned ID 계약\n---",
+    " ## Planned ID 계약",
+    "  ## Planned ID 계약",
+    "   ## Planned ID 계약",
+    "##\tPlanned ID 계약",
+    "## Planned ID 계약 ##",
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      fs.appendFileSync(
+        target,
+        `\n${alternateHeading}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        1,
+        `${alternateHeading}\n${result.stderr}`,
+      );
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner의 H2는 Markdown formatting·link가 없는 plain text/,
+      );
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("detail owner의 container-prefixed Planned ID 계약 H2 중복을 숨길 수 없다", () => {
+  const section = "Planned ID 계약";
+  for (const alternateHeading of [
+    `- ## ${section}`,
+    `-\t> ## ${section} ##`,
+    `> ${section}\n> ---`,
+    `- ${section}\n  ---`,
+    `-\t${section}\n\t---`,
+    `> - ${section}\n>   ---`,
+    `> \`\`\`markdown\n> <!--\n> \`\`\`\n> ## ${section}`,
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      fs.appendFileSync(
+        target,
+        `\n## container heading fixture\n\n${alternateHeading}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        1,
+        `${alternateHeading}\n${result.stderr}`,
+      );
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("container code·comment·thematic break·list content를 owner H2로 오인하지 않는다", () => {
+  for (const { file, section } of [
+    {
+      file: "README.md",
+      section: "제품 문서 갱신 절차",
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      section: "Planned ID 계약",
+    },
+  ]) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      fs.appendFileSync(
+        target,
+        [
+          "",
+          "## container non-heading fixture",
+          "",
+          `    ## ${section}`,
+          "> ```markdown",
+          `> ## ${section}`,
+          "> ```",
+          "- ```markdown",
+          `  ## ${section}`,
+          "  ```",
+          `-     ## ${section}`,
+          `-\t\t## ${section}`,
+          "> <!--",
+          `> ## ${section}`,
+          "> -->",
+          `> ${section}`,
+          "---",
+          "> ---",
+          `- ${section}`,
+          "",
+        ].join("\n"),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 0, `${file}\n${result.stderr}`);
+    });
+  }
+});
+
+test("container raw HTML block 안의 owner 문구를 보호 H2 후보로 세지 않는다", () => {
+  for (const { file, section, rawHtmlMessage } of [
+    {
+      file: "README.md",
+      section: "제품 문서 갱신 절차",
+      rawHtmlMessage:
+        /planned ID 라우팅 문서에는 code 밖의 raw HTML·autolink/,
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      section: "Planned ID 계약",
+      rawHtmlMessage:
+        /planned ID 상세 owner에는 code 밖의 raw HTML·autolink/,
+    },
+  ]) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      fs.appendFileSync(
+        target,
+        [
+          "",
+          "## container raw HTML fixture",
+          "",
+          "> <script>",
+          `> ## ${section}`,
+          "> </script>",
+          "",
+        ].join("\n"),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, `${file}\n${result.stderr}`);
+      assert.match(result.stderr, rawHtmlMessage);
+      assert.doesNotMatch(
+        result.stderr,
+        /owner (?:라우팅 )?구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("thematic break·code·non-H2를 planned ID 상세 owner H2로 오인하지 않는다", () => {
+  for (const nonH2 of [
+    "Planned ID 계약\n\n---",
+    "Planned ID 계약\n===",
+    "    ## Planned ID 계약",
+    "\t## Planned ID 계약",
+    "### Planned ID 계약",
+    "##Planned ID 계약",
+    "```\n## Planned ID 계약\n```",
+    "<!--\n## Planned ID 계약\n-->",
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        content.replace(
+          "## Planned ID 계약",
+          `${nonH2}\n\n## Planned ID 계약`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        0,
+        `${nonH2}\n${result.stderr}`,
+      );
+    });
+  }
+});
+
+test("quoted title의 parenthesis·escape로 planned ID owner H2 중복을 숨길 수 없다", () => {
+  for (const destination of [
+    'owner "title )"',
+    "owner 'title )'",
+    'owner "title \\" )"',
+    "owner (title \\))",
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      fs.appendFileSync(
+        target,
+        `\n## [Planned ID 계약](${destination})\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, `${destination}\n${result.stderr}`);
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner의 H2는 Markdown formatting·link가 없는 plain text/,
+      );
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("종결되지 않은 inline title의 보호 이름도 fail-closed한다", () => {
+  for (const malformedHeading of [
+    "[Planned ID 계약](owner \"unclosed title )",
+    "[Planned ID 계약](owner\\ title)",
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      fs.appendFileSync(
+        target,
+        `\n## ${malformedHeading}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        1,
+        `${malformedHeading}\n${result.stderr}`,
+      );
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("owner와 무관한 formatted H2는 planned ID owner H2 오류가 아니다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    fs.appendFileSync(target, "\n## `PRD` 예시\n\n설명\n");
+
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("닫히지 않은 raw HTML block으로 planned ID 상세 owner H2를 감출 수 없다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        "## Planned ID 계약",
+        "<script\n## Planned ID 계약",
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner에는 code 밖의 raw HTML·autolink/,
+    );
+  });
+});
+
 test("세 owner 라우팅 H2는 top-level에 정확히 하나만 존재해야 한다", () => {
   for (const document of harnessRoutingDocuments) {
     withFixture((root) => {
@@ -1165,13 +2886,13 @@ test("세 owner 라우팅 H2는 top-level에 정확히 하나만 존재해야 �
       assert.equal(result.status, 1);
       assert.match(
         result.stderr,
-        /하네스 owner 라우팅 구역은.*rendered 2개/,
+        /하네스 owner 라우팅 구역은.*보호 후보 2개/,
       );
     });
   }
 });
 
-test("entity·inline code로 꾸민 owner H2도 rendered 중복으로 계산한다", () => {
+test("entity·inline code로 꾸민 owner H2도 보호 source 후보로 계산한다", () => {
   for (const heading of [
     "&#80;R과 작업 완료",
     "PR과 작업 `완료`",
@@ -1187,10 +2908,364 @@ test("entity·inline code로 꾸민 owner H2도 rendered 중복으로 계산한�
       assert.equal(result.status, 1);
       assert.match(
         result.stderr,
-        /하네스 owner 라우팅 구역은.*rendered 2개/,
+        /하네스 owner 라우팅 구역은.*보호 후보 2개/,
       );
     });
   }
+});
+
+test("nested list continuation의 ATX·setext·tab owner H2를 보호 source 후보로 계산한다", () => {
+  for (const { file, section } of [
+    {
+      file: "README.md",
+      section: "제품 문서 갱신 절차",
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      section: "Planned ID 계약",
+    },
+  ]) {
+    for (const alternateHeading of [
+      `- outer\n  - inner\n    ## ${section}`,
+      `- outer\n  - inner\n\n    ${section}\n    ---`,
+      `- outer\n  - inner\n\t## ${section}`,
+    ]) {
+      withFixture((root) => {
+        const target = path.join(root, file);
+        fs.appendFileSync(
+          target,
+          `\n## nested continuation fixture\n\n${alternateHeading}\n`,
+        );
+
+        const result = runValidator(root);
+        assert.equal(
+          result.status,
+          1,
+          `${file}: ${alternateHeading}\n${result.stderr}`,
+        );
+        assert.match(
+          result.stderr,
+          /owner (?:라우팅 )?구역은.*보호 후보 2개/,
+        );
+      });
+    }
+  }
+});
+
+test("multi-line blockquote setext와 comment·inline-code 뒤 실제 owner H2를 찾는다", () => {
+  for (const { file, section } of [
+    {
+      file: "README.md",
+      section: "제품 문서 갱신 절차",
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      section: "Planned ID 계약",
+    },
+  ]) {
+    const [firstWord, ...remainingWords] = section.split(" ");
+    for (const alternateHeading of [
+      `> ${firstWord}\n> ${remainingWords.join(" ")}\n> ---`,
+      `<!--\n\`\`\`\n-->\n## ${section}`,
+      `\\<!--\n## ${section}\n-->`,
+      `\` \`\`\` \`\n## ${section}`,
+    ]) {
+      withFixture((root) => {
+        const target = path.join(root, file);
+        fs.appendFileSync(
+          target,
+          `\n## visibility precedence fixture\n\n${alternateHeading}\n`,
+        );
+
+        const result = runValidator(root);
+        assert.equal(
+          result.status,
+          1,
+          `${file}: ${alternateHeading}\n${result.stderr}`,
+        );
+        assert.match(
+          result.stderr,
+          /owner (?:라우팅 )?구역은.*보호 후보 2개/,
+        );
+      });
+    }
+  }
+});
+
+test("indented code·outdented thematic break를 owner H2 후보로 오인하지 않는다", () => {
+  for (const { file, section } of [
+    {
+      file: "README.md",
+      section: "제품 문서 갱신 절차",
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      section: "Planned ID 계약",
+    },
+  ]) {
+    const nonOwnerHeadings = [
+      `    ${section}\n---`,
+      `- outer\n  ${section}\n---`,
+    ];
+
+    for (const nonOwnerHeading of nonOwnerHeadings) {
+      withFixture((root) => {
+        const target = path.join(root, file);
+        fs.appendFileSync(
+          target,
+          `\n## exact non-owner fixture\n\n${nonOwnerHeading}\n`,
+        );
+
+        const result = runValidator(root);
+        assert.equal(
+          result.status,
+          0,
+          `${file}: ${nonOwnerHeading}\n${result.stderr}`,
+        );
+      });
+    }
+  }
+});
+
+test("reference·entity·미종결 delimiter·ordered-list 보호 이름을 fail-closed한다", () => {
+  for (const protectedCandidate of [
+    "## [Planned ID 계약][missing]",
+    "## Planned&colon; ID 계약",
+    "## Planned ID 계약 `",
+    "## Planned ID 계약 *",
+    "paragraph stays open\n2. ## Planned ID 계약",
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      fs.appendFileSync(
+        target,
+        `\n## fail-closed source fixture\n\n${protectedCandidate}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        1,
+        `${protectedCandidate}\n${result.stderr}`,
+      );
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("rule-of-three·multiline reference·hardbreak·link title 보호 이름을 fail-closed한다", () => {
+  for (const protectedCandidate of [
+    "## *Planned ID *계약**",
+    [
+      "## [Planned ID 계약][dup]",
+      "",
+      "[dup]:",
+      "  https://example.com/owner",
+    ].join("\n"),
+    ["Planned\\", "ID 계약", "---"].join("\n"),
+    [
+      '[Planned ID 계약](https://example.com "multi',
+      ' line")',
+      "---",
+    ].join("\n"),
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/update-product-docs/SKILL.md",
+      );
+      fs.appendFileSync(
+        target,
+        `\n## remaining P1 fixture\n\n${protectedCandidate}\n`,
+      );
+
+      const result = runValidator(root);
+      assert.equal(
+        result.status,
+        1,
+        `${protectedCandidate}\n${result.stderr}`,
+      );
+      assert.match(
+        result.stderr,
+        /planned ID 상세 owner 구역은.*보호 후보 2개/,
+      );
+    });
+  }
+});
+
+test("processing instruction·type 6 raw HTML block의 pseudo owner H2를 세지 않는다", () => {
+  for (const { file, section, rawHtmlMessage } of [
+    {
+      file: "README.md",
+      section: "제품 문서 갱신 절차",
+      rawHtmlMessage:
+        /planned ID 라우팅 문서에는 code 밖의 raw HTML·autolink/,
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      section: "Planned ID 계약",
+      rawHtmlMessage:
+        /planned ID 상세 owner에는 code 밖의 raw HTML·autolink/,
+    },
+  ]) {
+    for (const rawBlock of [
+      `<?target\n## ${section}\n?>`,
+      `<hr>\n## ${section}`,
+    ]) {
+      withFixture((root) => {
+        const target = path.join(root, file);
+        fs.appendFileSync(
+          target,
+          `\n## raw HTML type fixture\n\n${rawBlock}\n\nvisible\n`,
+        );
+
+        const result = runValidator(root);
+        assert.equal(
+          result.status,
+          1,
+          `${file}: ${rawBlock}\n${result.stderr}`,
+        );
+        assert.match(result.stderr, rawHtmlMessage);
+        assert.doesNotMatch(
+          result.stderr,
+          /owner (?:라우팅 )?구역은.*보호 후보 2개/,
+        );
+      });
+    }
+  }
+});
+
+test("link·entity·code와 emphasis의 owner source skeleton을 보호 후보로 계산한다", () => {
+  for (const { file, section } of [
+    {
+      file: "README.md",
+      section: "제품 문서 갱신 절차",
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      section: "Planned ID 계약",
+    },
+  ]) {
+    const characters = [...section];
+    const firstSpace = section.indexOf(" ");
+    const exactHeadings = [
+      {
+        heading: `[${section}][resolved-owner]`,
+        suffix: "\n[resolved-owner]: #canonical-owner\n",
+      },
+      {
+        heading:
+          `&#${characters[0].codePointAt(0)};` +
+          characters.slice(1).join(""),
+        suffix: "",
+      },
+      {
+        heading:
+          firstSpace < 0
+            ? `\`${section}\``
+            : `${section.slice(0, firstSpace)}&#32;${section.slice(firstSpace + 1)}`,
+        suffix: "",
+      },
+      {
+        heading: `\`${section}\``,
+        suffix: "",
+      },
+      {
+        heading: `*${section}*`,
+        suffix: "",
+      },
+      {
+        heading: `[${section}](#canonical-owner)`,
+        suffix: "",
+      },
+    ];
+
+    for (const { heading, suffix } of exactHeadings) {
+      withFixture((root) => {
+        const target = path.join(root, file);
+        fs.appendFileSync(
+          target,
+          `\n## exact inline fixture\n\n## ${heading}\n${suffix}`,
+        );
+
+        const result = runValidator(root);
+        assert.equal(
+          result.status,
+          1,
+          `${file}: ${heading}\n${result.stderr}`,
+        );
+        assert.match(
+          result.stderr,
+          /owner (?:라우팅 )?구역은.*보호 후보 2개/,
+        );
+      });
+    }
+  }
+});
+
+test("owner scanner는 큰 보호 delimiter·container 입력을 제한 시간 안에 fail-closed한다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const unmatchedDelimiters = "*".repeat(20_001);
+    const nestedContainers = "- ".repeat(2_000);
+    fs.appendFileSync(
+      target,
+      [
+        "",
+        "## bounded scanner fixture",
+        "",
+        `## Planned ID 계약${unmatchedDelimiters}`,
+        `${nestedContainers}not an owner heading`,
+        "",
+      ].join("\n"),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.signal, null, result.error?.message);
+    assert.notEqual(result.status, null, result.error?.message);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /planned ID 상세 owner 구역은.*보호 후보 2개/,
+    );
+  });
+});
+
+test("owner scanner는 큰 무관한 formatting 입력에서도 제한 시간 안에 종료한다", () => {
+  withFixture((root) => {
+    const target = path.join(
+      root,
+      ".agents/skills/update-product-docs/SKILL.md",
+    );
+    const unmatchedDelimiters = "*".repeat(20_001);
+    const nestedContainers = "- ".repeat(2_000);
+    const inlineComments = "<!-- bounded -->".repeat(2_000);
+    fs.appendFileSync(
+      target,
+      [
+        "",
+        "## bounded unrelated scanner fixture",
+        "",
+        `## unrelated owner example${inlineComments}${unmatchedDelimiters}`,
+        `${nestedContainers}unrelated content`,
+        "",
+      ].join("\n"),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.signal, null, result.error?.message);
+    assert.notEqual(result.status, null, result.error?.message);
+    assert.equal(result.status, 0, result.stderr);
+  });
 });
 
 test("CONTRIBUTING은 승인 수 0과 리뷰 대화 해결 문장을 각각 하나 요구한다", () => {
@@ -1349,6 +3424,14 @@ test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", 
       source: "승인된 결정",
       replacement: "정의된 내용",
       message: /하네스 수명주기 계약이 없습니다: 승인된 결정/,
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      source:
+        "- `planned ID`는 GitHub 이슈의 계획 표식일 뿐 정본 정의가 아니다.\n",
+      replacement: "",
+      message:
+        /하네스 수명주기 계약이 없습니다: planned ID marker는 정본 정의가 아님/,
     },
     {
       file: ".agents/skills/update-product-docs/SKILL.md",
@@ -2278,7 +4361,9 @@ test("README의 visible reference-style link를 아키텍처 탐색 링크로 �
         "[시스템 아키텍처](docs/architecture/README.md)",
         "[시스템 아키텍처][architecture-index]",
       )
-      .concat("\n[architecture-index]: docs/architecture/README.md\n");
+      .concat(
+        "\n## 링크 정의 fixture\n\n[architecture-index]: docs/architecture/README.md\n",
+      );
     fs.writeFileSync(target, content);
     const result = runValidator(root);
     assert.equal(result.status, 0, result.stderr);

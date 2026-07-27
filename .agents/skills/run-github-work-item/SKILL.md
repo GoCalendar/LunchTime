@@ -15,9 +15,10 @@ GitHub 이슈, Project와 의존 관계 상태를 일치시킨다. 점검 실패
 - **병합되지 않은 작업 포기:** [work-item-lifecycle.md](references/work-item-lifecycle.md)를 읽고 열려 있는 PR을 닫은 뒤 원래 브랜치, 에이전트 표식과 사유로 `release`를 실행한다.
 - **파생 차단 레이블 복구:** [work-item-lifecycle.md](references/work-item-lifecycle.md)를 읽고 선점되지 않은 `Todo` 이슈에만 `reconcile`을 실행한다.
 - **이슈 본문 작성·감사:** [issue-contract.md](references/issue-contract.md)를
-  읽고 `완료 조건`에 happy·error·recovery 행동 시나리오, 추적 ID와 검증
-  계획을 연결한다. 로컬 본문 파일이 있으면 `validate-body`를 실행하되 구조
-  통과를 시나리오 품질 승인으로 간주하지 않는다.
+  읽고 `완료 조건`에 happy·error·recovery 행동 시나리오, 적용 가능한 추적
+  ID 또는 허용된 tooling-only 비적용 근거와 검증 계획을 연결한다. 로컬 본문
+  파일이 있으면 실제 type label을 `--label`로 전달해 `validate-body`를
+  실행하되 구조 통과를 시나리오 품질 승인으로 간주하지 않는다.
 - **개별 이슈 생성:** 두 참조 문서를 읽고 본문을 `validate-body`로 검증한다.
   안정적인 idempotency key, 정확한 열린 milestone과 기존 label을 입력하고
   `create --dry-run`을 먼저 실행한다. 계획 전체를 확인한 뒤 같은 입력과 출력된
@@ -35,7 +36,7 @@ node .agents/skills/run-github-work-item/scripts/work-item.mjs start <issue> --b
 node .agents/skills/run-github-work-item/scripts/work-item.mjs complete <issue> --pr <merged-pr> --head <finalized-head> --repo <owner/repo>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs release <issue> --branch <branch> --agent <marker> --reason <text>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs reconcile <issue>
-node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <body-file>
+node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <body-file> [--label <actual-label>...]
 node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs validate
 node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs apply --dry-run
 ```
@@ -87,5 +88,17 @@ review-fix를 반복한다. 3회 뒤에도 P0/P1이 남으면 상태 전이나 �
     `head.repo.full_name`이 모두 설정된 작업 저장소와 같을 때만 실행한다.
     fork·cross-repository PR이나 repository identity가 누락된 응답은 branch와
     head SHA가 같아도 완료 근거로 사용하지 않는다.
+16. 제품 계약 ID 비적용은 [이슈 계약](references/issue-contract.md)의
+    tooling-only 형식과 raw 문자열이 정확한 실제 `type:chore` 하나가 모두
+    맞을 때만 허용하고 앞뒤 whitespace를 정규화해 승인하지 않는다.
+    개별 `create`, `check`, `start`, `validate-body`에만 적용하고 MVP 일괄
+    등록은 계속 제품 정본 ID를 요구한다. exact 비적용 prefix가 있는 본문은
+    rendered ID·경로 판정보다 먼저 fail-closed 소스 문법으로 검사한다. 정확한
+    create marker 한 줄, 일반 제목·문단·목록·표, inline code와 같은 줄에서
+    완결된 inline link만 사용하고 HTML·entity·image·reference·blockquote·
+    4열 이상 소스 들여쓰기·각 nested list marker 뒤 tab·5칸 이상 padding·
+    indented·fenced code·CRLF가 아닌 bare CR 또는 불완전한
+    bracket·destination으로 표현력을 넓히지 않는다. 이 문법은
+    CommonMark 전체를 해석하려는 계약이 아니다.
 
 정확한 이슈 본문 계약은 [issue-contract.md](references/issue-contract.md)에 있다. 상태 전이, 설정, 의존 관계 해제와 복구 규칙은 [work-item-lifecycle.md](references/work-item-lifecycle.md)에 있다. 순서가 보장되고 멱등인 MVP 등록 절차는 [bulk-registration.md](references/bulk-registration.md)에 있다.

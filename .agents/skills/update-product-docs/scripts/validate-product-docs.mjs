@@ -257,7 +257,7 @@ function parseMarkdownTableCells(line) {
     .map((cell) => cell.trim());
 }
 
-function scanFencedBlockRanges(text) {
+function scanTopLevelFencedBlockRanges(text) {
   const ranges = [];
   let open;
   let offset = 0;
@@ -290,6 +290,97 @@ function scanFencedBlockRanges(text) {
   }
 
   if (open) ranges.push({ start: open.start, end: text.length });
+  return ranges;
+}
+
+function sliceAfterIndentColumns(line, requiredColumns) {
+  let columns = 0;
+  let index = 0;
+
+  while (index < line.length && columns < requiredColumns) {
+    if (line[index] === " ") {
+      columns += 1;
+    } else if (line[index] === "\t") {
+      columns += 4 - (columns % 4);
+    } else {
+      return null;
+    }
+    index += 1;
+  }
+
+  return columns >= requiredColumns ? line.slice(index) : null;
+}
+
+function scanDirectListItemFencedBlockRanges(text) {
+  const lines = [...text.matchAll(/[^\n]*(?:\n|$)/g)].filter(
+    (match) => match[0],
+  );
+  const ranges = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const content = line[0].replace(/\n$/, "");
+    const opening = content.match(
+      /^ {0,3}(?:[-+*]|\d{1,9}[.)])([ \t]+)( {0,3})(`{3,}|~{3,})(.*)$/,
+    );
+    if (!opening) continue;
+
+    const marker = opening[3];
+    if (marker[0] === "`" && opening[4].includes("`")) continue;
+    const contentIndent = listItemContentIndent(content, null);
+    if (contentIndent === null) continue;
+
+    let end = line.index + line[0].length;
+    let nextIndex = index + 1;
+    while (nextIndex < lines.length) {
+      const nextLine = lines[nextIndex];
+      const nextContent = nextLine[0].replace(/\n$/, "");
+      if (!nextContent.trim()) {
+        end = nextLine.index + nextLine[0].length;
+        nextIndex += 1;
+        continue;
+      }
+
+      const continuation = sliceAfterIndentColumns(
+        nextContent,
+        contentIndent,
+      );
+      if (continuation === null) break;
+
+      end = nextLine.index + nextLine[0].length;
+      const closing = continuation.match(
+        /^ {0,3}(`{3,}|~{3,})[ \t]*$/,
+      );
+      nextIndex += 1;
+      if (
+        closing &&
+        closing[1][0] === marker[0] &&
+        closing[1].length >= marker.length
+      ) {
+        break;
+      }
+    }
+
+    ranges.push({ start: line.index, end });
+    index = nextIndex - 1;
+  }
+
+  return ranges;
+}
+
+function scanFencedBlockRanges(text) {
+  const candidates = [
+    ...scanTopLevelFencedBlockRanges(text),
+    ...scanDirectListItemFencedBlockRanges(text),
+  ].sort((left, right) => left.start - right.start || left.end - right.end);
+  const ranges = [];
+
+  for (const candidate of candidates) {
+    const previous = ranges.at(-1);
+    if (previous && candidate.start < previous.end) continue;
+    ranges.push(candidate);
+  }
+
   return ranges;
 }
 
@@ -365,12 +456,78 @@ function scanInlineCodeRanges(text) {
   return ranges;
 }
 
-function maskMarkdownForLinkScan(text) {
+function maskMarkdownStructureForLinkScan(text) {
   const withoutInvisibleBlocks = maskInvisibleMarkdown(text);
+  const withoutIndentedCode =
+    maskIndentedCodeLines(withoutInvisibleBlocks);
   return maskRanges(
-    withoutInvisibleBlocks,
-    scanInlineCodeRanges(withoutInvisibleBlocks),
+    withoutIndentedCode,
+    scanInlineCodeRanges(withoutIndentedCode),
   );
+}
+
+function maskMarkdownForLinkScan(text) {
+  return maskEscapedMarkdownPunctuation(
+    maskMarkdownStructureForLinkScan(text),
+  );
+}
+
+function maskEscapedMarkdownPunctuation(text) {
+  const characters = [...text];
+
+  for (let index = 0; index < characters.length; index += 1) {
+    if (!/[!-/:-@[-`{-~]/.test(characters[index])) continue;
+
+    let backslashes = 0;
+    for (
+      let cursor = index - 1;
+      cursor >= 0 && characters[cursor] === "\\";
+      cursor -= 1
+    ) {
+      backslashes += 1;
+    }
+    if (backslashes % 2 === 1) characters[index] = " ";
+  }
+
+  return characters.join("");
+}
+
+function maskReferenceDefinitions(text) {
+  const lines = [...text.matchAll(/[^\n]*(?:\n|$)/g)].filter(
+    (match) => match[0],
+  );
+  const ranges = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const content = line[0].replace(/\n$/, "");
+    const definition = /^ {0,3}\[[^\]\n]+]:[ \t]*(.*)$/.exec(content);
+    if (!definition) continue;
+
+    let end = line.index + line[0].length;
+    let nextIndex = index + 1;
+    if (
+      definition[1].trim() === "" &&
+      lines[nextIndex] &&
+      lines[nextIndex][0].trim()
+    ) {
+      end = lines[nextIndex].index + lines[nextIndex][0].length;
+      index = nextIndex;
+      nextIndex += 1;
+    }
+    if (
+      lines[nextIndex] &&
+      /^ {0,3}(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\))[ \t]*(?:\n|$)$/.test(
+        lines[nextIndex][0],
+      )
+    ) {
+      end = lines[nextIndex].index + lines[nextIndex][0].length;
+      index = nextIndex;
+    }
+    ranges.push({ start: line.index, end });
+  }
+
+  return maskRanges(text, ranges);
 }
 
 function parseMarkdownLinkTarget(rawTarget) {
@@ -386,18 +543,262 @@ function normalizeReferenceLabel(label) {
   return label.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function findVisibleMarkdownResources(text) {
-  const visibleMarkdown = maskMarkdownForLinkScan(text);
-  const resources = [
-    ...visibleMarkdown.matchAll(/(!?)\[([^\]\n]*)]\(([^)\n]+)\)/g),
-  ].map((match) => ({
-    isImage: match[1] === "!",
-    label: match[2],
-    target: parseMarkdownLinkTarget(match[3]),
-  }));
+function isMarkdownEscapableCharacter(character) {
+  return /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/.test(
+    character ?? "",
+  );
+}
+
+function unescapeMarkdownPunctuation(text) {
+  return text.replace(
+    /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g,
+    "$1",
+  );
+}
+
+function skipInlineLinkWhitespace(text, start) {
+  let cursor = start;
+  let lineEndings = 0;
+
+  while (cursor < text.length) {
+    if (text[cursor] === " " || text[cursor] === "\t") {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === "\n" && lineEndings === 0) {
+      lineEndings += 1;
+      cursor += 1;
+      continue;
+    }
+    break;
+  }
+
+  return { cursor, lineEndings };
+}
+
+function scanInlineLinkTitle(text, start) {
+  const opening = text[start];
+  if (!['"', "'", "("].includes(opening)) return null;
+  const closing = opening === "(" ? ")" : opening;
+  let depth = 1;
+
+  for (let cursor = start + 1; cursor < text.length; cursor += 1) {
+    if (text[cursor] === "\\") {
+      if (
+        cursor + 1 >= text.length ||
+        text[cursor + 1] === "\n"
+      ) {
+        return null;
+      }
+      if (isMarkdownEscapableCharacter(text[cursor + 1])) {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (text[cursor] === "\n") return null;
+    if (opening === "(" && text[cursor] === opening) {
+      depth += 1;
+      continue;
+    }
+    if (text[cursor] !== closing) continue;
+    depth -= 1;
+    if (depth === 0) return cursor + 1;
+  }
+
+  return null;
+}
+
+function scanInlineLinkTail(text, openingParenthesis) {
+  const leadingWhitespace = skipInlineLinkWhitespace(
+    text,
+    openingParenthesis + 1,
+  );
+  let cursor = leadingWhitespace.cursor;
+  let target = "";
+
+  if (
+    leadingWhitespace.cursor > openingParenthesis + 1 &&
+    ['"', "'", "("].includes(text[cursor])
+  ) {
+    const titleEnd = scanInlineLinkTitle(text, cursor);
+    if (titleEnd !== null) {
+      const afterTitle = skipInlineLinkWhitespace(text, titleEnd);
+      if (text[afterTitle.cursor] === ")") {
+        return {
+          end: afterTitle.cursor + 1,
+          target,
+        };
+      }
+    }
+  }
+
+  if (text[cursor] === "<") {
+    const targetStart = cursor + 1;
+    cursor += 1;
+    while (cursor < text.length) {
+      if (text[cursor] === "\\") {
+        if (
+          cursor + 1 >= text.length ||
+          text[cursor + 1] === "\n"
+        ) {
+          return null;
+        }
+        cursor += isMarkdownEscapableCharacter(text[cursor + 1])
+          ? 2
+          : 1;
+        continue;
+      }
+      if (text[cursor] === "\n" || text[cursor] === "<") return null;
+      if (text[cursor] === ">") break;
+      cursor += 1;
+    }
+    if (text[cursor] !== ">") return null;
+    target = text.slice(targetStart, cursor);
+    cursor += 1;
+  } else {
+    const targetStart = cursor;
+    let depth = 0;
+    while (cursor < text.length) {
+      const character = text[cursor];
+      if (character === "\\") {
+        if (
+          cursor + 1 >= text.length ||
+          text[cursor + 1] === "\n"
+        ) {
+          return null;
+        }
+        cursor += isMarkdownEscapableCharacter(text[cursor + 1])
+          ? 2
+          : 1;
+        continue;
+      }
+      if (character === "\n" || character === " " || character === "\t") {
+        break;
+      }
+      if (character === "(") {
+        depth += 1;
+        cursor += 1;
+        continue;
+      }
+      if (character === ")") {
+        if (depth === 0) break;
+        depth -= 1;
+        cursor += 1;
+        continue;
+      }
+      cursor += 1;
+    }
+    if (depth !== 0) return null;
+    target = text.slice(targetStart, cursor);
+  }
+
+  const afterTarget = skipInlineLinkWhitespace(text, cursor);
+  if (text[afterTarget.cursor] === ")") {
+    return {
+      end: afterTarget.cursor + 1,
+      target: unescapeMarkdownPunctuation(target),
+    };
+  }
+  if (afterTarget.cursor === cursor) return null;
+
+  const titleEnd = scanInlineLinkTitle(text, afterTarget.cursor);
+  if (titleEnd === null) return null;
+  const afterTitle = skipInlineLinkWhitespace(text, titleEnd);
+  if (text[afterTitle.cursor] !== ")") return null;
+  return {
+    end: afterTitle.cursor + 1,
+    target: unescapeMarkdownPunctuation(target),
+  };
+}
+
+function isEscapedMarkdownCharacter(text, index) {
+  let backslashes = 0;
+  for (
+    let cursor = index - 1;
+    cursor >= 0 && text[cursor] === "\\";
+    cursor -= 1
+  ) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function scanInlineMarkdownLinks(text) {
+  const links = [];
+
+  for (let cursor = 0; cursor < text.length; cursor += 1) {
+    const isImage =
+      text[cursor] === "!" &&
+      text[cursor + 1] === "[" &&
+      !isEscapedMarkdownCharacter(text, cursor);
+    const labelStart =
+      isImage
+        ? cursor + 1
+        : text[cursor] === "[" &&
+            !isEscapedMarkdownCharacter(text, cursor)
+          ? cursor
+          : -1;
+    if (labelStart < 0) continue;
+
+    const labelEnd = findBalancedMarkdownClosing(
+      text,
+      labelStart + 1,
+      "[",
+      "]",
+    );
+    if (labelEnd < 0 || text[labelEnd + 1] !== "(") continue;
+    const tail = scanInlineLinkTail(text, labelEnd + 1);
+    if (tail === null) continue;
+
+    links.push({
+      start: cursor,
+      end: tail.end,
+      isImage,
+      label: text.slice(labelStart + 1, labelEnd),
+      target: tail.target,
+    });
+    cursor = tail.end - 1;
+  }
+
+  return links;
+}
+
+function projectInlineMarkdownLinkLabels(
+  text,
+  { includeImageLabels = true } = {},
+) {
+  let result = "";
+  let cursor = 0;
+
+  for (const link of scanInlineMarkdownLinks(text)) {
+    result += text.slice(cursor, link.start);
+    if (!link.isImage || includeImageLabels) result += link.label;
+    cursor = link.end;
+  }
+
+  return result + text.slice(cursor);
+}
+
+function findVisibleMarkdownResources(
+  text,
+  referenceDefinitionSource = text,
+) {
+  const visibleMarkdown = maskMarkdownStructureForLinkScan(text);
+  const escapedVisibleMarkdown =
+    maskEscapedMarkdownPunctuation(visibleMarkdown);
+  const visibleReferenceDefinitions = maskMarkdownForLinkScan(
+    referenceDefinitionSource,
+  );
+  const resources = scanInlineMarkdownLinks(visibleMarkdown).map(
+    ({ isImage, label, target }) => ({
+      isImage,
+      label,
+      target,
+    }),
+  );
   const referenceDefinitions = new Map();
 
-  for (const match of visibleMarkdown.matchAll(
+  for (const match of visibleReferenceDefinitions.matchAll(
     /^ {0,3}\[([^\]\n]+)\]:[ \t]*(\S.*)$/gm,
   )) {
     const label = normalizeReferenceLabel(match[1]);
@@ -407,11 +808,25 @@ function findVisibleMarkdownResources(text) {
     }
   }
 
-  for (const match of visibleMarkdown.matchAll(
-    /(!?)\[([^\]\n]*)]\[([^\]\n]+)]/g,
+  for (const match of escapedVisibleMarkdown.matchAll(
+    /(!?)\[([^\]\n]+)]\[([^\]\n]*)]/g,
   )) {
     const target = referenceDefinitions.get(
-      normalizeReferenceLabel(match[3]),
+      normalizeReferenceLabel(match[3] || match[2]),
+    );
+    if (!target) continue;
+    resources.push({
+      isImage: match[1] === "!",
+      label: match[2],
+      target,
+    });
+  }
+
+  for (const match of escapedVisibleMarkdown.matchAll(
+    /(!?)\[([^\]\n]+)](?![\[(]|:[ \t]*\S)/g,
+  )) {
+    const target = referenceDefinitions.get(
+      normalizeReferenceLabel(match[2]),
     );
     if (!target) continue;
     resources.push({
@@ -696,6 +1111,109 @@ const harnessDetailOwners = [
     file: ".agents/skills/open-pull-request/SKILL.md",
   },
 ];
+const plannedIdDetailOwner = {
+  label: "PRD·Policy planned ID 수명주기",
+  name: "update-product-docs",
+  file: ".agents/skills/update-product-docs/SKILL.md",
+  section: "Planned ID 계약",
+};
+const plannedIdRoutingDocuments = [
+  {
+    file: "AGENTS.md",
+    section: "구현과 충돌 방지",
+  },
+  {
+    file: "README.md",
+    section: "제품 문서 갱신 절차",
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "4. 개발 템플릿",
+  },
+  {
+    file: "docs/development/01_harness_guide.md",
+    section: "규칙 소유와 링크",
+  },
+];
+const forbiddenPlannedIdDetailSignatures = [
+  {
+    label: "planned ID marker와 정본 정의 경계",
+    fragments: [
+      "planned ID",
+      "GitHub 이슈",
+      "계획 표식",
+      "정본 정의",
+      "아니다",
+    ],
+    maxSpan: 220,
+  },
+  {
+    label: "planned ID의 구체적 정본 파일 소유",
+    fragments: ["planned ID", "namespace", "NN_*.md"],
+    maxSpan: 320,
+  },
+  {
+    label: "README·재귀 glob의 정의 파일 소유 한계",
+    fragments: ["README", "재귀 glob", "정의 파일"],
+    maxSpan: 260,
+  },
+  {
+    label: "planned ID의 실제 정의·validator·구현·테스트·PR 추적",
+    fragments: [
+      "planned ID",
+      "실제",
+      "정의",
+      "validator",
+      "구현",
+      "테스트",
+      "PR",
+    ],
+    maxSpan: 480,
+  },
+  {
+    label: "exact-head 비가시 정의 제외",
+    fragments: ["exact PR head Git tree", "image alt", "<details>"],
+    maxSpan: 420,
+  },
+  {
+    label: "exact-head 실제 정본 정의",
+    fragments: ["exact head Git tree", "새 ID", "실제", "정본", "정의"],
+    maxSpan: 260,
+  },
+  {
+    label: "exact PR head 실제 정본 정의",
+    fragments: [
+      "exact PR head Git tree",
+      "새 ID",
+      "실제",
+      "정본",
+      "정의",
+    ],
+    maxSpan: 280,
+  },
+  {
+    label: "Ready 전 planned ID 실제 정의",
+    fragments: ["Ready", "planned ID", "실제", "정의"],
+    maxSpan: 260,
+  },
+  {
+    label: "planned ID 승인·경로 소유",
+    fragments: [
+      "새 ID",
+      "승인",
+      "planned ID",
+      "변경 경로",
+      "소유",
+      "만든다",
+    ],
+    maxSpan: 420,
+  },
+  {
+    label: "planned ID의 같은 branch·PR 동시 작업",
+    fragments: ["planned ID", "같은", "branch", "PR"],
+    maxSpan: 260,
+  },
+];
 const forbiddenFinalizeDetailTokens = [
   "snapshot-scratch",
   "snapshot-attempt.json",
@@ -713,6 +1231,93 @@ const finalizeDetailOwnerFile =
 
 function sourceLineNumber(content, offset) {
   return content.slice(0, offset).split("\n").length;
+}
+
+function indentationColumns(line) {
+  let columns = 0;
+  let index = 0;
+
+  while (index < line.length) {
+    if (line[index] === " ") {
+      columns += 1;
+    } else if (line[index] === "\t") {
+      columns += 4 - (columns % 4);
+    } else {
+      break;
+    }
+    index += 1;
+  }
+
+  return { columns, index };
+}
+
+function listItemContentIndent(line, activeListContentIndent) {
+  const { columns, index } = indentationColumns(line);
+  const isTopLevel = columns <= 3;
+  const isNested =
+    activeListContentIndent !== null &&
+    columns >= activeListContentIndent &&
+    columns <= activeListContentIndent + 3;
+  if (!isTopLevel && !isNested) return null;
+
+  const marker = /^(?:[-+*]|\d{1,9}[.)])([ \t]+)/.exec(
+    line.slice(index),
+  );
+  if (!marker) return null;
+
+  const markerWidth = marker[0].length - marker[1].length;
+  const padding = indentationColumns(marker[1]).columns;
+  return columns + markerWidth + Math.min(Math.max(padding, 1), 4);
+}
+
+function maskIndentedCodeLines(text) {
+  const lines = [...text.matchAll(/[^\n]*(?:\n|$)/g)].filter(
+    (match) => match[0],
+  );
+  const ranges = [];
+  let activeListContentIndent = null;
+
+  for (const line of lines) {
+    const content = line[0].replace(/\n$/, "");
+    if (!content.trim()) continue;
+
+    const listIndent = listItemContentIndent(
+      content,
+      activeListContentIndent,
+    );
+    if (listIndent !== null) {
+      activeListContentIndent = listIndent;
+      continue;
+    }
+
+    const { columns } = indentationColumns(content);
+    const codeIndent =
+      activeListContentIndent === null
+        ? 4
+        : activeListContentIndent + 4;
+    if (columns >= codeIndent) {
+      ranges.push({
+        start: line.index,
+        end: line.index + line[0].length,
+      });
+      continue;
+    }
+
+    if (
+      activeListContentIndent !== null &&
+      columns < activeListContentIndent
+    ) {
+      activeListContentIndent = null;
+      if (columns >= 4) {
+        ranges.push({
+          start: line.index,
+          end: line.index + line[0].length,
+        });
+      }
+    }
+  }
+
+  return maskRanges(text, ranges);
 }
 
 function maskStrictHarnessCode(file, content) {
@@ -878,20 +1483,24 @@ function validateStrictHarnessSyntax(file, content) {
 }
 
 function readStrictH2Sections(content, visibleContent) {
-  const matches = [
-    ...visibleContent.matchAll(/^## (?!#)(.+?)[ \t]*$/gm),
-  ];
-  return matches.map((match, index) => ({
-    heading: match[1],
-    content: content.slice(
-      match.index + match[0].length,
-      matches[index + 1]?.index ?? content.length,
-    ),
-    visibleContent: visibleContent.slice(
-      match.index + match[0].length,
-      matches[index + 1]?.index ?? visibleContent.length,
-    ),
-  }));
+  const matches = scanBoundedOwnerHeadingRecords(content).filter(
+    (heading) =>
+      heading.syntax === "atx" &&
+      heading.strictHeading !== null,
+  );
+  return matches.map((match, index) => {
+    const start = match.index;
+    const contentStart = match.index + match.source.length;
+    const end = matches[index + 1]?.index ?? content.length;
+    return {
+      heading: match.strictHeading,
+      source: match.source,
+      start,
+      end,
+      content: content.slice(contentStart, end),
+      visibleContent: visibleContent.slice(contentStart, end),
+    };
+  });
 }
 
 function normalizeFinalizeDetailText(text) {
@@ -934,47 +1543,896 @@ function normalizeFinalizeDetailText(text) {
       "$1",
     );
   return decoded
+    .replace(/[<>]/g, "")
     .replace(/[\s\p{Cf}`*_~]/gu, "")
     .toLowerCase();
 }
 
 function finalizeDetailTextVariants(text) {
+  const visibleText = maskHtmlComments(text);
   return [
-    normalizeFinalizeDetailText(text),
+    normalizeFinalizeDetailText(visibleText),
     normalizeFinalizeDetailText(
-      text.replace(
-        /!?\[([^\]\n]*)\]\([^)\n]*\)/g,
-        "$1",
+      projectMarkdownHeadingText(visibleText),
+    ),
+    normalizeFinalizeDetailText(
+      projectMarkdownHeadingText(
+        visibleContractMarkdown(visibleText),
       ),
     ),
   ];
 }
 
 function visibleInlineLinkLabels(text) {
-  return text
-    .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, "")
-    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1");
+  return projectInlineMarkdownLinkLabels(text, {
+    includeImageLabels: false,
+  });
 }
 
-function normalizeHarnessHeadingText(text) {
-  return normalizeFinalizeDetailText(
-    visibleInlineLinkLabels(text),
+function findBalancedMarkdownClosing(
+  text,
+  start,
+  openingCharacter,
+  closingCharacter,
+) {
+  let depth = 1;
+
+  for (let index = start; index < text.length; index += 1) {
+    if (text[index] === "\n") return -1;
+    if (text[index] === "\\") {
+      if (
+        index + 1 >= text.length ||
+        text[index + 1] === "\n"
+      ) {
+        return -1;
+      }
+      if (isMarkdownEscapableCharacter(text[index + 1])) {
+        index += 1;
+      }
+      continue;
+    }
+    if (text[index] === openingCharacter) depth += 1;
+    if (text[index] !== closingCharacter) continue;
+    depth -= 1;
+    if (depth === 0) return index;
+  }
+
+  return -1;
+}
+
+function projectMarkdownHeadingText(text) {
+  const inlineProjected = projectInlineMarkdownLinkLabels(text);
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < inlineProjected.length) {
+    const isImage =
+      inlineProjected[cursor] === "!" &&
+      inlineProjected[cursor + 1] === "[";
+    const labelStart =
+      isImage
+        ? cursor + 1
+        : inlineProjected[cursor] === "["
+          ? cursor
+          : -1;
+    if (labelStart < 0) {
+      result += inlineProjected[cursor];
+      cursor += 1;
+      continue;
+    }
+
+    const labelEnd = findBalancedMarkdownClosing(
+      inlineProjected,
+      labelStart + 1,
+      "[",
+      "]",
+    );
+    if (labelEnd < 0) {
+      result += inlineProjected[cursor];
+      cursor += 1;
+      continue;
+    }
+
+    let syntaxEnd = labelEnd + 1;
+    if (inlineProjected[syntaxEnd] === "[") {
+      const referenceEnd = findBalancedMarkdownClosing(
+        inlineProjected,
+        syntaxEnd + 1,
+        "[",
+        "]",
+      );
+      if (referenceEnd < 0) {
+        result += inlineProjected[cursor];
+        cursor += 1;
+        continue;
+      }
+      syntaxEnd = referenceEnd + 1;
+    }
+
+    result += inlineProjected.slice(labelStart + 1, labelEnd);
+    cursor = syntaxEnd;
+  }
+
+  return result;
+}
+
+function expandCommonMarkTabs(line) {
+  let expanded = "";
+  let column = 0;
+
+  for (const character of line) {
+    if (character === "\t") {
+      const width = 4 - (column % 4);
+      expanded += " ".repeat(width);
+      column += width;
+      continue;
+    }
+    expanded += character;
+    column += 1;
+  }
+
+  return expanded;
+}
+
+function commonMarkFenceMarker(content) {
+  const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(content);
+  if (!match) return null;
+  if (match[1][0] === "`" && match[2].includes("`")) {
+    return null;
+  }
+  return {
+    character: match[1][0],
+    length: match[1].length,
+    rest: match[2],
+  };
+}
+
+const COMMONMARK_HTML_BLOCK_TAGS = new Set([
+  "address",
+  "article",
+  "aside",
+  "base",
+  "basefont",
+  "blockquote",
+  "body",
+  "caption",
+  "center",
+  "col",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "dir",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "frame",
+  "frameset",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hr",
+  "html",
+  "iframe",
+  "legend",
+  "li",
+  "link",
+  "main",
+  "menu",
+  "menuitem",
+  "nav",
+  "noframes",
+  "ol",
+  "optgroup",
+  "option",
+  "p",
+  "param",
+  "search",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "title",
+  "tr",
+  "track",
+  "ul",
+]);
+
+const PROTECTED_HEADING_NAMED_ENTITIES = new Map([
+  ["AMP", "&"],
+  ["LT", "<"],
+  ["GT", ">"],
+  ["QUOT", '"'],
+  ["amp", "&"],
+  ["apos", "'"],
+  ["colon", ":"],
+  ["gt", ">"],
+  ["lt", "<"],
+  ["nbsp", "\u00a0"],
+  ["NewLine", "\n"],
+  ["quot", '"'],
+  ["Tab", "\t"],
+]);
+
+function commonMarkLineRecords(content) {
+  return [...content.matchAll(/[^\n]*(?:\n|$)/g)]
+    .filter((match) => match[0])
+    .map((match) => {
+      const source = match[0].replace(/\n$/, "");
+      return {
+        index: match.index,
+        length: match[0].length,
+        source,
+        expanded: expandCommonMarkTabs(source),
+      };
+    });
+}
+
+function commonMarkFrontmatterEnd(lines) {
+  if (
+    lines.length < 2 ||
+    lines[0].index !== 0 ||
+    !/^---[ \t]*$/.test(lines[0].source)
+  ) {
+    return -1;
+  }
+  for (let index = 1; index < lines.length; index += 1) {
+    if (/^(?:---|\.\.\.)[ \t]*$/.test(lines[index].source)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function sameCommonMarkContainerPath(left, right) {
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every(
+    (container, index) => container.id === right[index].id,
   );
 }
 
-function validateHarnessOwnerLinks(file, section) {
+function commonMarkHtmlBlockStart(content, paragraphIsOpen) {
+  const logical = content.replace(/^ {0,3}/, "");
+  for (const tag of ["pre", "script", "style", "textarea"]) {
+    if (
+      new RegExp(`^<${tag}(?:[\\t >]|$)`, "i").test(logical)
+    ) {
+      return {
+        endPattern: new RegExp(`</${tag}>`, "i"),
+        blankTerminated: false,
+      };
+    }
+  }
+  if (logical.startsWith("<!--")) {
+    return { endPattern: /-->/, blankTerminated: false };
+  }
+  if (logical.startsWith("<?")) {
+    return { endPattern: /\?>/, blankTerminated: false };
+  }
+  if (/^<![A-Z]/.test(logical)) {
+    return { endPattern: />/, blankTerminated: false };
+  }
+  if (logical.startsWith("<![CDATA[")) {
+    return { endPattern: /]]>/, blankTerminated: false };
+  }
+
+  const blockTag = /^<\/?([A-Za-z][A-Za-z0-9-]*)(?:[ \t]+|\/?>|$)/.exec(
+    logical,
+  );
+  if (
+    blockTag &&
+    COMMONMARK_HTML_BLOCK_TAGS.has(blockTag[1].toLowerCase())
+  ) {
+    return { endPattern: null, blankTerminated: true };
+  }
+
+  if (paragraphIsOpen) return null;
+  if (
+    /^<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*)?\/?>[ \t]*$/.test(
+      logical,
+    )
+  ) {
+    return { endPattern: null, blankTerminated: true };
+  }
+  return null;
+}
+
+function commonMarkLineInterruptsParagraph(content) {
+  if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(content)) return true;
+  if (isCommonMarkThematicBreak(content)) return true;
+  if (commonMarkFenceMarker(content)) return true;
+  if (/^ {0,3}>/.test(content)) return true;
+  if (
+    /^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/.test(content)
+  ) {
+    return true;
+  }
+  return commonMarkHtmlBlockStart(content, true) !== null;
+}
+
+function matchCommonMarkContainers(
+  expanded,
+  activeContainers,
+  paragraph,
+  allowLazy,
+) {
+  let cursor = 0;
+  let matchedCount = 0;
+  const blank = expanded.trim() === "";
+
+  for (const container of activeContainers) {
+    if (container.type === "blockquote") {
+      let indentation = 0;
+      while (
+        indentation < 4 &&
+        expanded[cursor + indentation] === " "
+      ) {
+        indentation += 1;
+      }
+      if (
+        indentation > 3 ||
+        expanded[cursor + indentation] !== ">"
+      ) {
+        break;
+      }
+      cursor += indentation + 1;
+      if (expanded[cursor] === " ") cursor += 1;
+      matchedCount += 1;
+      continue;
+    }
+
+    if (blank) {
+      cursor = expanded.length;
+      matchedCount += 1;
+      continue;
+    }
+    let indentation = 0;
+    while (
+      indentation < container.continuationIndent &&
+      expanded[cursor + indentation] === " "
+    ) {
+      indentation += 1;
+    }
+    if (indentation < container.continuationIndent) break;
+    cursor += container.continuationIndent;
+    matchedCount += 1;
+  }
+
+  let usedLazyContinuation = false;
+  if (
+    allowLazy &&
+    !blank &&
+    matchedCount < activeContainers.length &&
+    paragraph &&
+    sameCommonMarkContainerPath(
+      paragraph.containers,
+      activeContainers,
+    ) &&
+    !commonMarkLineInterruptsParagraph(expanded.slice(cursor))
+  ) {
+    matchedCount = activeContainers.length;
+    usedLazyContinuation = true;
+  }
+
+  return {
+    containers: activeContainers.slice(0, matchedCount),
+    cursor,
+    explicit:
+      matchedCount === activeContainers.length &&
+      !usedLazyContinuation,
+    usedLazyContinuation,
+  };
+}
+
+function openCommonMarkContainers(
+  expanded,
+  start,
+  firstContainerId,
+) {
+  const containers = [];
+  let cursor = start;
+  let nextContainerId = firstContainerId;
+
+  while (cursor < expanded.length) {
+    const containerStart = cursor;
+    let indentation = 0;
+    while (
+      indentation < 4 &&
+      expanded[cursor + indentation] === " "
+    ) {
+      indentation += 1;
+    }
+    if (indentation > 3) break;
+
+    const markerStart = cursor + indentation;
+    if (expanded[markerStart] === ">") {
+      cursor = markerStart + 1;
+      if (expanded[cursor] === " ") cursor += 1;
+      containers.push({
+        id: nextContainerId,
+        type: "blockquote",
+      });
+      nextContainerId += 1;
+      continue;
+    }
+
+    if (
+      isCommonMarkThematicBreak(
+        expanded.slice(containerStart),
+      )
+    ) {
+      break;
+    }
+    const listMarker = /^(?:[-+*]|\d{1,9}[.)])/.exec(
+      expanded.slice(markerStart),
+    );
+    if (!listMarker) break;
+
+    const afterMarker = markerStart + listMarker[0].length;
+    if (
+      afterMarker < expanded.length &&
+      expanded[afterMarker] !== " "
+    ) {
+      break;
+    }
+    let whitespaceEnd = afterMarker;
+    while (expanded[whitespaceEnd] === " ") whitespaceEnd += 1;
+    const whitespaceWidth = whitespaceEnd - afterMarker;
+    if (
+      whitespaceWidth === 0 &&
+      afterMarker < expanded.length
+    ) {
+      break;
+    }
+    const padding =
+      whitespaceEnd === expanded.length
+        ? Math.max(whitespaceWidth, 1)
+        : whitespaceWidth <= 4
+          ? whitespaceWidth
+          : 1;
+    cursor = Math.min(afterMarker + padding, expanded.length);
+    containers.push({
+      id: nextContainerId,
+      type: "list",
+      continuationIndent:
+        indentation + listMarker[0].length + padding,
+    });
+    nextContainerId += 1;
+  }
+
+  return { containers, cursor, nextContainerId };
+}
+
+function commonMarkSetextH2Underline(content) {
+  return /^ {0,3}-+[ \t]*$/.test(content);
+}
+
+function commonMarkAtxH2(content) {
+  const match = /^( {0,3})(#{1,6})(?:[ \t]+|$)(.*)$/.exec(
+    content,
+  );
+  if (!match || match[2].length !== 2) return null;
+
+  let heading = match[3];
+  const closing = /[ \t]+(#+)[ \t]*$/.exec(heading);
+  if (
+    closing &&
+    !isEscapedMarkdownCharacter(
+      heading,
+      closing.index + closing[0].indexOf("#"),
+    )
+  ) {
+    heading = heading.slice(0, closing.index);
+  }
+  return {
+    heading: heading.trimEnd(),
+  };
+}
+
+function commonMarkReferenceLabel(text) {
+  if (text.length > 999) return null;
+  return decodeProtectedHeadingEntities(
+    unescapeMarkdownPunctuation(text),
+  )
+    .replace(/[ \t\n\r\f]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function commonMarkReferenceDefinition(content) {
+  const match =
+    /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(?:<[^>\n]+>|\S+)(?:[ \t]+.*)?$/.exec(
+      content,
+    );
+  return match ? commonMarkReferenceLabel(match[1]) : null;
+}
+
+function decodeProtectedHeadingEntityAt(text, start) {
+  const candidate = text.slice(start, start + 64);
+  const numeric = /^&#(?:([0-9]{1,7})|[xX]([0-9A-Fa-f]{1,6}));/.exec(
+    candidate,
+  );
+  if (numeric) {
+    const value = Number.parseInt(
+      numeric[1] ?? numeric[2],
+      numeric[2] ? 16 : 10,
+    );
+    const valid =
+      value !== 0 &&
+      value <= 0x10ffff &&
+      !(value >= 0xd800 && value <= 0xdfff);
+    return {
+      length: numeric[0].length,
+      decoded: valid ? String.fromCodePoint(value) : "\ufffd",
+    };
+  }
+
+  const named = /^&([A-Za-z][A-Za-z0-9]+);/.exec(
+    candidate,
+  );
+  const decoded = named
+    ? PROTECTED_HEADING_NAMED_ENTITIES.get(named[1])
+    : undefined;
+  return decoded === undefined
+    ? null
+    : { length: named[0].length, decoded };
+}
+
+function decodeProtectedHeadingEntities(text) {
+  let result = "";
+  for (let cursor = 0; cursor < text.length; cursor += 1) {
+    if (text[cursor] === "&") {
+      const entity = decodeProtectedHeadingEntityAt(
+        text,
+        cursor,
+      );
+      if (entity) {
+        result += entity.decoded;
+        cursor += entity.length - 1;
+        continue;
+      }
+    }
+    result += text[cursor];
+  }
+  return result;
+}
+
+function scanBoundedOwnerHeadingRecords(content) {
+  const lines = commonMarkLineRecords(content);
+  const headings = [];
+  const frontmatterEnd = commonMarkFrontmatterEnd(lines);
+  let activeContainers = [];
+  let nextContainerId = 1;
+  let paragraph = null;
+  let openFence = null;
+  let openHtml = null;
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
+    if (lineIndex <= frontmatterEnd) {
+      activeContainers = [];
+      paragraph = null;
+      openFence = null;
+      openHtml = null;
+      continue;
+    }
+
+    let reprocess = true;
+    while (reprocess) {
+      reprocess = false;
+      const stateContainers =
+        openFence?.containers ?? openHtml?.containers;
+      const matched = matchCommonMarkContainers(
+        line.expanded,
+        activeContainers,
+        paragraph,
+        stateContainers === undefined,
+      );
+
+      if (openFence) {
+        if (
+          !sameCommonMarkContainerPath(
+            matched.containers,
+            openFence.containers,
+          )
+        ) {
+          openFence = null;
+          activeContainers = matched.containers;
+          reprocess = true;
+          continue;
+        }
+        const logical = line.expanded.slice(matched.cursor);
+        const closing = commonMarkFenceMarker(logical);
+        if (
+          closing &&
+          closing.character === openFence.character &&
+          closing.length >= openFence.length &&
+          closing.rest.trim() === ""
+        ) {
+          openFence = null;
+        }
+        continue;
+      }
+
+      if (openHtml) {
+        if (
+          !sameCommonMarkContainerPath(
+            matched.containers,
+            openHtml.containers,
+          )
+        ) {
+          openHtml = null;
+          activeContainers = matched.containers;
+          reprocess = true;
+          continue;
+        }
+        const logical = line.expanded.slice(matched.cursor);
+        if (openHtml.blankTerminated && !logical.trim()) {
+          openHtml = null;
+          reprocess = true;
+          continue;
+        }
+        if (
+          openHtml.endPattern &&
+          openHtml.endPattern.test(logical)
+        ) {
+          openHtml = null;
+        }
+        continue;
+      }
+
+      activeContainers = matched.containers;
+      const opened = openCommonMarkContainers(
+        line.expanded,
+        matched.cursor,
+        nextContainerId,
+      );
+      nextContainerId = opened.nextContainerId;
+      activeContainers = [
+        ...activeContainers,
+        ...opened.containers,
+      ];
+      const logical = line.expanded.slice(opened.cursor);
+
+      if (!logical.trim()) {
+        paragraph = null;
+        continue;
+      }
+
+      if (
+        paragraph &&
+        sameCommonMarkContainerPath(
+          paragraph.containers,
+          activeContainers,
+        ) &&
+        matched.explicit &&
+        commonMarkSetextH2Underline(logical)
+      ) {
+        headings.push({
+          index: paragraph.index,
+          syntax: "setext",
+          source: content.slice(
+            paragraph.index,
+            line.index + line.length,
+          ),
+          heading: paragraph.lines.join("\n"),
+          strictHeading: null,
+        });
+        paragraph = null;
+        continue;
+      }
+
+      const atx = commonMarkAtxH2(logical);
+      if (atx) {
+        paragraph = null;
+        const strict = /^## (?!#)(.+?)[ \t]*$/.exec(
+          line.source,
+        );
+        headings.push({
+          index: line.index,
+          syntax: "atx",
+          source: line.source,
+          heading: atx.heading,
+          strictHeading: strict?.[1] ?? null,
+        });
+        continue;
+      }
+
+      if (isCommonMarkThematicBreak(logical)) {
+        paragraph = null;
+        continue;
+      }
+
+      const fence = commonMarkFenceMarker(logical);
+      if (fence) {
+        paragraph = null;
+        openFence = {
+          character: fence.character,
+          length: fence.length,
+          containers: [...activeContainers],
+        };
+        continue;
+      }
+
+      const html = commonMarkHtmlBlockStart(
+        logical,
+        paragraph !== null,
+      );
+      if (html) {
+        paragraph = null;
+        if (!html.endPattern || !html.endPattern.test(logical)) {
+          openHtml = {
+            ...html,
+            containers: [...activeContainers],
+          };
+        }
+        continue;
+      }
+
+      const reference = commonMarkReferenceDefinition(logical);
+      if (reference) {
+        paragraph = null;
+        continue;
+      }
+
+      if (
+        !paragraph &&
+        /^ {4}/.test(logical)
+      ) {
+        continue;
+      }
+
+      if (
+        paragraph &&
+        sameCommonMarkContainerPath(
+          paragraph.containers,
+          activeContainers,
+        )
+      ) {
+        paragraph.lines.push(logical.trim());
+      } else {
+        paragraph = {
+          index: line.index,
+          containers: [...activeContainers],
+          lines: [logical.trim()],
+        };
+      }
+    }
+  }
+
+  return headings;
+}
+
+function stripProtectedHeadingComments(text) {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const opening = text.indexOf("<!--", cursor);
+    if (opening < 0) {
+      result += text.slice(cursor);
+      break;
+    }
+    result += text.slice(cursor, opening);
+    const closing = text.indexOf("-->", opening + 4);
+    if (closing < 0) {
+      result += text.slice(opening);
+      break;
+    }
+    cursor = closing + 3;
+  }
+  return result;
+}
+
+function compactProtectedHeadingText(text) {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function protectedHeadingTokens(text) {
+  return (
+    text
+      .normalize("NFKC")
+      .toLowerCase()
+      .match(/[\p{L}\p{N}]+/gu) ?? []
+  );
+}
+
+function containsProtectedTokenSequence(candidate, expected) {
+  if (expected.length === 0) return false;
+  let expectedIndex = 0;
+  for (const token of candidate) {
+    if (token !== expected[expectedIndex]) continue;
+    expectedIndex += 1;
+    if (expectedIndex === expected.length) return true;
+  }
+  return false;
+}
+
+function protectedHeadingSearchForms(text) {
+  const withoutComments = stripProtectedHeadingComments(text);
+  const withoutEntitySyntax = withoutComments.replace(
+    /&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]+);/g,
+    " ",
+  );
+  return [
+    withoutComments,
+    decodeProtectedHeadingEntities(withoutComments),
+    withoutEntitySyntax,
+  ];
+}
+
+function protectedHeadingRecordMatches(record, expectedHeading) {
+  const expectedCompact =
+    compactProtectedHeadingText(expectedHeading);
+  const expectedTokens =
+    protectedHeadingTokens(expectedHeading);
+
+  for (const source of [record.heading, record.source]) {
+    for (const form of protectedHeadingSearchForms(source)) {
+      const compact = compactProtectedHeadingText(form);
+      if (
+        compact.includes(expectedCompact) ||
+        containsProtectedTokenSequence(
+          protectedHeadingTokens(form),
+          expectedTokens,
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function protectedH2Matches(content, expectedHeading) {
+  return scanBoundedOwnerHeadingRecords(content).filter(
+    (heading) =>
+      protectedHeadingRecordMatches(
+        heading,
+        expectedHeading,
+      ),
+  );
+}
+
+function validateHarnessOwnerLinks(
+  file,
+  section,
+  owners = harnessDetailOwners,
+  referenceDefinitionSource = section.visibleContent,
+) {
   const resources = findVisibleMarkdownResources(
+    section.visibleContent,
+    referenceDefinitionSource,
+  );
+  const visibleLinkSource = maskMarkdownForLinkScan(
     section.visibleContent,
   );
 
-  for (const owner of harnessDetailOwners) {
+  for (const owner of owners) {
     const canonicalTarget = path
       .relative(path.dirname(file), owner.file)
       .split(path.sep)
       .join("/");
     const literal = `[${owner.name}](${canonicalTarget})`;
     const literalCount =
-      section.visibleContent.split(literal).length - 1;
+      visibleLinkSource.split(literal).length - 1;
     const labelCount = resources.filter(
       (resource) => resource.label === owner.name,
     ).length;
@@ -1016,6 +2474,378 @@ function validateHarnessOwnerLinks(file, section) {
     ) {
       errors.push(
         `${file}: ${owner.label}의 canonical inline owner 링크 '${literal}'가 정확히 하나 필요합니다.`,
+      );
+    }
+  }
+}
+
+function hasNearbyDetailSignature(
+  normalizedText,
+  fragments,
+  maxSpan,
+) {
+  const normalizedFragments = fragments.map((fragment) =>
+    normalizeFinalizeDetailText(fragment),
+  );
+  const events = normalizedFragments.flatMap((fragment, fragmentIndex) => {
+    const matches = [];
+    for (
+      let index = normalizedText.indexOf(fragment);
+      index >= 0;
+      index = normalizedText.indexOf(fragment, index + 1)
+    ) {
+      matches.push({
+        start: index,
+        end: index + fragment.length,
+        fragmentIndex,
+      });
+    }
+    return matches;
+  }).sort((left, right) => left.start - right.start);
+  const counts = new Map();
+  let covered = 0;
+  let left = 0;
+
+  for (let right = 0; right < events.length; right += 1) {
+    const rightEvent = events[right];
+    const previous = counts.get(rightEvent.fragmentIndex) ?? 0;
+    counts.set(rightEvent.fragmentIndex, previous + 1);
+    if (previous === 0) covered += 1;
+
+    while (covered === normalizedFragments.length) {
+      const leftEvent = events[left];
+      if (rightEvent.end - leftEvent.start <= maxSpan) return true;
+      const leftCount = counts.get(leftEvent.fragmentIndex);
+      counts.set(leftEvent.fragmentIndex, leftCount - 1);
+      if (leftCount === 1) covered -= 1;
+      left += 1;
+    }
+  }
+
+  return false;
+}
+
+function validatePlannedIdRoutingSectionSyntax(file, section) {
+  const rawSection = maskHtmlComments(section.content);
+  const sectionWithoutInlineCode = maskRanges(
+    rawSection,
+    scanInlineCodeRanges(rawSection),
+  );
+  const ambiguousPatterns = [
+    {
+      pattern: /^ {0,3}>/m,
+      label: "blockquote",
+    },
+    {
+      pattern: /^ {4,}\S/m,
+      label: "top-level indented code",
+    },
+    {
+      pattern:
+        /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]{5,}\S/m,
+      label: "list container code",
+    },
+    {
+      pattern:
+        /^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+(?:`{3,}|~{3,})/m,
+      label: "list container fence",
+    },
+  ];
+  for (const { pattern, label } of ambiguousPatterns) {
+    if (pattern.test(rawSection)) {
+      errors.push(
+        `${file}: planned ID owner 라우팅 구역에는 ${label} 문법을 사용할 수 없습니다.`,
+      );
+    }
+  }
+  if (/(?<!\\)!\[/.test(sectionWithoutInlineCode)) {
+    errors.push(
+      `${file}: planned ID owner 라우팅 구역에는 image 문법을 사용할 수 없습니다.`,
+    );
+  }
+  if (/^ {0,3}\[[^\n]*\]:/m.test(sectionWithoutInlineCode)) {
+    errors.push(
+      `${file}: planned ID owner 라우팅 구역에는 reference definition 문법을 사용할 수 없습니다.`,
+    );
+  }
+  if (
+    /[\t\\]/.test(rawSection) ||
+    /[!>]/.test(sectionWithoutInlineCode) ||
+    /\]:/.test(sectionWithoutInlineCode)
+  ) {
+    errors.push(
+      `${file}: planned ID owner 라우팅 구역에는 tab·escape·nested container·reference metadata를 사용할 수 없습니다.`,
+    );
+  }
+
+  const canonicalTarget = path
+    .relative(path.dirname(file), plannedIdDetailOwner.file)
+    .split(path.sep)
+    .join("/");
+  const literal = `[${plannedIdDetailOwner.name}](${canonicalTarget})`;
+  const ownerLines = rawSection
+    .split("\n")
+    .filter((line) => line.includes(literal));
+  if (ownerLines.length === 1) {
+    const line = ownerLines[0];
+    const leadingSpaces = line.match(/^ */)[0].length;
+    const openingBrackets = [...line].filter(
+      (character) => character === "[",
+    ).length;
+    const closingBrackets = [...line].filter(
+      (character) => character === "]",
+    ).length;
+    if (
+      leadingSpaces > 2 ||
+      /[!<>\\`\t]/.test(line) ||
+      line.includes("]:") ||
+      openingBrackets !== 1 ||
+      closingBrackets !== 1
+    ) {
+      errors.push(
+        `${file}: planned ID canonical owner 링크는 plain paragraph·2칸 continuation·table row의 단일 inline link여야 합니다.`,
+      );
+    }
+  }
+
+  const visibleText = maskMarkdownForLinkScan(
+    section.visibleContent,
+  );
+  const rawHtml = visibleText.match(/<[A-Za-z/!?][^\n]*/);
+  if (rawHtml) {
+    errors.push(
+      `${file}: planned ID owner 라우팅 구역에는 raw HTML·autolink를 사용할 수 없습니다.`,
+    );
+  }
+  const withoutReferenceDefinitions = visibleText.replace(
+    /!?\[[^\]\n]+]:/g,
+    "",
+  );
+  const hasFullOrCollapsedReference =
+    /!?\[[^\]\n]+]\[[^\]\n]*]/.test(
+      withoutReferenceDefinitions,
+    );
+  const withoutInlineLinks = withoutReferenceDefinitions.replace(
+    /!?\[[^\]\n]+]\([^)\n]*\)/g,
+    "",
+  );
+  const hasShortcutReference =
+    /!?\[[^\]\n]+]/.test(withoutInlineLinks);
+  if (hasFullOrCollapsedReference || hasShortcutReference) {
+    errors.push(
+      `${file}: planned ID owner 라우팅 구역에는 reference-style·collapsed·shortcut link usage를 사용할 수 없습니다. canonical inline link를 사용하세요.`,
+    );
+  }
+}
+
+function validatePlannedIdRoutingBoundaries() {
+  for (const { file, section } of plannedIdRoutingDocuments) {
+    if (!isFile(file)) {
+      errors.push(`필수 planned ID 라우팅 문서가 없습니다: ${file}`);
+      continue;
+    }
+
+    const rawContent = fs.readFileSync(path.join(root, file), "utf8");
+    const content = rawContent.replaceAll("\r\n", "\n");
+    if (content.includes("\r")) {
+      errors.push(
+        `${file}: planned ID 라우팅 문서에는 CRLF가 아닌 bare CR 줄바꿈을 사용할 수 없습니다.`,
+      );
+      continue;
+    }
+    const visibleDocumentProse = maskMarkdownForLinkScan(content);
+    if (/<[A-Za-z/!?][^\n]*/.test(visibleDocumentProse)) {
+      errors.push(
+        `${file}: planned ID 라우팅 문서에는 code 밖의 raw HTML·autolink를 사용할 수 없습니다.`,
+      );
+    }
+    const normalizedDetailTexts =
+      finalizeDetailTextVariants(content);
+    for (const signature of forbiddenPlannedIdDetailSignatures) {
+      if (
+        normalizedDetailTexts.some(
+          (normalized) =>
+            hasNearbyDetailSignature(
+              normalized,
+              signature.fragments,
+              signature.maxSpan,
+            ),
+        )
+      ) {
+        errors.push(
+          `${file}: planned ID 내부 상세 '${signature.label}'을 재복제할 수 없습니다. 상세 계약은 ${plannedIdDetailOwner.file}가 소유합니다.`,
+        );
+      }
+    }
+
+    const visibleContent = maskInvisibleMarkdown(content);
+    const allSections = readStrictH2Sections(
+      content,
+      visibleContent,
+    );
+    const sections = allSections.filter(
+      (candidate) =>
+        candidate.source === `## ${section}`,
+    );
+    const protectedHeadingCount =
+      protectedH2Matches(content, section).length;
+    if (sections.length !== 1 || protectedHeadingCount !== 1) {
+      errors.push(
+        `${file}: planned ID owner 라우팅 구역은 exact plain-text top-level H2로 정확히 하나여야 합니다: ${section} (canonical ${sections.length}개, 보호 후보 ${protectedHeadingCount}개)`,
+      );
+      continue;
+    }
+
+    validatePlannedIdRoutingSectionSyntax(file, sections[0]);
+    validateHarnessOwnerLinks(
+      file,
+      sections[0],
+      [plannedIdDetailOwner],
+      content,
+    );
+  }
+}
+
+function validatePlannedIdDetailOwnerBoundary() {
+  const file = plannedIdDetailOwner.file;
+  if (!isFile(file)) return;
+
+  const rawContent = fs.readFileSync(path.join(root, file), "utf8");
+  const content = rawContent.replaceAll("\r\n", "\n");
+  if (content.includes("\r")) {
+    errors.push(
+      `${file}: planned ID 상세 owner에는 CRLF가 아닌 bare CR 줄바꿈을 사용할 수 없습니다.`,
+    );
+    return;
+  }
+  const visibleOwnerProse = maskMarkdownForLinkScan(content);
+  if (/<[A-Za-z/!?][^\n]*/.test(visibleOwnerProse)) {
+    errors.push(
+      `${file}: planned ID 상세 owner에는 code 밖의 raw HTML·autolink를 사용할 수 없습니다.`,
+    );
+  }
+  const visibleContent = maskInvisibleMarkdown(content);
+  const plannedOwnerHeadingMatches = protectedH2Matches(
+    content,
+    plannedIdDetailOwner.section,
+  );
+  const canonicalOwnerHeadingSource =
+    `## ${plannedIdDetailOwner.section}`;
+  for (const match of plannedOwnerHeadingMatches) {
+    if (
+      match.syntax !== "atx" ||
+      match.source !== canonicalOwnerHeadingSource
+    ) {
+      errors.push(
+        `${file}:${sourceLineNumber(content, match.index)}: planned ID 상세 owner의 H2는 Markdown formatting·link가 없는 plain text여야 합니다. 보호 이름을 나타내거나 포함할 수 있는 다른 source skeleton은 허용하지 않습니다.`,
+      );
+    }
+  }
+  const allSections = readStrictH2Sections(
+    content,
+    visibleContent,
+  );
+  const sections = allSections.filter(
+    (candidate) =>
+      candidate.source === canonicalOwnerHeadingSource,
+  );
+  const protectedHeadingCount = [
+    ...plannedOwnerHeadingMatches,
+  ].length;
+  if (sections.length !== 1 || protectedHeadingCount !== 1) {
+    errors.push(
+      `${file}: planned ID 상세 owner 구역은 exact plain-text top-level H2로 정확히 하나여야 합니다: ${plannedIdDetailOwner.section} (canonical ${sections.length}개, 보호 후보 ${protectedHeadingCount}개)`,
+    );
+    return;
+  }
+
+  const ownerSection = sections[0];
+  const ownerSyntaxSource = ownerSection.content;
+  const plannedIdMarkerBoundary =
+    "- `planned ID`는 GitHub 이슈의 계획 표식일 뿐 정본 정의가 아니다.";
+  const plannedIdMarkerBoundaryCount = ownerSyntaxSource
+    .split("\n")
+    .filter((line) => line === plannedIdMarkerBoundary).length;
+  if (plannedIdMarkerBoundaryCount !== 1) {
+    errors.push(
+      `${file}: 하네스 수명주기 계약이 없습니다: planned ID marker는 정본 정의가 아님 (exact direct bullet ${plannedIdMarkerBoundaryCount}개)`,
+    );
+  }
+  let inDirectBullet = false;
+  for (const line of ownerSyntaxSource.split("\n")) {
+    if (!line.trim()) continue;
+    if (/^- \S/.test(line)) {
+      inDirectBullet = true;
+      continue;
+    }
+    if (
+      /^ {2}\S/.test(line) &&
+      !/^ {2}(?:[-+*]|\d{1,9}[.)])[ \t]/.test(line) &&
+      inDirectBullet
+    ) {
+      continue;
+    }
+    errors.push(
+      `${file}: planned ID 상세 owner 구역의 각 visible line은 '- ' direct bullet 또는 그 bullet의 정확히 2칸 continuation이어야 합니다.`,
+    );
+    inDirectBullet = false;
+  }
+  const ownerFenceLine = ownerSyntaxSource
+    .split("\n")
+    .find((line) => {
+      const payload = line.startsWith("- ")
+        ? line.slice(2)
+        : line.startsWith("  ")
+          ? line.slice(2)
+          : null;
+      if (payload === null) return false;
+      const backtickFence = payload.match(/^(`{3,})(.*)$/);
+      if (backtickFence && !backtickFence[2].includes("`")) {
+        return true;
+      }
+      return /^~{3,}/.test(payload);
+    });
+  if (ownerFenceLine !== undefined) {
+    errors.push(
+      `${file}: planned ID 상세 owner 구역에는 direct bullet·2칸 continuation에 넣은 fenced code marker를 사용할 수 없습니다.`,
+    );
+  }
+  if (/[\t\\]/.test(ownerSyntaxSource)) {
+    errors.push(
+      `${file}: planned ID 상세 owner 구역에는 tab과 backslash escape를 사용할 수 없습니다.`,
+    );
+  }
+  const ownerWithoutInlineCode = maskRanges(
+    ownerSyntaxSource,
+    scanInlineCodeRanges(ownerSyntaxSource),
+  );
+  const unmatchedBacktick = ownerWithoutInlineCode.indexOf("`");
+  if (
+    unmatchedBacktick >= 0 ||
+    /[[\]!<>|#*_~]/.test(ownerWithoutInlineCode)
+  ) {
+    errors.push(
+      `${file}: planned ID 상세 owner 구역에는 inline code 밖의 Markdown formatting·link·image·reference·raw HTML을 사용할 수 없습니다.`,
+    );
+  }
+  const outsideOwner = maskRanges(content, [
+    { start: ownerSection.start, end: ownerSection.end },
+  ]);
+  const normalizedOutsideTexts =
+    finalizeDetailTextVariants(outsideOwner);
+  for (const signature of forbiddenPlannedIdDetailSignatures) {
+    if (
+      normalizedOutsideTexts.some(
+        (normalized) =>
+          hasNearbyDetailSignature(
+            normalized,
+            signature.fragments,
+            signature.maxSpan,
+          ),
+      )
+    ) {
+      errors.push(
+        `${file}: planned ID 내부 상세 '${signature.label}'은 '${plannedIdDetailOwner.section}' 구역에서만 정의해야 합니다.`,
       );
     }
   }
@@ -1109,27 +2939,24 @@ function validateHarnessRoutingBoundaries() {
       visibleContent,
     );
     const sections = allSections.filter(
-      (candidate) => candidate.heading === section,
+      (candidate) =>
+        candidate.source === `## ${section}`,
     );
-    const headingSource = maskRanges(
-      content,
-      scanFencedBlockRanges(content),
-    );
-    const renderedHeadingCount = [
-      ...headingSource.matchAll(/^## (?!#)(.+?)[ \t]*$/gm),
-    ].filter(
-      (match) =>
-        normalizeHarnessHeadingText(match[1]) ===
-        normalizeHarnessHeadingText(section),
-    ).length;
-    if (sections.length !== 1 || renderedHeadingCount !== 1) {
+    const protectedHeadingCount =
+      protectedH2Matches(content, section).length;
+    if (sections.length !== 1 || protectedHeadingCount !== 1) {
       errors.push(
-        `${file}: 하네스 owner 라우팅 구역은 plain-text top-level H2로 정확히 하나여야 합니다: ${section} (canonical ${sections.length}개, rendered ${renderedHeadingCount}개)`,
+        `${file}: 하네스 owner 라우팅 구역은 exact plain-text top-level H2로 정확히 하나여야 합니다: ${section} (canonical ${sections.length}개, 보호 후보 ${protectedHeadingCount}개)`,
       );
       continue;
     }
 
-    validateHarnessOwnerLinks(file, sections[0]);
+    validateHarnessOwnerLinks(
+      file,
+      sections[0],
+      harnessDetailOwners,
+      content,
+    );
     if (file === "CONTRIBUTING.md") {
       validateApprovalZeroContract(file, sections[0]);
     }
@@ -1389,6 +3216,7 @@ function validateHarnessOrchestration(file) {
       "사용자 결과·수용 동작",
       "상태·권한·실패·복구·보존·보안",
       "작업 범위·경로·행동 시나리오·검증 계획",
+      "PRD·Policy planned ID 수명주기",
       "이슈·Project 상태 전이·재조회·복구",
       "PR 쓰기·exact-head finalize·원격·로컬 정리",
       "PR의 고정 필드",
@@ -1401,6 +3229,34 @@ function validateHarnessOrchestration(file) {
           `${file}: 규칙 소유와 링크 표에 '${owner}' 행이 정확히 하나 필요합니다. (현재 ${count}개)`,
         );
       }
+    }
+    const plannedIdOwnerRow = rows.find(
+      (row) => row[0] === plannedIdDetailOwner.label,
+    );
+    const issueContractOwnerRow = rows.find(
+      (row) =>
+        row[0] === "작업 범위·경로·행동 시나리오·검증 계획",
+    );
+    const plannedIdOwnerCell =
+      "[update-product-docs](../../.agents/skills/update-product-docs/SKILL.md)";
+    if (
+      plannedIdOwnerRow?.[1] !== plannedIdOwnerCell ||
+      plannedIdOwnerRow?.[2] !==
+        "새 ID 요청을 단일 owner로 라우팅"
+    ) {
+      errors.push(
+        `${file}: '${plannedIdDetailOwner.label}' 행은 canonical update-product-docs owner와 새 ID 단일 라우팅 역할에 결합되어야 합니다.`,
+      );
+    }
+    if (
+      issueContractOwnerRow?.[1] !==
+        "[run-github-work-item 이슈 계약](../../.agents/skills/run-github-work-item/references/issue-contract.md)" ||
+      issueContractOwnerRow?.[2] !==
+        "이슈 양식·제품 추적 적용 경계·구현·리뷰 입력을 단일 계약으로 라우팅"
+    ) {
+      errors.push(
+        `${file}: 작업 범위·경로·행동 시나리오·검증 계획 행은 canonical run-github-work-item 이슈 계약과 제품 추적 적용 경계에 결합되어야 합니다.`,
+      );
     }
     if (rows.length !== requiredOwners.length) {
       errors.push(
@@ -1428,9 +3284,13 @@ function validateHarnessSkillContracts() {
   const contracts = [
     {
       file: ".agents/skills/update-product-docs/SKILL.md",
+      section: plannedIdDetailOwner.section,
       terms: [
         ["승인된 결정", /승인된 결정/],
-        ["planned ID", /planned ID/],
+        [
+          "planned ID marker는 정본 정의가 아님",
+          /는 GitHub 이슈의 계획 표식일 뿐 정본 정의가 아니다/,
+        ],
         [
           "같은 이슈·branch·PR",
           /같은[\s\S]{0,160}이슈[\s\S]{0,160}branch[\s\S]{0,160}PR/,
@@ -1451,6 +3311,18 @@ function validateHarnessSkillContracts() {
         [
           "미결정 시 중단",
           /(?:미결정 제품 선택[\s\S]{0,160}중단|제품 결정이 승인되지 않았다면 중단)/,
+        ],
+        [
+          "canonical owner grammar",
+          /plain top-level H2[\s\S]{0,120}direct bullet[\s\S]{0,80}2칸 continuation[\s\S]{0,80}inline code[\s\S]{0,180}reference definition[\s\S]{0,160}fenced·indented code[\s\S]{0,100}raw HTML/,
+        ],
+        [
+          "fail-closed owner H2 source grammar",
+          /보호 이름[\s\S]{0,120}source가 정확히[\s\S]{0,80}`## <name>`[\s\S]{0,180}container[\s\S]{0,120}setext[\s\S]{0,180}reference·entity·hardbreak/,
+        ],
+        [
+          "bounded owner H2 scanner",
+          /임의의 CommonMark rendered 동등성을 보장하지 않는다[\s\S]{0,120}bounded[\s\S]{0,80}block scanner[\s\S]{0,160}fenced·indented code[\s\S]{0,120}숨겨진 raw HTML[\s\S]{0,180}visible\/source skeleton[\s\S]{0,160}token sequence[\s\S]{0,120}fail-closed/,
         ],
       ],
     },
@@ -1684,11 +3556,30 @@ function validateHarnessSkillContracts() {
     },
   ];
 
-  for (const { file, terms } of contracts) {
+  for (const { file, section, terms } of contracts) {
     if (!isFile(file)) continue;
-    const content = maskHtmlComments(
-      fs.readFileSync(path.join(root, file), "utf8"),
-    );
+    const source = fs
+      .readFileSync(path.join(root, file), "utf8")
+      .replaceAll("\r\n", "\n");
+    let content = maskHtmlComments(source);
+    if (section) {
+      const matchingSections = readStrictH2Sections(
+        source,
+        maskInvisibleMarkdown(source),
+      ).filter((candidate) => candidate.heading === section);
+      content =
+        matchingSections.length === 1
+          ? visibleInlineLinkLabels(
+              maskReferenceDefinitions(
+                maskIndentedCodeLines(
+                  maskInvisibleMarkdown(
+                    matchingSections[0].content,
+                  ),
+                ),
+              ),
+            )
+          : "";
+    }
     for (const [label, pattern] of terms) {
       if (!pattern.test(content)) {
         errors.push(`${file}: 하네스 수명주기 계약이 없습니다: ${label}`);
@@ -2285,6 +4176,8 @@ for (const file of developmentFiles) {
 validateHarnessSteps(developmentFiles[0]);
 validateHarnessOrchestration(developmentFiles[0]);
 validateHarnessRoutingBoundaries();
+validatePlannedIdRoutingBoundaries();
+validatePlannedIdDetailOwnerBoundary();
 validateHarnessSkillContracts();
 
 for (const file of markdownFiles) {
