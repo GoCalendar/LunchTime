@@ -102,6 +102,7 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
 | 항목 | 값 |
 |------|-----|
 | 최소 지원 macOS | 14.0 |
+| Xcode | 26.2 (로컬·CI 공통) |
 | UI 프레임워크 | SwiftUI 단독. AppKit을 직접 사용하지 않습니다. |
 | 앱·단위 테스트 scheme | `LunchTime` |
 | UI 테스트 scheme | `LunchTimeUITests` |
@@ -117,9 +118,12 @@ xcodebuild test -project LunchTime.xcodeproj -scheme LunchTime -destination 'pla
 
 CI는 같은 project·scheme·destination과 같은 테스트 실행 대상을 사용합니다. 다만
 `-skip-testing`으로 UI 제외를 한 번 더 못박고 Release 구성 빌드를 추가로
-검사합니다. 아래 `테스트 구성`과 `CI 게이트` 절을 함께 보십시오. Xcode도 runner
-이미지의 기본값을 사용하므로 로컬 도구와 버전이 다를 수 있으며, 두 환경의 도구
-버전 고정은 아직 확정하지 않았습니다.
+검사합니다. 아래 `테스트 구성`과 `CI 게이트` 절을 함께 보십시오.
+
+CI는 `DEVELOPER_DIR`로 Xcode 26.2를 고정합니다. runner 이미지 기본값은 더 낮은
+버전이라 고정하지 않으면 로컬과 다른 SDK로 컴파일되고, 로컬에서 통과한 코드가
+CI에서만 깨질 수 있습니다. 이미지에서 이 버전이 사라지면 앱 게이트가 설치된
+Xcode 목록을 출력하며 실패하므로, 그때 지원 버전을 다시 정합니다.
 
 ### 소스 폴더 규칙
 
