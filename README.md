@@ -97,6 +97,116 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
 - [BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)은 제품 정본을
   행동 시나리오, 결정적 테스트와 회귀 증거로 전환하는 기준을 설명합니다.
 
+## 앱 빌드와 검증
+
+| 항목 | 값 |
+|------|-----|
+| 최소 지원 macOS | 14.0 |
+| UI 프레임워크 | SwiftUI 단독. AppKit을 직접 사용하지 않습니다. |
+| 앱·단위 테스트 scheme | `LunchTime` |
+| UI 테스트 scheme | `LunchTimeUITests` |
+| 대상 | 앱 `LunchTime`, 단위 테스트 `LunchTimeTests`, UI 테스트 `LunchTimeUITests` |
+| 앱 번들 식별자 | `com.gocalendar.LunchTime` |
+
+로컬에서 다음 명령으로 빌드와 테스트를 실행합니다.
+
+```bash
+xcodebuild build -project LunchTime.xcodeproj -scheme LunchTime -destination 'platform=macOS'
+xcodebuild test -project LunchTime.xcodeproj -scheme LunchTime -destination 'platform=macOS'
+```
+
+CI는 같은 project·scheme·destination과 같은 테스트 실행 대상을 사용합니다. 다만
+`-skip-testing`으로 UI 제외를 한 번 더 못박고 Release 구성 빌드를 추가로
+검사합니다. 아래 `테스트 구성`과 `CI 게이트` 절을 함께 보십시오. Xcode도 runner
+이미지의 기본값을 사용하므로 로컬 도구와 버전이 다를 수 있으며, 두 환경의 도구
+버전 고정은 아직 확정하지 않았습니다.
+
+### 소스 폴더 규칙
+
+- `LunchTime/`, `LunchTimeTests/`, `LunchTimeUITests/` 아래에 파일이나 폴더를
+  추가하면 `LunchTime.xcodeproj/project.pbxproj`를 수정하지 않아도 컴파일 대상에
+  포함됩니다.
+- 한 대상 안에서 Swift 파일 이름은 전역으로 유일해야 합니다. 폴더를 나눠도 같은
+  이름을 쓸 수 없으므로(`Room/View.swift`와 `Lounge/View.swift`는 함께 빌드되지
+  않습니다) 기능을 드러내는 이름을 사용합니다.
+- 코드가 아닌 파일은 해당 대상의 리소스로 흡수됩니다. `*.md`는 빌드에서
+  제외하지만 그 밖의 파일을 `LunchTime/` 아래에 두면 앱 번들에 포함됩니다.
+- 리소스 파일은 확장자를 포함한 이름이 한 대상 안에서 유일해야 합니다. 리소스는
+  번들에 평탄하게 복사되므로 서로 다른 폴더의 같은 이름 파일은 함께 빌드되지
+  않습니다. `Alpha/thing.txt`와 `Beta/thing.txt`는 충돌하고,
+  `thing.txt`와 `thing.json`은 공존합니다. Swift 파일은 확장자가 같으므로 결과적으로
+  이름 자체가 유일해야 합니다.
+- 공통 테스트 fixture는 `LunchTimeTests/Support/`에 둡니다. 현재 이 폴더에는
+  기준선 테스트도 함께 있습니다. 저장소 최상위 `Tests/`는 어떤 대상에도
+  동기화되지 않으므로 fixture 위치로 쓸 수 없습니다.
+- 다음 변경은 폴더 추가로 해결할 수 없고 `LunchTime.xcodeproj`를 편집해야
+  합니다: Swift Package 의존성, `Info.plist` 키, entitlement, 새 빌드 설정.
+  이 파일은 단일 소유 대상이므로 전용 이슈에서 변경합니다. 현재 작업 목록에는
+  이 파일을 편집할 수 있는 후속 이슈가 없어 새로 만들어야 합니다.
+
+### 서명과 배포
+
+- 빌드 재현성을 위해 코드 서명을 ad-hoc(`CODE_SIGN_IDENTITY = "-"`)으로
+  고정했습니다. 인증서 보유 여부와 무관하게 로컬과 CI가 같은 경로를 탑니다.
+  이는 빌드 설정이며 출시 서명·배포 정책이 아닙니다.
+- App Sandbox와 Hardened Runtime은 현재 꺼져 있습니다. 공증, entitlement와
+  배포 방식은 이 골격에서 확정하지 않습니다.
+- 최소 macOS 버전과 SwiftUI 경계는 [PRD-01](docs/prd/01_lunchtime_mvp.md)이 앱
+  기반 작업에 위임한 기술 선택이며 사용자에게 보이는 제품 동작을 바꾸지
+  않습니다. 같은 절이 요구하는 출시 검토 증거는 아직 확보하지 않았습니다.
+
+### 테스트 구성
+
+위 `xcodebuild test` 명령은 단위 테스트 `LunchTimeTests`만 실행합니다. UI 테스트
+`LunchTimeUITests`는 기본 scheme의 테스트 대상에서 제외되어 있습니다. UI 실행은
+automation mode 권한과 앱 실행 타이밍에 의존해 결정적이지 않고, 한 번 실패하면
+테스트 데몬 상태가 남아 이후 테스트 실행까지 막는 것을 확인했습니다.
+[BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)도 E2E를 MVP 필수
+게이트로 두지 않습니다.
+
+UI 테스트를 실행할 때는 전용 scheme을 사용합니다.
+
+```bash
+xcodebuild test -project LunchTime.xcodeproj -scheme LunchTimeUITests -destination 'platform=macOS'
+```
+
+CI는 기본 scheme을 사용하고 `-skip-testing:LunchTimeUITests`로 한 번 더 제외해
+scheme이 바뀌어도 게이트가 결정적으로 유지되게 합니다. UI 대상은 CI에서도 계속
+빌드되므로 컴파일 회귀는 잡힙니다.
+
+테스트는 Debug 구성에서만 실행합니다. `@testable import`가 필요한 테스트 대상은
+Release 구성에서 빌드되지 않습니다.
+
+### 작업 트리 운영 제약
+
+이슈 작업 트리에서는 Xcode GUI로 프로젝트를 열지 않습니다. Xcode는 개인 IDE
+상태를 만들고, 작업 완료 절차는 작업 트리에 잔여물이 있으면 정리를 중단합니다.
+빌드 산출물은 저장소 밖 기본 위치에 두고 `-derivedDataPath`로 저장소 안을
+지정하지 않습니다.
+
+`.gitignore`는 커밋을 막을 뿐 작업 완료 절차를 통과시키지 않습니다. 완료 절차는
+무시된 잔여물도 허용하지 않으므로, 정리 전에
+`git status --porcelain --untracked-files=all --ignored=matching`으로 남은 항목을
+확인합니다. 최상위 `.omc`는 유일하게 허용되는 항목이므로 삭제하지 않고, 그 밖의
+항목만 제거합니다. `xcodebuild`도 빈 작업 공간 디렉터리를 만들 수 있습니다.
+
+### CI 게이트
+
+| 게이트 | 워크플로 | 검사 |
+|--------|----------|------|
+| 앱 빌드·테스트 | [`macOS 앱 검증`](.github/workflows/app-ci.yml) | `xcodebuild build`, `xcodebuild test`와 Release 구성 빌드 |
+| 제품 문서 | [`저장소 작업 도구 검증`](.github/workflows/validate-harness.yml) | `validate-product-docs.mjs` |
+| 패치 공백 | [`저장소 작업 도구 검증`](.github/workflows/validate-harness.yml) | `git diff --check` |
+
+두 워크플로는 서로 독립적으로 실패합니다. 제품 문서 검증과 패치 공백 검사는
+같은 job의 개별 단계이므로 앞 단계가 실패하면 실행되지 않습니다.
+
+병합을 차단하는 필수 검사는 저장소 ruleset이 정합니다. 현재 ruleset은 하네스
+워크플로의 `validate` 검사만 필수로 요구하므로 앱 게이트는 아직 병합을 막지
+않습니다. 앱 게이트를 병합 조건으로 만들려면 ruleset에 `app-test`를 추가해야
+합니다. 두 워크플로 모두 job에 별도 표시 이름을 두지 않으므로 job 이름이 그대로
+검사 이름이 됩니다.
+
 ## 제품 문서 갱신 절차
 
 구현을 마치고 PR을 만들기 전에는 [update-product-docs](.agents/skills/update-product-docs/SKILL.md) 스킬(Skill)로 변경사항이 PRD·정책 문서에 미치는 영향을 확인합니다. 제품 동작이나 보장 범위가 달라졌다면 코드와 정본 문서를 같은 변경에서 갱신합니다. 새 PRD·Policy ID의 문서·구현 동시 작업 조건과 Ready 전 추적성은 같은 Skill의 planned ID 계약을 따릅니다.
@@ -133,6 +243,8 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
   맥락과 핵심 검토 지점을 복원할 수 있는 고정 본문 구조를 제공합니다.
 - [하네스 검증 워크플로](.github/workflows/validate-harness.yml)는 PR과
   `main` 변경에서 문서·스킬 스크립트·패치 형식을 검사합니다.
+- [macOS 앱 검증 워크플로](.github/workflows/app-ci.yml)는 PR과 `main` 변경에서
+  앱 빌드와 테스트를 검사합니다. PR 본문·제목 편집에서는 재실행하지 않습니다.
 
 실제 요청 라우팅과 단계는
 [개발 하네스 가이드](docs/development/01_harness_guide.md), 사람용 규칙과 예외는
