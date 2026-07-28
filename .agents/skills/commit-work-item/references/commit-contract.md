@@ -87,73 +87,253 @@ git ls-files --others --exclude-standard
 
 ## 5. 검증 증거
 
-candidate와 commit은 다음 순서로 만든다.
+<!-- local-gate-evidence-contract {"version":1,"d0":"pre-review","selection":"base-to-candidate","invalidation":"previous-to-candidate","unchangedPass":"retain","changedSelected":"rerun","notSelected":"drop","pending":"continue","ambiguous":"fail-closed"} -->
 
-1. 구현 중에는 이슈별 행동 테스트와 필요한 국소 회귀 테스트만 빠르게
-   수행한다. 현재 `AGENTS.md` 고정 게이트 전체를 바뀔 snapshot에 반복하지
-   않는다.
-2. `update-product-docs`로 PRD·Policy·Architecture 의미 영향 판정과 변경
-   허용·금지 경로 guard를 독립 리뷰 전에 끝낸다.
-3. 진입 전에 index가 비어 있음을 확인하고, 이슈가 소유한 explicit path만
-   명시적으로 stage한다. unstaged tracked 변경과 예상하지 않은 untracked
-   입력이 없는 상태에서 base OID, cached diff digest, candidate tree OID와
-   filesystem input 상태를 candidate identity로 고정한다.
-4. 작성 컨텍스트와 분리된 읽기 전용 reviewer가 같은 cached diff·candidate
-   tree, 원본 요구사항, 행동 테스트와 의미 영향 결과를 독립 리뷰한다.
-5. 같은 snapshot의 발견 사항을 모아 저장소 고정 게이트 전체를 실행하지 않고
-   일괄 수정한다. 수정하면 행동 테스트와 의미 영향 판정을 갱신하고 다시
-   stage한 새 candidate만 리뷰한다.
-6. 더 이상 계획된 수정이 없을 때 이슈 `검증`과 현재 `AGENTS.md` 고정 게이트
-   전체의 중복 제거된 합집합을 같은 filesystem에서 한 번 실행한다.
-7. 게이트 전후 candidate tree·filesystem input이 같고 모든 결과가
-   통과한 경우에만 같은 staged tree를 commit한다.
-8. commit tree와 이후 PR head tree가 candidate tree와 같을 때만 완전한 로컬
-   증거를 재실행 없이 인계한다. 원격 required CI는 생략하지 않는다.
+### 5.1 Candidate와 review chain
 
-candidate identity와 최종 증거에는 base OID, cached diff digest, candidate
-tree OID, unstaged tracked·untracked input 상태, review pass와 검토자
-수·관점·P0~P2 결과, 실행한 gate 집합·명령·종료 상태, 검증 전후 tree·input,
-commit tree OID를 기록한다. PR 단계에서는 PR head tree OID를 같은 연속
-증거에 추가한다.
+candidate identity에는 base commit OID, 전체 cached diff digest,
+`git write-tree`의 candidate tree OID, unstaged tracked·예상하지 않은
+untracked 입력 상태를 기록한다. 수정 candidate는 이전 identity와
+이전→현재 staged delta digest도 연결한다. 명시적으로 stage해 candidate를
+고정한 직후 evidence helper가 current index의 tree와 clean 상태를 JSON에
+결속하고, [빠른 공통 gate](#52-빠른-공통-gate)를 독립 리뷰 전에 실행한다.
+D0가 수정 필요를 발견하면 다시 stage·고정·D0한 뒤 첫 리뷰 또는 다음 delta
+review를 시작하므로 review pass를 소비하지 않는다.
 
-독립 리뷰는 작성 컨텍스트와 분리된 읽기 전용 검토자가 수행한다. 작성자의
-자기 검토는 독립 리뷰가 아니며, 작성·수정자와 최종 승인자를 분리한다. 의도한
-답이나 예상 결론을 주입하지 않고 검토자는 직접 수정하지 않으며 P0~P2 발견
-사항을 파일 위치와 재현 근거로 보고한다.
+최초 candidate는 D0를 통과한 뒤 작성 컨텍스트와 분리된 읽기 전용 reviewer가
+원본 요구사항, 전체 cached diff·candidate tree, 행동 테스트와 의미 영향
+결과를 검토한다. 같은 snapshot의 발견 사항은 합쳐 수정하고 즉시 명시적으로
+stage한다. exact previous evidence JSON을 소비한 delta evidence와 D0를 먼저
+갱신한 뒤 필요한 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정을
+갱신한다. 다음 review pass에는 다음 입력을 모두 제공한다.
 
-- 낮은 위험의 단순 변경은 최소 1명이 검토한다.
-- 계약·validator·workflow 변경은 최소 2명이 검토한다.
-- 분산 통신·정합성·보안 같은 고위험 변경은 필요한 전문 관점별 검토자를
-  병렬 배치한다.
-- 같은 snapshot의 reviewer는 가능하면 병렬로 시작하고 모두 끝난 뒤 발견
-  사항을 합류시킨다.
-- 수정하면 새 cached diff·candidate tree를 별도 독립 리뷰 패스에 제공한다.
-- 최초 리뷰를 1회로 세어 review-fix cycle은 최대 3회다. 3회 뒤에도 P0/P1이
-  남으면 최종 게이트와 commit을 진행하지 않고 blocker로 보고한다.
+- 이전·현재 base OID와 candidate tree OID
+- exact previous·current evidence JSON
+- 이전→현재 staged delta
+- 현재 candidate의 전체 cached diff
+- 갱신한 행동 테스트와 의미 영향 결과
 
-최종 게이트는 같은 candidate를 읽되 입력·출력이 격리된 읽기 전용 명령만
-병렬 실행한다. 같은 index·working tree·외부 상태·공유 cache·자원을 쓰거나
-자원 경합으로 더 느려지는 명령은 순차 실행하며, 모든 결과를 barrier에서
-join한 뒤 한 번에 판정한다. 게이트 일부가 먼저 통과해도 전체 결론을 앞당기지
+최초 전체 리뷰와 끊기지 않은 delta review chain이 최종 candidate의 모든
+변경을 덮으면 최종 candidate를 review tree로 결속할 수 있다. 다음 중 하나면
+delta review만으로 승인하지 않고 현재 전체 candidate를 새로 리뷰한다.
+
+- 이슈 범위, 원본 요구사항 또는 보안 경계가 넓어졌다.
+- 이전→현재 delta나 review pass가 누락됐다.
+- base·tree 연결 또는 delta의 출처가 모호하다.
+- reviewer가 현재 전체 cached diff와 delta의 상호작용을 확정할 수 없다.
+
+낮은 위험은 최소 1명, 계약·validator·workflow 변경은 최소 2명, 분산
+통신·정합성·보안 같은 고위험 변경은 필요한 전문 관점별 reviewer를
+배치한다. 최초 리뷰를 1회로 세어 review-fix cycle은 최대 3회다. 3회 뒤에도
+P0/P1이 남으면 최종 gate와 commit을 진행하지 않고 blocker로 보고한다.
+
+### 5.2 빠른 공통 gate
+
+다음 빠른 공통 gate는 최초 candidate와 모든 수정 candidate를 명시적으로
+stage·고정한 직후, 최초 전체 리뷰나 delta review보다 먼저 항상 실행한다.
+
+```bash
+node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs
+node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs validate
+node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs --index
+node .agents/skills/open-pull-request/scripts/validate-pr-body.mjs --template .github/PULL_REQUEST_TEMPLATE.md
+git diff --cached --check
+```
+
+마지막 명령은 working tree가 아니라 실제 staged candidate의 공백 오류를
+검사한다. 빠른 공통 gate는 회귀군 분류 결과나 이전 통과 증거로 생략하지
+않는다. 리뷰와 무거운 회귀군 실행 동안 candidate tree와 index·clean 상태가
+그대로면 D0 증거를 최종 증거로 유지하며 commit 직전에 반복하지 않는다.
+
+### 5.3 무거운 회귀군
+
+무거운 gate는 다음 네 회귀군으로 고정한다. 괄호 안은 helper의 group ID이며
+앞의 이름은 CI job ID다.
+
+- `product-docs-regression` (`productDocsRegression`)
+
+  ```bash
+  node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs
+  node --test .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
+  ```
+
+- `work-item-regression` (`workItemRegression`)
+
+  ```bash
+  node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs
+  node --test .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
+  ```
+
+- `commit-pr-regression` (`commitPrRegression`)
+
+  ```bash
+  node --test .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
+  node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
+  node --test .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs
+  node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
+  ```
+
+- `finalize-regression` (`finalizeRegression`)
+
+  ```bash
+  node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs
+  node --test .agents/skills/open-pull-request/scripts/finalize-merge.test.mjs
+  node --test .agents/skills/open-pull-request/scripts/finalize-remote-branch.test.mjs
+  node --test .agents/skills/open-pull-request/scripts/finalize-local-cleanup.test.mjs
+  ```
+
+D0와 독립 리뷰를 통과한 candidate에서는 evidence JSON이 base→candidate로
+계산한 `selectedGroups`만 실행한다. 각 회귀군 안의 명령은 중복 제거하고,
+서로 독립된 읽기 전용·격리 회귀군만 병렬 실행한다. 같은 index·working
+tree·외부 상태·공유 cache·자원을 쓰는 명령은 순차 실행한 뒤 모든 결과를
+barrier에서 join한다.
+
+### 5.4 Gate evidence helper
+
+최초 candidate는 `initial`, 이후 candidate는 exact previous evidence JSON을
+입력으로 하는 `delta` 모드를 사용한다. legacy base/tree 인자는 허용하지
 않는다.
 
-- tracked content를 수정하면 행동 테스트·의미 영향·리뷰·게이트 증거를 모두
-  무효화하고 새 candidate의 필요한 빠른 행동 테스트를 다시 수행한 뒤 의미
-  영향 판정과 독립 리뷰부터 다시 시작한다.
-- 환경만 복구되고 candidate tree와 input이 같으면 실패 원인과 동일성 근거를
-  남기고 실패한 새 명령을 한 번만 실행한다. 자동 반복하지 않는다.
-- 의미 영향·독립 리뷰 증거가 불완전하지만 candidate tree와 input이 같으면
-  같은 candidate의 의미 영향 판정과 새 독립 리뷰부터 복구한 뒤 최종 게이트로
-  진행한다.
-- 최종 gate 증거만 불완전하고 candidate tree와 input이 같으면 동일한 clean
-  snapshot에서 현재 고정 게이트 전체를 새로 실행한다.
-- candidate tree나 input이 다르면 기존 로컬 증거를 모두 무효화하고 새
-  candidate의 필요한 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시
-  시작한다.
+```bash
+node .agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs \
+  --mode initial \
+  --candidate-base <40-oid> \
+  > <initial-evidence-json>
+node .agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs \
+  --mode delta \
+  --candidate-base <40-oid> \
+  --previous-evidence <exact-previous-evidence-json> \
+  > <delta-evidence-json>
+```
 
-명령, 종료 상태, 테스트 수, 수동 확인 결과와 CI URL처럼 실제로 확보한
-증거만 기록한다. 실행하지 않은 검증을 통과로 표시하거나 tree·input이 다른
-작업의 결과를 재사용하지 않는다.
+helper는 candidate tree 인자를 받지 않고 current `git write-tree`에서
+파생한다. unstaged tracked 변경, unmerged entry 또는 예상하지 않은 untracked
+입력이 있으면 JSON을 만들지 않는다. `initial`은
+`candidate-base^{tree}`를 base·previous tree로 사용한다. `delta`는
+`--previous-evidence`의 schema, base/candidate identity, command manifest와
+base·previous·candidate projection digest를 다시 계산해 검증한 뒤 그
+evidence의 `candidate.tree`를 previous tree로 사용한다. evidence 파일은
+저장소 밖의 작업 임시 경로에 두고 index나 untracked 입력에 넣지 않는다.
+
+strict previous evidence가 schema·version, helper decision, command
+manifest 또는 base identity 불일치로 거부되면 같은 `delta`를 반복하지
+않는다. re-root는 새 mode가 아니라 기존 `initial`만 사용한다.
+replace-disabled current HEAD commit을 current base로 검증하고 candidate
+base가 그 commit과 같을 때만 re-root한다. current HEAD 또는 candidate base가
+unknown·stale이면 중단한다. 검증된 current base가 이전 evidence의 base보다
+우선하며, 새 initial evidence에서는 이전 heavy PASS를 모두 폐기하고 current
+base→candidate selection만 사용한다. 이 re-root는 gate evidence lineage만
+새로 시작한다. raw tree·staged delta를 잇는 review chain은 별도 계약이므로
+candidate 범위가 넓어지지 않았고 chain이 완전하면 유지할 수 있으며, re-root
+자체만으로 새 전체 리뷰를 강제하지 않는다.
+
+JSON에는 `schema: "lunchtime-gate-evidence"`, `version: 2`, `mode`, `base`,
+`previous`, `candidate`, `full`, `failClosed`, `reason`, `diagnostic`,
+`selectionPaths`, `invalidationPaths`, `selectedGroups`,
+`invalidatedGroups`, `rerunGroups`, `retainGroups`, `dropGroups`와
+`groups`를 기록한다. `base`에는 commit·tree, `previous`와 `candidate`에는
+base·tree를 둔다. 각 `groups.<camelGroup>`에는 `decision`,
+`required`, `invalidated`, `commandManifestDigest`, `baseInputDigest`,
+`previousInputDigest`, `candidateInputDigest`, `baseEntryCount`,
+`previousEntryCount`, `candidateEntryCount`가 있어야 한다.
+
+`selectionPaths`와 `selectedGroups`는 항상 current base→candidate에서 이번
+결과에 필요한 회귀군을 계산한다. `invalidationPaths`와
+`invalidatedGroups`는 previous→candidate에서 이전 실행 증거의 입력이
+달라졌는지 계산한다. 따라서 delta의 실행 판정은 다음과 같다.
+
+- `selectedGroups ∩ invalidatedGroups`: 완료한 회귀군을 다시 실행한다.
+- selected이며 입력이 같은 이전 PASS: `retainGroups`로 유지한다.
+- selected이며 아직 완료되지 않은 회귀군: pending을 계속한다.
+- current `selectedGroups`에 없는 회귀군: `dropGroups`와
+  `decision: not-required`로 이전 증거를 버린다.
+- current candidate가 base까지 완전히 revert된 경우: `selectedGroups`가
+  비므로 무거운 회귀군을 다시 실행하지 않는다.
+
+tracked input manifest의 정본은
+`.github/workflows/validate-harness-paths.mjs`의
+`REGRESSION_GROUP_INPUT_RULES`다. 로컬 helper의 group projection과 원격 CI
+selection이 같은 규칙을 소비한다. group projection은 해당 규칙으로 선택한
+전체 tree entry를 path byte 순서로 정렬한 `mode path object-OID` 항목으로
+구성한다. tree diff는 rename 감지를 끄므로 rename의 삭제 경로와 추가 경로를
+모두 변경으로 분류한다. 삭제는 previous projection의 entry가 candidate
+projection에서 사라진 상태로 비교하며 별도 tombstone을 만들지 않는다.
+command manifest digest는 해당 group의 명령과 순서를 결속하며 input
+projection digest에도 포함된다.
+
+`LOCAL_EVIDENCE_CONTROL_PATHS`는 로컬 증거 재사용 알고리즘만 제어하는 helper
+source·test를 별도로 선언한다. 이 경로가 previous→candidate에서 바뀌면 로컬
+`invalidatedGroups`는 네 군 전체지만 current selection은 canonical input
+rules에 따라 owning `commitPrRegression`만 선택한다. 따라서 helper-only
+변경은 교집합인 commit/PR 회귀군만 실행하고 나머지 이전 증거는
+`not-required`로 버린다. 증거를 재사용하지 않는 원격 CI도 같은 canonical
+input rules로 owning `commit-pr-regression`만 실행한다.
+
+완료한 회귀군 PASS는 다음 조건을 모두 만족할 때만 다음 candidate에 유지한다.
+
+- 이전 실행이 통과했고 실제 실행 tree와 결과가 기록돼 있다.
+- strict previous evidence 검증과 candidate base 일치가 통과했다.
+- command manifest digest가 같다.
+- 이전 통과 증거의 input projection digest와 현재 candidate digest가 같다.
+- 환경과 선언된 외부 입력이 같고 미선언 입력이 없다.
+- helper가 `failClosed`가 아니며 현재 selected group을 `retainGroups`로
+  판정했다.
+
+유지한 증거도 원래 실행 tree와 digest를 숨기지 않는다. `verification-tree`는
+그 증거가 현재 candidate에서 유효하다는 조립된 최종 결론이지, 모든 무거운
+회귀군이 그 tree에서 물리적으로 다시 실행됐다는 뜻이 아니다.
+
+### 5.5 실패 수정과 증분 재진입
+
+gate 실패를 발견하면 해당 candidate의 gate 진행을 즉시 중단한다. 새
+회귀군을 더 시작하지 않고 실행 중 명령을 안전하게 취소·종료한 뒤 수정한다.
+수정 경로만 명시적으로 stage해 새 candidate identity를 만들고 exact previous
+evidence를 소비하는 delta JSON과 빠른 공통 gate를 먼저 통과시킨다. D0만의
+추가 수정은 delta review 전에 같은 순서로 정리하므로 pass를 소비하지 않는다.
+그 뒤 필요한 행동 테스트·의미 영향 판정과 delta review를 수행하고 무거운
+회귀군을 재개한다.
+
+- `rerunGroups = selectedGroups ∩ invalidatedGroups`인 완료 회귀군만 다시
+  실행한다.
+- `retainGroups`의 selected unchanged PASS는 유지한다.
+- selected pending은 아직 실행하지 않은 지점부터 계속한다.
+- `dropGroups`의 unselected 결과는 최종 증거에서 제거한다.
+
+strict previous evidence가 거부된 경우 같은 delta 입력을 다시 제출하지
+않는다. replace-disabled current HEAD commit을 current base로 검증하고
+candidate base가 그 commit과 같을 때만 기존 `initial`로 re-root한다. current
+HEAD 또는 candidate base가 unknown·stale이면 중단한다. 검증된 current base가
+이전 evidence의 base보다 우선하며, 새 initial evidence에서는 이전 heavy
+PASS를 모두 폐기하고 current base→candidate selection만 사용한다. raw
+tree·staged delta review chain은 별도이므로 candidate 범위가 넓어지지 않았고
+chain이 완전하면 그대로 유지한다.
+
+다음 변경이나 drift는 영향 범위를 국소화할 수 없으므로 무거운 회귀군 네
+개의 로컬 증거를 모두 invalidated 처리하고, current selection이 전체인
+fail-closed 결과에서는 네 군을 모두 다시 실행한다.
+
+- 공유 하네스 계약, 경로 classifier·`REGRESSION_GROUP_INPUT_RULES` 또는
+  gate manifest 변경
+- 실행 환경 또는 선언된 외부 입력 변경
+- 미선언 입력 발견
+- tree·input projection을 결정할 수 없거나 helper가 `failClosed`인 경우
+
+helper source·test만 바뀐 경우는 `LOCAL_EVIDENCE_CONTROL_PATHS`에 따라 로컬
+네 군을 모두 invalidated 처리하지만 current selection은 owning commit/PR
+회귀군뿐이므로 그 교집합만 재실행하고 나머지는 drop한다.
+
+candidate tree와 input이 같은 환경 전용 실패만 원인과 동일성 근거를 남긴
+새 명령으로 한 번 재실행할 수 있다. 자동 반복하지 않는다. 의미 영향이나
+review chain이 불완전하면 그 판정과 필요한 delta review부터 복구하고,
+범위 확대나 chain 공백·모호함이면 새 전체 리뷰를 수행한다.
+
+commit 직전 최종 candidate에는 현재 빠른 공통 gate, 최초 전체 리뷰부터
+이어진 review chain, current `selectedGroups` 각 회귀군의 새 실행 또는
+유효하게 유지한 PASS가 모두 있어야 하며 pending은 최종 통과해야 한다. 각
+증거에는 evidence JSON, 명령, 종료 상태, 테스트 수, 실제 실행 tree, command
+manifest와 base·previous·candidate input projection digest를 기록한다. 같은
+staged tree를 commit하고 이후 commit tree와 PR head tree가 같을 때 로컬
+증거를 재실행 없이 인계한다. 원격 required CI는 생략하지 않는다.
 
 ## 6. 안전한 스테이징
 

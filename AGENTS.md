@@ -71,14 +71,22 @@ Skill owner는 [개발 하네스 가이드](docs/development/01_harness_guide.md
   tooling-only 비적용을 승인하지 않고 별도 제품 계약 이슈로 차단합니다.
 - clean 독립 worktree에서 검토한 경로만 명시적으로 stage하고 unstaged tracked
   변경과 예상하지 않은 untracked 입력이 없는 cached diff·candidate tree를
-  고정합니다. 독립 리뷰는 작성 컨텍스트와 분리된 읽기 전용 reviewer가 원본
-  요구사항, 같은 cached diff와 실제 행동 테스트·정본 영향 결과로 수행합니다.
-  기대 결론을 주입하지 않고 작성·수정자와 승인 역할을 분리합니다.
-- 같은 snapshot의 발견 사항은 P0~P2, `file:line`, 재현 근거와 필요한 수정을
-  포함해 먼저 합친 뒤 일괄 수정합니다. 수정 뒤에는 필요한 행동 테스트와 정본
-  영향 판정을 갱신하고 새 snapshot을 별도 pass로 검토합니다. review-fix 사이에
-  저장소 고정 게이트 전체를 실행하지 않으며, 최대 3 pass 뒤에도 P0/P1이 남으면
-  blocker로 보고합니다.
+  고정합니다. 고정 직후 빠른 공통 gate를 먼저 실행하고 모두 통과한 같은
+  tree만 독립 리뷰에 넘깁니다. 빠른 공통 gate만으로 발견한 수정은 다시
+  명시적으로 stage하고 gate를 통과시킨 뒤 첫 리뷰를 시작하므로 review pass를
+  소비하지 않습니다. 독립 리뷰는 작성 컨텍스트와 분리된 읽기 전용 reviewer가
+  원본 요구사항, 같은 cached diff와 실제 행동 테스트·정본 영향 결과로
+  수행합니다. 기대 결론을 주입하지 않고 작성·수정자와 승인 역할을
+  분리합니다.
+- 최초 candidate의 발견 사항은 P0~P2, `file:line`, 재현 근거와 필요한 수정을
+  포함해 먼저 합친 뒤 일괄 수정합니다. 수정은 발견 즉시 명시적으로 stage하고
+  빠른 공통 gate를 먼저 통과시킵니다. 그 뒤 필요한 행동 테스트와 정본 영향
+  판정을 갱신하고 이전·현재 tree, 그 사이 staged delta와 현재 전체 cached
+  diff를 별도 pass로 검토합니다. 최초 전체 리뷰와 끊기지 않은 delta review
+  chain이 최종 candidate를 모두 덮으면 최종 review tree로 결속할 수
+  있습니다. 범위·요구사항·보안 경계가 넓어지거나 chain에 공백·모호함이
+  있으면 새 전체 리뷰를 수행합니다. review-fix 사이에는 무거운 회귀군을
+  실행하지 않으며, 최대 3 pass 뒤에도 P0/P1이 남으면 blocker로 보고합니다.
 - 단순 문서는 최소 1명, 계약·validator·workflow 변경은 최소 2명, 분산
   통신·정합성·보안은 전문 관점별 reviewer를 배치합니다. 상세 증거 계약은
   [개발 하네스 가이드](docs/development/01_harness_guide.md)를 따르며, 현재
@@ -87,8 +95,8 @@ Skill owner는 [개발 하네스 가이드](docs/development/01_harness_guide.md
 ## 커밋과 PR
 
 1. 구현 중 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정을 마친 뒤
-   `commit-work-item` 스킬로 candidate staging, 독립 리뷰, 최종 게이트와
-   commit을 이어서 수행합니다.
+   `commit-work-item` 스킬로 candidate staging, 빠른 공통 gate, 독립 리뷰,
+   선택된 무거운 회귀군과 commit을 이어서 수행합니다.
 2. candidate를 만들 때 검토한 경로만 명시적으로 스테이징합니다. `git add .`와
    `git add -A`를 사용하지 않으며 cached diff·candidate tree를 리뷰와 최종
    검증 증거에 결속합니다.
@@ -102,8 +110,10 @@ Skill owner는 [개발 하네스 가이드](docs/development/01_harness_guide.md
    차이와 링크만 남깁니다.
 7. 미완료 조건이 있으면 숨기지 않고 Draft로 열며, 완료된 검증만 통과로
    표시합니다.
-8. candidate tree, 검증 tree, commit tree와 PR head tree가 같고 증거가
-   완전할 때 로컬 게이트를 commit·PR 단계에서 반복하지 않습니다. 원격
+8. 최종 candidate tree, review tree, 검증 tree, commit tree와 PR head tree가
+   결속되고 증거가 완전할 때 로컬 게이트를 commit·PR 단계에서 반복하지
+   않습니다. 검증 tree는 현재 candidate의 빠른 공통 gate와 재실행했거나
+   유효하게 유지한 무거운 회귀군 증거를 합쳐 판정할 수 있습니다. 원격
    required CI는 별도 증거이므로 생략하지 않습니다.
 
 ## 문서와 검증
@@ -112,47 +122,62 @@ Skill owner는 [개발 하네스 가이드](docs/development/01_harness_guide.md
   `update-product-docs` 스킬을 사용합니다.
 - 구현 이슈 작성 전과 독립 리뷰 전에 PRD·Policy·Architecture 의미 영향과
   경로 계약을 확인합니다.
-- 독립 리뷰와 발견 사항의 일괄 수정이 끝나 더 이상 계획된 변경이 없는 staged
-  candidate에서만 다음 고정 게이트 전체를 한 번 실행합니다. 같은 index,
-  working tree, 외부 상태, 공유 cache 또는 자원을 쓰지 않는 읽기 전용·격리
-  명령만 병렬 실행하고, 나머지는 순차 실행한 뒤 모든 결과를 모아 판정합니다.
+- 경로를 명시적으로 stage해 candidate tree를 고정할 때마다 독립 리뷰보다
+  먼저 다음 빠른 공통 gate를 실행합니다. 최초 candidate와 수정 candidate
+  모두 생략할 수 없습니다. 빠른 공통 gate 통과 뒤 tree가 그대로 유지되면 그
+  증거를 최종 증거로 사용하며, 이 gate만의 수정은 review pass를 소비하지
+  않습니다.
 
   ```bash
-  node --check .agents/skills/update-product-docs/scripts/product-contract-ids.mjs
-  node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs
   node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs
-  node --test .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
-  node --check .agents/skills/run-github-work-item/scripts/work-item.mjs
-  node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs
-  node --test .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
   node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs validate
-  node --test .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
-  node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
   node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs --index
   node .agents/skills/open-pull-request/scripts/validate-pr-body.mjs --template .github/PULL_REQUEST_TEMPLATE.md
-  node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
-  node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs
-  node --check .agents/skills/open-pull-request/scripts/finalize-merge.mjs
-  node --test .agents/skills/open-pull-request/scripts/finalize-merge.test.mjs
-  node --check .agents/skills/open-pull-request/scripts/finalize-remote-branch.mjs
-  node --test .agents/skills/open-pull-request/scripts/finalize-remote-branch.test.mjs
-  node --check .agents/skills/open-pull-request/scripts/finalize-local-cleanup.mjs
-  node --test .agents/skills/open-pull-request/scripts/finalize-local-cleanup.test.mjs
-  git diff --check
+  git diff --cached --check
   ```
 
-- 검증 전후 `git write-tree` 결과와 gate input이 같고 unstaged tracked 변경과
-  예상하지 않은 untracked 입력이 없을 때만 통과 증거를 유지합니다. tracked
-  content를 수정하면 기존 행동·리뷰·게이트 증거를 모두 무효화하고 새
-  candidate의 필요한 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시
-  시작합니다.
+- 빠른 공통 gate를 통과한 candidate에는
+  `.agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs`의
+  evidence JSON을 결속합니다. 현재 base→candidate 분류의 `selectedGroups`가
+  아래 무거운 회귀군 중 이번 결과에 필요한 군을 정하고, 독립 리뷰가 끝난
+  같은 tree에서 그 군만 실행합니다. 같은 index, working tree, 외부 상태,
+  공유 cache 또는 자원을 쓰지 않는 읽기 전용·격리 명령만 병렬 실행하고,
+  나머지는 순차 실행한 뒤 결과를 모두 모아 판정합니다.
+
+  - `product-docs-regression`: 제품 계약 ID와 문서 validator 회귀 테스트
+  - `work-item-regression`: 이슈 상태 전이와 MVP bootstrap 회귀 테스트
+  - `commit-pr-regression`: commit path·message·gate evidence와 PR 본문 회귀 테스트
+  - `finalize-regression`: merge·원격 branch·로컬 정리 회귀 테스트
+
+  정확한 명령과 evidence schema는
+  [commit-work-item 계약](.agents/skills/commit-work-item/references/commit-contract.md)이
+  소유합니다.
+
+- gate 실패를 발견하면 해당 candidate의 gate 진행을 즉시 중단합니다. 새
+  명령을 시작하지 않고 실행 중 명령을 안전하게 취소·종료한 뒤 수정하며,
+  의도한 경로만 명시적으로 stage하고 빠른 공통 gate를 먼저 통과시킵니다.
+  필요한 행동 테스트·의미 영향 판정과 delta review가 끝난 뒤 무거운 회귀군을
+  재개합니다.
+- helper의 delta 판정은 현재 base→candidate의 `selectedGroups`와
+  이전→candidate의 `invalidatedGroups`를 분리합니다. 완료한 회귀군은
+  `selectedGroups ∩ invalidatedGroups`만 재실행하고, 선택됐지만 입력이
+  그대로인 PASS는 유지하며 선택된 pending은 계속합니다. 현재 선택되지 않은
+  군은 증거를 버리고 `not-required`로 처리합니다. 변경을 base까지 완전히
+  되돌려 `selectedGroups`가 비면 무거운 회귀군을 다시 실행하지 않습니다.
+- 공유 계약·경로 classifier·입력 manifest, 환경 또는 선언하지 않은
+  입력이 바뀌거나 입력 영향을 확정할 수 없으면 로컬 무거운 회귀군 네 개를
+  모두 무효화합니다. helper 자체 변경도 로컬 증거 판정이 바뀌므로 전체
+  invalidated 처리하지만 current selection과의 교집합인
+  `commit-pr-regression`만 다시 실행하고 나머지는 버립니다. 증거를
+  재사용하지 않는 원격 CI도 owning `commit-pr-regression`만 실행합니다. 각
+  증거에는 실제 실행 tree와 명령·입력 digest를 남기며, 최종 candidate의
+  빠른 공통 gate와 유효한 회귀군 증거가 모두 있어야 검증 tree를
+  확정합니다.
 - tree·input이 같은 환경 전용 실패만 원인과 동일성 근거를 기록한 새 명령으로
   한 번 재실행할 수 있으며 자동 반복하지 않습니다. 같은 tree·input에서 의미
-  영향·독립 리뷰 증거가 불완전하면 그 판정과 새 리뷰부터 복구하고, 최종 gate
-  증거만 불완전하면 exact candidate를 동일한 clean snapshot에 재구성해 고정
-  게이트 전체를 새로 실행합니다. candidate tree나 input이 다르면 모든 로컬
-  증거를 무효화하고 새 candidate의 필요한 빠른 행동 테스트, 영향 판정과 독립
-  리뷰부터 다시 시작합니다.
+  영향·독립 리뷰 증거가 불완전하면 그 판정과 필요한 delta 또는 전체
+  리뷰부터 복구합니다. gate 증거가 불완전하면 exact candidate에서 빠른 공통
+  gate와 helper가 선택한 무거운 회귀군만 새로 실행합니다.
 - 통과한 결정적 검증만으로 의미상 정확성을 단정하지 않습니다. 의미 검토와
   독립 리뷰가 먼저 모순, 누락과 회귀를 확인합니다.
 

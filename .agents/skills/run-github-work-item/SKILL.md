@@ -55,22 +55,37 @@ node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs apply --dry-r
 
 `commit-work-item`은 진입 시 기존 index가 다른 작업을 포함하지 않는지 확인한
 뒤 검토한 경로만 명시적으로 stage한다. unstaged tracked 변경과 예상하지 않은
-untracked 입력이 없는 cached diff·candidate tree를 고정해 작성 컨텍스트와
-분리된 읽기 전용 검토자들에게 같은 snapshot으로 넘긴다. 작성자 자기 검토는
-독립 리뷰가 아니며 작성·수정자와 최종 승인자를 분리한다. 의도한 답이나 예상
-결론을 주입하지 않고 원본 요구사항, cached diff, 행동 테스트와 정본 영향
-결과를 제공하며, 검토자는 P0~P2 발견 사항을 파일 위치와 재현 근거로 보고하고
-직접 수정하지 않는다. 낮은 위험은 최소 1명, 계약·validator·workflow 변경은
-최소 2명, 고위험 변경은 필요한 전문 관점별 검토자를 병렬 배치한다.
+untracked 입력이 없는 cached diff·candidate tree를 고정하고 빠른 공통 gate를
+먼저 통과시킨 뒤 작성 컨텍스트와 분리된 읽기 전용 검토자들에게 같은
+snapshot으로 넘긴다. D0만의 수정은 review 전에 다시 stage·D0하므로 pass를
+소비하지 않는다. 작성자 자기 검토는 독립 리뷰가 아니며 작성·수정자와 최종
+승인자를 분리한다. 의도한 답이나 예상 결론을 주입하지 않고 원본 요구사항,
+cached diff, 행동 테스트와 정본 영향 결과를 제공하며, 검토자는 P0~P2 발견
+사항을 파일 위치와 재현 근거로 보고하고 직접 수정하지 않는다. 낮은 위험은
+최소 1명, 계약·validator·workflow 변경은 최소 2명, 고위험 변경은 필요한 전문
+관점별 검토자를 병렬 배치한다.
 
-같은 snapshot의 발견 사항을 모두 모은 뒤 저장소 고정 게이트 전체를 실행하지
-않고 한 번에 수정한다. 수정하면 필요한 행동 테스트와 정본 영향 판정을
-갱신하고 새 candidate만 별도 패스로 검토한다. 최초 리뷰를 1회로 세어 최대
-3회까지만 review-fix를 반복하며, 3회 뒤에도 P0/P1이 남으면 상태 전이나 승인을
-진행하지 않고 blocker로 보고한다. 더 이상 계획된 수정이 없을 때만 같은
-candidate에서 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다. tracked
-content가 바뀌면 정본 영향·리뷰·게이트 증거를 모두 무효화하고 새 candidate로
-돌아간다. 이 흐름을 위해 새 리뷰 전용 Skill을 만들지 않는다.
+최초 snapshot의 발견 사항을 모두 모은 뒤 저장소 고정 게이트 전체를 실행하지
+않고 한 번에 수정한다. 수정은 즉시 명시적으로 stage하고 빠른 공통 gate를
+먼저 통과시킨 뒤 필요한 행동 테스트와 정본 영향 판정을 갱신한다. 다음 pass는
+이전·현재 tree, staged delta와 현재 전체 cached diff를 함께 검토한다. 최초
+전체 리뷰와 끊기지 않은 delta review chain이 최종 candidate를 덮으면 최종
+review tree로 인정하지만, 범위·요구사항·보안 경계가 넓어지거나 chain에
+공백·모호함이 있으면 새 전체 리뷰가 필요하다. 최초 리뷰를 1회로 세어 최대
+3회까지만 review-fix를 반복하며, 3회 뒤에도 P0/P1이 남으면 상태 전이나
+승인을 진행하지 않고 blocker로 보고한다.
+
+최종 gate 선택과 증거 재사용은 `commit-work-item`이 소유한다. 모든
+candidate에서 빠른 공통 gate를 리뷰 전에 실행하고, 리뷰 뒤에는 현재
+base→candidate에 선택된 무거운 회귀군만 실행한다. gate 중 수정 뒤에는
+stage·D0, 행동 테스트·정본 영향 판정과 delta review를 거쳐
+`selectedGroups ∩ invalidatedGroups`만 다시 실행한다. 선택된 unchanged
+PASS는 유지하고 pending은 계속하며 unselected는 버린다. base까지 완전히
+되돌리면 무거운 회귀군을 실행하지 않는다. 공유 계약·classifier·입력
+manifest, base·환경 또는 선언하지 않은 입력이 바뀌거나 영향을 확정할 수
+없으면 로컬 회귀군 전체를 무효화한다. helper 자체 변경은 로컬 invalidation은
+전체지만 current selection 밖은 버리며 원격 CI는 owning 회귀군만 실행한다.
+이 흐름을 위해 새 리뷰 전용 Skill을 만들지 않는다.
 
 ## 안전 규칙
 

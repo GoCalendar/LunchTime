@@ -20,13 +20,6 @@ export const REGRESSION_GROUPS = Object.freeze([
   "finalizeRegression",
 ]);
 
-const FULL_PATHS = new Set([
-  "AGENTS.md",
-  "CLAUDE.md",
-  "CONTRIBUTING.md",
-  "docs/development/01_harness_guide.md",
-]);
-
 const PRODUCT_DOCS_SCRIPTS =
   ".agents/skills/update-product-docs/scripts/";
 const WORK_ITEM_SCRIPTS = ".agents/skills/run-github-work-item/scripts/";
@@ -34,18 +27,98 @@ const COMMIT_SCRIPTS = ".agents/skills/commit-work-item/scripts/";
 const PULL_REQUEST_SCRIPTS =
   ".agents/skills/open-pull-request/scripts/";
 
-const WORK_ITEM_INPUTS = new Set([
-  ".github/ISSUE_TEMPLATE/work-item.yml",
-  ".github/mvp-work-items.json",
-  ".github/work-management.json",
+export const LOCAL_EVIDENCE_CONTROL_PATHS = Object.freeze([
+  ".agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs",
+  ".agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
 ]);
 
-const COMMIT_INPUTS = new Set([
-  ".gitignore",
-]);
+function inputRule({
+  id,
+  groups = [],
+  full = false,
+  paths = [],
+  prefixes = [],
+}) {
+  return Object.freeze({
+    id,
+    groups: Object.freeze([...groups]),
+    full,
+    paths: Object.freeze([...paths]),
+    prefixes: Object.freeze([...prefixes]),
+  });
+}
 
-const COMMIT_PR_INPUTS = new Set([
-  ".github/PULL_REQUEST_TEMPLATE.md",
+// Ordered, first-match manifest shared by remote CI selection and local
+// per-group input projection. Narrow downstream rules must precede their
+// broader owner prefix.
+export const REGRESSION_GROUP_INPUT_RULES = Object.freeze([
+  inputRule({
+    id: "shared-harness-contract",
+    groups: REGRESSION_GROUPS,
+    full: true,
+    paths: [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "docs/development/01_harness_guide.md",
+    ],
+    prefixes: [".github/workflows/"],
+  }),
+  inputRule({
+    id: "shared-product-contract-parser",
+    groups: REGRESSION_GROUPS,
+    paths: [
+      `${PRODUCT_DOCS_SCRIPTS}product-contract-ids.mjs`,
+      `${PRODUCT_DOCS_SCRIPTS}product-contract-ids.test.mjs`,
+    ],
+  }),
+  inputRule({
+    id: "product-docs-owner",
+    groups: ["productDocsRegression"],
+    prefixes: [PRODUCT_DOCS_SCRIPTS],
+  }),
+  inputRule({
+    id: "work-item-owner-and-live-contract",
+    groups: ["workItemRegression"],
+    paths: [
+      ".agents/skills/run-github-work-item/SKILL.md",
+      ".agents/skills/run-github-work-item/references/issue-contract.md",
+      ".agents/skills/run-github-work-item/agents/openai.yaml",
+      ".github/ISSUE_TEMPLATE/work-item.yml",
+      ".github/mvp-work-items.json",
+      ".github/work-management.json",
+    ],
+    prefixes: [WORK_ITEM_SCRIPTS],
+  }),
+  inputRule({
+    id: "commit-owner",
+    groups: ["commitPrRegression"],
+    paths: [".gitignore"],
+    prefixes: [COMMIT_SCRIPTS],
+  }),
+  inputRule({
+    id: "finalize-owner",
+    groups: ["finalizeRegression"],
+    paths: [
+      `${PULL_REQUEST_SCRIPTS}validate-finalize.mjs`,
+      `${PULL_REQUEST_SCRIPTS}validate-finalize.test.mjs`,
+    ],
+    prefixes: [`${PULL_REQUEST_SCRIPTS}finalize-`],
+  }),
+  inputRule({
+    id: "pull-request-body-shared",
+    groups: ["commitPrRegression", "finalizeRegression"],
+    paths: [
+      ".github/PULL_REQUEST_TEMPLATE.md",
+      `${PULL_REQUEST_SCRIPTS}validate-pr-body.mjs`,
+      `${PULL_REQUEST_SCRIPTS}validate-pr-body.test.mjs`,
+    ],
+  }),
+  inputRule({
+    id: "pull-request-owner-default",
+    groups: ["commitPrRegression", "finalizeRegression"],
+    prefixes: [PULL_REQUEST_SCRIPTS],
+  }),
 ]);
 
 export class HarnessPathError extends Error {
@@ -107,55 +180,25 @@ function isCanonicalRepositoryPath(path) {
   return !segments.some((segment) => segment === "." || segment === "..");
 }
 
-function isFullPath(path) {
+function ruleMatchesPath(rule, path) {
   return (
-    FULL_PATHS.has(path) ||
-    path.startsWith(".github/workflows/")
+    rule.paths.includes(path) ||
+    rule.prefixes.some((prefix) => path.startsWith(prefix))
   );
 }
 
-function selectProductDocsPath(path, groups) {
-  if (!path.startsWith(PRODUCT_DOCS_SCRIPTS)) return false;
-
-  groups.productDocsRegression = true;
-  const script = path.slice(PRODUCT_DOCS_SCRIPTS.length);
-  if (
-    script === "product-contract-ids.mjs" ||
-    script === "product-contract-ids.test.mjs"
-  ) {
-    groups.workItemRegression = true;
-    groups.commitPrRegression = true;
-    groups.finalizeRegression = true;
-  }
-  return true;
+export function regressionInputRuleForPath(path) {
+  if (!isCanonicalRepositoryPath(path)) return null;
+  return (
+    REGRESSION_GROUP_INPUT_RULES.find((rule) =>
+      ruleMatchesPath(rule, path),
+    ) ?? null
+  );
 }
 
-function selectPullRequestPath(path, groups) {
-  if (!path.startsWith(PULL_REQUEST_SCRIPTS)) return false;
-
-  const script = path.slice(PULL_REQUEST_SCRIPTS.length);
-  if (
-    script === "validate-finalize.mjs" ||
-    script === "validate-finalize.test.mjs" ||
-    script.startsWith("finalize-")
-  ) {
-    groups.finalizeRegression = true;
-    return true;
-  }
-
-  if (
-    script === "validate-pr-body.mjs" ||
-    script === "validate-pr-body.test.mjs"
-  ) {
-    groups.commitPrRegression = true;
-    groups.finalizeRegression = true;
-    return true;
-  }
-
-  // A new or renamed script under this owner has no proven narrower boundary.
-  groups.commitPrRegression = true;
-  groups.finalizeRegression = true;
-  return true;
+export function regressionGroupsForPath(path) {
+  const rule = regressionInputRuleForPath(path);
+  return rule ? [...rule.groups] : [];
 }
 
 export function classifyChangedPaths(changedPaths, options = {}) {
@@ -172,35 +215,15 @@ export function classifyChangedPaths(changedPaths, options = {}) {
     return fullClassification(options.reason || "explicit-full", paths);
   }
 
-  if (paths.some(isFullPath)) {
-    return fullClassification("shared-harness-contract", paths);
-  }
-
   const groups = emptyGroups();
   for (const path of paths) {
-    if (selectProductDocsPath(path, groups)) continue;
-
-    if (
-      path.startsWith(WORK_ITEM_SCRIPTS) ||
-      WORK_ITEM_INPUTS.has(path)
-    ) {
-      groups.workItemRegression = true;
-      continue;
+    const rule = regressionInputRuleForPath(path);
+    if (!rule) continue;
+    if (rule.full) {
+      return fullClassification(rule.id, paths);
     }
-
-    if (
-      path.startsWith(COMMIT_SCRIPTS) ||
-      COMMIT_INPUTS.has(path)
-    ) {
-      groups.commitPrRegression = true;
-      continue;
-    }
-
-    if (selectPullRequestPath(path, groups)) continue;
-
-    if (COMMIT_PR_INPUTS.has(path)) {
-      groups.commitPrRegression = true;
-      groups.finalizeRegression = true;
+    for (const group of rule.groups) {
+      groups[group] = true;
     }
   }
 

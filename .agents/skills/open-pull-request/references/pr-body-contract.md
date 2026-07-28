@@ -86,33 +86,42 @@ section은 다음 형태로 감싼다.
 - Draft의 `독립 리뷰`는 실제 상태에 따라 `통과`, `실패` 또는 `미실행`을
   기록한다. 실패·미실행이면 현재 발견 사항이나 blocker, 책임 주체와 재개
   조건을 증거에 사실대로 적는다.
-- Ready의 `독립 리뷰`는 `통과`여야 한다. 증거만으로 검토 snapshot(commit
-  SHA 또는 base...head), 원본 요구사항 위치, raw diff, 테스트 결과,
+- Ready의 `독립 리뷰`는 `통과`여야 한다. 증거만으로 최초 전체 리뷰부터
+  최종 candidate까지 끊기지 않은 delta review chain, 각 review 전에 통과한
+  D0, 원본 요구사항 위치, 각 staged delta와 현재 전체 diff, 테스트 결과,
   검토자 수·전문 관점과 P0~P2 발견·해소 결과를 재구성할 수 있어야 한다.
-- 같은 기존 검증 표의 증거 셀에서 pre-commit candidate 리뷰부터 PR까지의
-  연속 동일성을 `review-base=<40자리 commit OID>`,
+- 같은 기존 검증 표의 증거 셀에서 pre-commit review chain부터 PR까지의
+  연속 결속을 `review-base=<40자리 commit OID>`,
   `review-tree=<40자리 tree OID>`,
   `verification-tree=<40자리 tree OID>`,
   `commit-tree=<40자리 tree OID>`,
   `pr-head-tree=<40자리 tree OID>`로 기록한다. review-base는 검토한 cached
-  diff의 base이고 네 tree는 모두 같아야 하며 새 필수 행이나 템플릿 필드를
-  추가하지 않는다.
+  diff의 base이고 review-tree는 chain이 덮는 최종 candidate다.
+  verification-tree는 그 candidate에서 review 전에 실행한 빠른 공통 gate와
+  실행했거나 유효하게 유지한 무거운 회귀군 증거를 합친 결론이다. 네 tree는
+  모두 같아야 하며 새 필수 행이나 템플릿 필드를 추가하지 않는다.
 - Ready의 snapshot은 `review-head=<40자리 SHA>`를 정확히 한 번 포함하고
   현재 PR head와 완전히 일치해야 한다. 이 commit의 tree가 review tree와
   같다는 위 연속 증거가 있어야 pre-commit 리뷰를 current head에 결속할 수
   있다. 짧은 prefix나 CI 등 다른 용도의 SHA는 review-head를 대신하지 않는다.
   Ready validator와 finalize는 GitHub에서 다시 읽은 exact head에 이 증거를
-  대조하며, head나 tree가 바뀌면 이전 리뷰·로컬 게이트 증거를 재사용하지
-  않는다.
-- candidate tree와 input이 같고 의미 영향·리뷰·게이트 명령과 결과가 완전할
-  때만 commit과 PR 단계에서 로컬 증거를 재사용한다. 의미 영향·독립 리뷰
-  증거가 불완전하면 같은 candidate에서 의미 영향 판정과 새 독립 리뷰를 먼저
-  수행한다. 최종 gate 결과 증거만 불완전하면 동일한 clean recovery
-  worktree에 commit parent 기준 exact cached diff·candidate tree를 재구성해
-  현재 `AGENTS.md` 고정 게이트 전체를 새로 실행한다. clean branch의 빈
-  working diff는 복구 증거가 아니다. tracked content가 바뀌거나 candidate
-  tree·input이 다르면 모든 로컬 증거를 무효화하고 필요한 빠른 행동 테스트,
-  의미 영향 판정과 독립 리뷰부터 다시 시작한다.
+  대조한다. head나 tree가 바뀌면 `commit-work-item`의 이전·현재 base/tree와
+  회귀군별 명령·input projection digest 판정을 거치지 않은 리뷰·gate
+  증거를 재사용하지 않는다.
+- 의미 영향·review chain·gate evidence ledger가 완전할 때만 commit과 PR
+  단계에서 로컬 증거를 재사용한다. 의미 영향이나 review chain이
+  불완전하면 필요한 delta review부터 복구하고, 범위·요구사항·보안 경계
+  확대나 chain 공백·모호함에는 새 전체 리뷰를 수행한다. gate 결과만
+  불완전하면 동일한 clean recovery worktree에 commit parent 기준 exact
+  cached diff·candidate tree를 재구성해 current index·clean 상태에 결속한
+  evidence JSON과 빠른 공통 gate를 먼저 복구한다. current
+  `selectedGroups ∩ invalidatedGroups`만 재실행하고 selected unchanged PASS는
+  유지하며 pending은 계속하고 unselected는 drop한다. base까지 완전히
+  revert하면 무거운 회귀군을 실행하지 않는다. 공유 계약·classifier·입력
+  manifest, base·환경·미선언 입력 변경 또는 영향 불명에는 로컬 무거운
+  회귀군 증거를 전체 invalidated 처리한다. helper 자체 변경도 local
+  invalidation은 전체지만 current selection 밖은 drop하고 원격 CI는 owning
+  회귀군만 실행한다. clean branch의 빈 working diff는 복구 증거가 아니다.
 - 로컬 증거 재사용은 GitHub required CI를 대신하지 않는다. Ready와 finalize는
   현재 PR head의 원격 required CI를 계속 요구한다.
 - Ready의 추적 표에 적은 모든 PRD·Policy ID는 현재 branch의 제품 정본에서
@@ -124,26 +133,29 @@ section은 다음 형태로 감싼다.
   증거로 인정하지 않는다.
 
 독립 리뷰는 이슈별 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정이
-끝난 staged candidate를 저장소 고정 게이트 전체보다 먼저 작성 컨텍스트와
-분리된 읽기 전용 검토자가 확인하는 절차다. 작성자 자기 검토는 독립 리뷰가
-아니며 작성·수정자와 최종 승인자를 분리한다. 의도한 답이나 예상 결론을
-주입하지 않고 원본 요구사항, 같은 cached diff·candidate tree와 행동 테스트
-결과를 입력으로 제공한다. 검토자는 직접 수정하지 않고 P0~P2 발견 사항을 파일
-위치와 재현 근거로 보고한다.
+끝나고 stage·고정·D0를 통과한 최초 candidate를 작성 컨텍스트와 분리된 읽기
+전용 검토자가 확인하는 절차다. 작성자 자기 검토는 독립 리뷰가 아니며
+작성·수정자와 최종 승인자를 분리한다. 의도한 답이나 예상 결론을 주입하지
+않고 원본 요구사항, 같은 cached diff·candidate tree와 행동 테스트 결과를
+입력으로 제공한다. 검토자는 직접 수정하지 않고 P0~P2 발견 사항을 파일 위치와
+재현 근거로 보고한다.
 
 - 낮은 위험의 단순 변경은 최소 1명이 검토한다.
 - 계약·validator·workflow 변경은 최소 2명이 검토한다.
 - 분산 통신·정합성·보안 같은 고위험 변경은 필요한 전문 관점별 검토자를
   병렬 배치한다.
-- 같은 snapshot의 발견 사항을 모두 모아 고정 게이트 전체 없이 일괄
-  수정한다. 행동 테스트와 의미 영향 판정 뒤 새 snapshot을 별도의 독립 리뷰
-  패스에 제공한다.
+- 최초 snapshot의 발견 사항을 모두 모아 무거운 회귀군 전체 없이 일괄
+  수정하고 명시적으로 stage한 뒤 evidence JSON과 D0를 먼저 갱신한다. D0만의
+  수정은 review pass를 소비하지 않는다. 행동 테스트와 의미 영향 판정 뒤
+  이전·현재 tree, staged delta와 현재 전체 diff를 별도 review pass에
+  제공한다. 최초 전체 리뷰와 끊기지 않은 delta review chain이 최종
+  candidate를 덮어야 한다. 범위·요구사항·보안 경계가 넓어지거나 chain에
+  공백·모호함이 있으면 새 전체 리뷰를 수행한다.
 - 최초 리뷰를 1회로 세어 review-fix cycle은 최대 3회다. 3회 뒤에도 P0/P1이
   남으면 Ready 전환과 승인을 중단하고 blocker로 기록한다.
-- 더 이상 계획된 수정이 없는 reviewed candidate에서만 현재 `AGENTS.md` 고정
-  게이트 전체를 한 번 실행한다. 독립된 읽기 전용·격리 명령만 병렬 실행하고
-  공유 index·working tree·외부 상태·cache·자원 명령은 순차 실행해 모두
-  join하며 검증 전후 tree·input이 같아야 한다.
+- 모든 candidate에서 빠른 공통 gate를 review 전에 실행한다. review 뒤에는
+  current `selectedGroups`만 실행하고, 수정 뒤에는 선택·무효화된 완료
+  회귀군만 재실행하며 selected unchanged PASS를 유지하고 pending을 계속한다.
 
 ## 5. 문서 영향
 
