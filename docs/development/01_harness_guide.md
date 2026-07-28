@@ -13,10 +13,10 @@ flowchart TD
     S02 --> S03["STEP 03<br/>start"]
     S03 --> S04["STEP 04<br/>최신 main·branch·worktree"]
     S04 --> S05["STEP 05<br/>행동 시나리오·검증 계획"]
-    S05 --> S06["STEP 06<br/>구현·테스트"]
-    S06 --> S07["STEP 07<br/>제품 문서 영향"]
-    S07 --> S08["STEP 08<br/>독립 리뷰"]
-    S08 --> S09["STEP 09<br/>명시적 staging·원자적 commit"]
+    S05 --> S06["STEP 06<br/>구현·빠른 행동 테스트"]
+    S06 --> S07["STEP 07<br/>정본 의미 영향 guard"]
+    S07 --> S08["STEP 08<br/>candidate·리뷰·최종 게이트"]
+    S08 --> S09["STEP 09<br/>원자적 commit"]
     S09 --> S10["STEP 10<br/>PR·CI"]
     S10 --> S11["STEP 11<br/>squash merge·complete"]
 ```
@@ -37,9 +37,9 @@ flowchart TD
 |---|---|---|---|
 | 새 이슈 작성·감사 | 승인된 PRD·Policy·결정, 이슈 양식 | [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md)의 이슈 작성·`create` | 검증된 이슈·Project 등록 상태를 인계한다. 이 on-demand 이슈 생성은 아래 11단계 밖의 준비 작업이다. |
 | 기존 이슈 구현·재개 | 이슈 본문, 정본 ID, 기본 의존 관계, 허용·금지 경로 | `run-github-work-item check`·`start` 뒤 STEP 01~09 소유 Skill | 검증된 commit을 PR 단계에 인계한다. |
-| 제품 문서 작성·변경 | 승인된 결정, PRD·Policy 인덱스, 관련 이슈 경로 계약 | [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 문서 영향 판정과 planned ID 계약 결과를 구현 단계에 인계한다. |
-| commit 작성 | 이슈 범위, raw diff, 테스트·리뷰·문서 영향 증거 | [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) | push하지 않은 원자적 commit을 인계한다. |
-| PR 생성·갱신만 | clean issue branch, PR 본문 계약, 검증 증거 | [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md)의 PR 모드 | PR 생성·갱신과 재조회에서 멈추고 병합하지 않는다. |
+| 제품 문서 작성·변경 | 승인된 결정, PRD·Policy·Architecture 인덱스, 관련 이슈 경로 계약 | [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 정본 의미 영향 판정과 planned ID 계약 결과를 리뷰 단계에 인계한다. |
+| commit 작성 | 이슈 범위, cached diff, candidate tree, 리뷰·최종 게이트·정본 영향 증거 | [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) | 동일한 tree의 검증 증거와 push하지 않은 원자적 commit을 인계한다. |
+| PR 생성·갱신만 | clean issue branch, PR 본문 계약, review·verification·commit tree 증거 | [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md)의 PR 모드 | 동일한 PR head tree의 로컬 증거를 인계하고 PR 생성·갱신과 재조회에서 멈추며 병합하지 않는다. |
 | 작업 완료·병합 | Ready PR, 현재 head·CI·review snapshot, 명시적인 완료 요청 | [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md)의 finalize 모드와 [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md)의 `complete` | 한 번의 squash merge·원격 branch 삭제·완료 전이 뒤 안전한 로컬 정리 결과를 인계한다. |
 | 실패·부분 응답 복구 | 마지막 성공 단계와 현재 GitHub·Git 상태 | 쓰기를 소유한 Skill의 재조회·복구 계약 | 현재 상태를 재조회하고 중복 쓰기 없이 새로 실행할 한 단계만 인계한다. |
 
@@ -65,9 +65,9 @@ flowchart TD
 | 구성요소 | 이 흐름에서 맡는 책임 |
 |---|---|
 | [`run-github-work-item`](../../.agents/skills/run-github-work-item/SKILL.md) | on-demand 이슈 작성·`create`, 이슈 계약 확인, `check`·`start`, 병합 뒤 `complete`, Project·레이블·담당자 상태 일치 |
-| [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 구현 전후 PRD·Policy·제품 정의 영향과 정본 충돌 확인 |
-| [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) | 범위·검증·문서 영향을 대조한 explicit staging과 원자적 commit |
-| [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md) | 전체 branch 검증, push, Draft·Ready PR 생성·재확인, 명시적 완료 요청의 exact-head finalize |
+| [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md) | 독립 리뷰 전 PRD·Policy·Architecture·제품 정의 의미 영향과 정본 충돌 확인 |
+| [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) | explicit staging, candidate tree 결속, 독립 리뷰 뒤 최종 게이트 1회와 원자적 commit |
+| [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md) | 동일한 commit·PR head tree의 로컬 증거 인계, push, Draft·Ready PR 생성·재확인, 명시적 완료 요청의 exact-head finalize |
 | [MVP 작업 이슈 양식](../../.github/ISSUE_TEMPLATE/work-item.yml) | 11개 기존 본문 구역과 행동 시나리오를 담는 `완료 조건` |
 | [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md) | 다섯 H2 안에서 변경 결과·추적성·검증·문서 영향 인계 |
 | [MVP Project](https://github.com/orgs/GoCalendar/projects/1) · [보드](https://github.com/orgs/GoCalendar/projects/1/views/2) | `Todo`·`In Progress`·`Done` 작업 상태 관측 |
@@ -78,6 +78,28 @@ flowchart TD
 명령 인자, 이슈 본문 구조와 GitHub 전이의 상세 정본은 각 Skill과 참조 계약에
 둔다. 이 가이드와 세부 계약이 어긋나면 한쪽을 우회하지 말고 같은 변경에서
 정렬한다.
+
+## 최종 snapshot 검증 순서
+
+| 순서 | 단계 | 필수 계약 |
+|---|---|---|
+| 1 | 빠른 행동 검증 | 구현 중에는 이슈별 행동 테스트만 빠르게 반복하며 저장소 고정 게이트 전체를 실행하지 않는다. |
+| 2 | 정본 의미 영향 | 독립 리뷰 전에 PRD·Policy·Architecture 의미 영향과 이슈 경로를 판정하고 필요한 정본의 누락·충돌·금지 경로가 있으면 중단한다. |
+| 3 | candidate 고정 | clean 독립 worktree에서 검토한 경로만 명시적으로 stage하고 cached diff·candidate tree를 고정하며 unstaged tracked 변경과 예상하지 않은 untracked 입력이 없어야 한다. |
+| 4 | 독립 리뷰 | 위험도별 reviewer가 같은 cached diff·candidate tree를 병렬 검토하고 발견 사항을 합쳐 일괄 수정하며, 수정하면 행동 테스트·정본 의미 영향 판정 뒤 새 snapshot만 다시 리뷰한다. |
+| 5 | 최종 저장소 게이트 | 계획된 수정이 없을 때 같은 filesystem에서 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다. 독립된 읽기 전용·격리 명령만 병렬 실행하고 같은 index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은 순차 실행한 뒤 모든 결과를 join한다. 검증 전후 candidate tree와 gate input은 같아야 한다. |
+| 6 | commit | candidate tree와 commit tree가 같고 증거가 완전하면 로컬 게이트를 반복하지 않고 기존 증거를 인계한다. |
+| 7 | PR·필수 CI | commit tree와 PR head tree가 같을 때 로컬 증거를 재사용하되 원격 required CI는 생략하지 않는다. |
+
+## 실패와 증거 무효화
+
+| 상황 | 기존 증거 | 재진입 |
+|---|---|---|
+| tracked content 변경 | review·gate 증거 모두 무효 | 새 candidate에서 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정 뒤 독립 리뷰부터 다시 시작한다. |
+| 환경 전용 실패·동일 tree·input | review 증거 유지, 실패 gate 미완료 | 원인과 동일 tree·input 근거를 기록하고 새 명령을 한 번만 실행한다. 자동 반복하지 않는다. |
+| 의미 영향·리뷰 증거 불완전·동일 tree·input | review·gate 증거 재사용 거부 | 같은 candidate·input에서 PRD·Policy·Architecture 의미 영향 판정과 새 독립 리뷰를 수행한 뒤 최종 게이트로 진행한다. |
+| 최종 gate 증거 불완전·동일 tree·input | gate 증거 재사용 거부 | exact candidate·input을 동일한 clean snapshot에 재구성하고 현재 `AGENTS.md` 고정 게이트 전체를 새로 실행한다. |
+| candidate tree·input 불일치 | review·gate 증거 모두 무효 | 다른 tree나 input에 gate만 실행하지 않고 새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다. |
 
 ## STEP 01. 이슈와 제품 정본 확인
 
@@ -129,55 +151,55 @@ flowchart TD
 
 - **대표 실패·중단 조건:** 구현 세부사항만 검사하거나 error·recovery path가 없거나 실제 시간·무한 재시도·flaky rerun에 의존하거나 제품 결과를 이슈에서 새로 정한다.
 
-## STEP 06. 구현과 테스트
+## STEP 06. 구현과 빠른 행동 테스트
 
-- **목적:** 실패하는 행동 증거에서 시작해 이슈 범위 안의 최소 구현으로 계약을 만족시킨다.
+- **목적:** 실패하는 행동 증거에서 시작해 이슈 범위 안의 최소 구현으로 계약을 만족시키되 바뀔 candidate에 저장소 고정 게이트 전체를 반복하지 않는다.
 
-- **핵심 입력:** STEP 05의 시나리오, 허용 경로, 기존 코드·테스트 관례, fake clock·fake transport와 결정적 fixture다.
+- **핵심 입력:** STEP 05의 시나리오, 허용 경로, 기존 코드·테스트 관례, fake clock·fake transport, 결정적 fixture와 이슈별 빠른 행동 테스트다.
 
-- **완료 조건:** 관련 수용·행동 테스트와 happy·error·recovery 경로가 통과하고 리팩터링 뒤에도 전체 관련 회귀 테스트가 재현 가능하게 통과한다.
+- **완료 조건:** 관련 수용·행동 테스트와 happy·error·recovery 경로가 통과하고 리팩터링 뒤에도 필요한 국소 회귀 테스트가 재현 가능하게 통과한다. 저장소 고정 게이트 전체는 STEP 08의 최종 snapshot까지 미룬다.
 
-- **대표 실패·중단 조건:** 금지 경로 침범, 정본과 다른 동작, 테스트 순서·공유 상태 의존, 임의 sleep, 실패를 숨기는 반복 실행 또는 범위를 넓혀야만 통과하는 구현이다.
+- **대표 실패·중단 조건:** 금지 경로 침범, 정본과 다른 동작, 테스트 순서·공유 상태 의존, 임의 sleep, 실패를 숨기는 반복 실행, 리뷰 전에 전수 게이트를 반복하거나 범위를 넓혀야만 통과하는 구현이다.
 
-## STEP 07. 제품 문서 영향 확인
+## STEP 07. 정본 의미 영향과 경로 guard
 
-- **목적:** 구현이 사용자 결과나 상태·권한·실패·복구·보존·보안 계약을 바꾸는지 commit 전에 판정한다.
+- **목적:** 구현이 사용자 결과나 상태·권한·실패·복구·보존·보안 또는 앱 아키텍처 계약을 바꾸는지 독립 리뷰 전에 판정한다.
 
-- **핵심 입력:** 전체 raw diff, 이슈의 기존·planned 추적 ID와 변경 허용 경로, [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md)의 문서 영향·planned ID 계약이다.
+- **핵심 입력:** 전체 raw diff, 이슈의 기존·planned 추적 ID와 변경 허용·금지 경로, PRD·Policy·Architecture 정본, [`update-product-docs`](../../.agents/skills/update-product-docs/SKILL.md)의 의미 영향·planned ID 계약이다.
 
-- **완료 조건:** 영향을 받는 정본과 planned ID 계약을 같은 변경에서 충족했거나, 제품 동작이 바뀌지 않는 구체적인 근거를 기록했다.
+- **완료 조건:** 영향을 받는 정본과 planned ID 계약을 같은 변경에서 충족했거나, PRD·Policy·Architecture 계약이 바뀌지 않는 구체적인 근거를 기록했다.
 
-- **대표 실패·중단 조건:** 정본 갱신이 허용 경로 밖이거나 Ready 전에도 planned ID 계약을 충족하지 못했거나 정본 충돌·미결정 제품 선택이 있거나 validator 통과만으로 의미상 정확성을 단정한다.
+- **대표 실패·중단 조건:** 필요한 정본 갱신이 누락되거나 허용 경로 밖·변경 금지 경로에 있거나 Ready 전에도 planned ID 계약을 충족하지 못했거나 정본 충돌·미결정 제품 선택이 있다. tooling-only 범위를 넓히지 말고 별도 제품 계약 이슈로 차단한 뒤 그 정본 변경이 끝난 새 기준에서 다시 판정한다.
 
-## STEP 08. 독립 리뷰
+## STEP 08. Candidate 고정, 독립 리뷰와 최종 게이트
 
-- **목적:** 작성자의 자기 검토와 분리된 읽기 전용 관점에서 요구사항 누락·회귀·위험을 찾는다.
+- **목적:** 같은 staged candidate를 작성자의 자기 검토와 분리해 검토하고 더 이상 계획된 수정이 없을 때만 저장소 고정 게이트 전체를 한 번 실행한다.
 
-- **핵심 입력:** 원본 이슈·PRD·Policy, answer injection이 없는 review prompt, frozen raw diff, 실제 테스트 결과와 아래 위험 등급별 reviewer 구성이다.
+- **핵심 입력:** 원본 이슈·PRD·Policy·Architecture, [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md), answer injection이 없는 review prompt, clean 독립 worktree의 cached diff·candidate tree, 실제 행동 테스트·정본 의미 영향 결과, 아래 위험 등급별 reviewer 구성과 현재 `AGENTS.md`의 고정 게이트다.
 
-- **완료 조건:** P0~P2 결과가 `file:line`, 재현·근거와 필요한 수정으로 기록되고, 수정했다면 writer와 분리된 reviewer가 새 snapshot을 별도 pass로 다시 확인한다.
+- **완료 조건:** 검토한 경로만 명시적으로 stage되고 unstaged tracked 변경과 예상하지 않은 untracked 입력이 없다. 같은 candidate의 reviewer 결과를 합쳐 일괄 수정하며, 수정했다면 행동 테스트·영향 판정과 새 snapshot 리뷰를 거친다. 계획된 수정이 없는 candidate에서 독립·격리 가능한 게이트만 병렬 실행하고 공유 상태·자원 게이트를 순차 실행해 모두 join한 뒤, 전후 tree·input이 같은 전체 통과 증거를 남긴다.
 
-- **대표 실패·중단 조건:** 작성 컨텍스트의 “문제 없음”을 승인으로 사용하거나 reviewer가 수정하거나 기대 답을 미리 주입하거나 세 번째 pass 뒤에도 P0/P1이 남는다.
+- **대표 실패·중단 조건:** 작성 컨텍스트의 “문제 없음”을 승인으로 사용하거나 reviewer가 수정하거나 기대 답을 미리 주입하거나 세 번째 pass 뒤에도 P0/P1이 남는다. tracked content가 바뀌거나 candidate tree·input이 달라지면 review·gate 증거를 모두 폐기하며, 동일 tree·input의 환경 실패만 원인·동일성 근거를 남기고 새 명령을 한 번 실행한다.
 
-## STEP 09. 명시적 staging과 원자적 commit
+## STEP 09. Snapshot 결속과 원자적 commit
 
-- **목적:** 검증된 이슈 결과 하나만 index에 올리고 독립적으로 되돌릴 수 있는 commit으로 남긴다.
+- **목적:** 검토·검증된 staged candidate 하나를 동일한 tree의 독립적으로 되돌릴 수 있는 commit으로 남긴다.
 
-- **핵심 입력:** 검토한 개별 경로, 전체 diff·테스트·독립 리뷰·문서 영향 증거와 [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) 계약이다.
+- **핵심 입력:** 검토한 cached diff, candidate tree, 검증 filesystem과 전후 input, 행동 테스트·정본 영향·독립 리뷰·최종 게이트 증거와 [`commit-work-item`](../../.agents/skills/commit-work-item/SKILL.md) 계약이다.
 
-- **완료 조건:** `git add -- <개별 파일>...`로만 staging하고 cached diff·공백·메시지·신원·hook을 검증한 원자적 commit 하나가 만들어지며 push하지 않는다.
+- **완료 조건:** candidate tree와 commit tree가 같고 cached diff·공백·메시지·신원·hook을 검증한 원자적 commit 하나가 만들어진다. 같은 tree의 완전한 로컬 게이트 증거는 반복 실행하지 않고 인계하며 push하지 않는다.
 
-- **대표 실패·중단 조건:** 기존 staged 변경, 범위 밖·사용자 소유 파일, `git add .`·`git add -A`·glob·directory staging, 실패한 hook, 자동 amend·reset이 필요하다.
+- **대표 실패·중단 조건:** candidate와 다른 기존 staged·unstaged 변경, 범위 밖·사용자 소유 파일, `git add .`·`git add -A`·glob·directory staging, 불완전한 증거, tree 불일치, 실패한 hook, 자동 amend·reset이 필요하다.
 
 ## STEP 10. PR 작성과 CI
 
 - **목적:** 전체 branch 결과를 다음 작업자가 재구성할 수 있는 Draft 또는 Ready PR로 게시하고 원격 게이트를 확인하며 PR 생성·갱신만 요청한 경우 여기서 멈춘다.
 
-- **핵심 입력:** commit된 clean branch, [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md), [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md), base `main`, required check `validate`·`app-test`·`pr-metadata`다.
+- **핵심 입력:** commit된 clean branch, review·verification·commit tree 결속 증거, [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md), [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md), base `main`, required check `validate`·`app-test`·`pr-metadata`다.
 
-- **완료 조건:** `Closes #N`, 다섯 H2, 실제 추적·문서 영향·검증 증거와 정확히 하나의 `독립 리뷰` 행을 가진 PR이 생성·재조회되고, Ready이면 리뷰 증거가 현재 head를 가리키며 모든 행과 최신 `main` 기준 required check `validate`·`app-test`·`pr-metadata`가 통과한다.
+- **완료 조건:** `Closes #N`, 다섯 H2, 실제 추적·문서 영향·검증 증거와 정확히 하나의 `독립 리뷰` 행을 가진 PR이 생성·재조회된다. Ready이면 review·verification·commit·PR head tree가 같고 리뷰 증거가 현재 head를 가리키며, 로컬 게이트를 반복하지 않아도 최신 `main` 기준 required check `validate`·`app-test`·`pr-metadata`는 모두 통과한다.
 
-- **대표 실패·중단 조건:** dirty·뒤처진 branch, 중복 PR, 미실행·실패·결정 필요를 숨긴 Ready, stale review snapshot, CI 실패 또는 생성 뒤 재조회 불일치이며 PR-only 요청을 임의로 finalize하지 않는다.
+- **대표 실패·중단 조건:** dirty·뒤처진 branch, 중복 PR, 불완전한 로컬 증거, tree 불일치, 미실행·실패·결정 필요를 숨긴 Ready, stale review snapshot, CI 실패 또는 생성 뒤 재조회 불일치이며 PR-only 요청을 임의로 finalize하지 않는다.
 
 ## STEP 11. Squash merge와 `complete`
 
@@ -199,9 +221,10 @@ flowchart TD
   수정하지 않고 발견 사항만 보고한다.
 - **Approver:** 새 snapshot의 요구사항 충족 여부를 판정하며 해당 snapshot을
   작성·수정한 역할과 분리한다.
-- Reviewer에게 원본 요구사항, 관련 정본, raw diff, 재실행 가능한 테스트 명령과
-  실제 결과를 제공한다. 요약만 제공하거나 “문제 없음으로 결론 내라” 같은 예상
-  답을 주입하지 않는다.
+- Reviewer에게 원본 요구사항, 관련 PRD·Policy·Architecture 정본, 같은 cached
+  diff·candidate tree, 재실행 가능한 행동 테스트 명령과 실제 의미 영향 결과를
+  제공한다. 요약만 제공하거나 “문제 없음으로 결론 내라” 같은 예상 답을
+  주입하지 않는다.
 
 ### 발견 사항과 반복 한도
 
@@ -209,11 +232,14 @@ flowchart TD
 수정을 포함한다. 발견 사항이 없으면 검토한 snapshot과 관점을 명시해
 `P0~P2 없음`으로 보고한다.
 
-Writer가 수정한 뒤에는 이전 판정을 재사용하지 않고 frozen raw diff와 새 테스트
-결과로 별도 review pass를 실행한다. 같은 reviewer가 다시 보더라도 계속 읽기
-전용이어야 하며 writer 역할을 겸하지 않는다. 최초 검토를 포함해 최대 3 pass만
-허용하고, 세 번째 pass 뒤에도 P0/P1이 남으면 무한 review-fix를 중단해 blocker로
-보고한다.
+같은 candidate를 보는 reviewer는 가능하면 병렬로 시작하고 모두 끝난 뒤
+발견 사항을 합류시킨다. Writer는 합쳐진 발견 사항을 한 번에 수정하며 그
+사이에 저장소 고정 게이트 전체를 실행하지 않는다. 수정 뒤에는 이전 판정을
+재사용하지 않고 행동 테스트와 정본 의미 영향 판정을 갱신한 cached
+diff·candidate tree로 별도 review pass를 실행한다. 같은 reviewer가 다시
+보더라도 계속 읽기 전용이어야 하며 writer 역할을 겸하지 않는다. 최초 검토를
+포함해 최대 3 pass만 허용하고, 세 번째 pass 뒤에도 P0/P1이 남으면 무한
+review-fix를 중단해 blocker로 보고한다.
 
 | 변경 위험 | 최소 독립 리뷰 |
 |---|---|

@@ -27,11 +27,16 @@
 3. 사용할 짧은 수명 브랜치를 정하고 `run-github-work-item start`로 선점합니다.
 4. 선점 성공 뒤 `origin/main`에서 독립 작업 트리와 브랜치를 만듭니다.
 5. 이슈 `완료 조건`에서 행동 시나리오와 검증 계획을 정리합니다.
-6. 실패 테스트에서 시작해 구현하고 관련 회귀 테스트를 통과합니다.
-7. `update-product-docs`로 제품 문서 영향을 확인합니다.
-8. 작성 컨텍스트와 분리된 읽기 전용 독립 리뷰를 통과합니다.
-9. `commit-work-item`으로 의도한 경로만 stage해 원자적으로 커밋합니다.
-10. `open-pull-request`로 검증된 본문을 만들고 PR과 필수 CI를 통과합니다.
+6. 실패 테스트에서 시작해 구현하고 이슈별 빠른 행동 테스트를 통과합니다.
+7. `update-product-docs`로 PRD·Policy·Architecture 의미 영향과 경로 계약을
+   독립 리뷰 전에 확인합니다.
+8. `commit-work-item`으로 의도한 경로만 stage한 candidate tree를 읽기 전용
+   독립 리뷰에 넘기고 발견 사항을 일괄 수정합니다. 계획된 수정이 없는 같은
+   snapshot에서 저장소 고정 게이트 전체를 한 번 통과합니다.
+9. 같은 Skill이 검토·검증된 candidate와 같은 tree의 원자적 commit을
+   만듭니다.
+10. `open-pull-request`로 같은 PR head tree의 로컬 증거를 인계한 본문을
+    만들고 별도의 필수 CI를 통과합니다.
     PR 생성·갱신만 요청받았다면 여기서 멈춥니다.
 11. 완료·병합 요청에서는 같은 Skill이 current head·독립 리뷰·필수 CI와
     same-repository 경계를 다시 검증합니다. exact-head squash merge 한 번,
@@ -95,7 +100,7 @@ work/issue-17-menu-ack
 행동 시나리오(happy·error·recovery):
 검증 명령과 증거:
 독립 리뷰 관점·인원:
-제품 문서 영향:
+PRD·Policy·Architecture 의미 영향:
 병렬 작업 충돌 가능성:
 ```
 
@@ -111,13 +116,25 @@ planned ID 계약을 따릅니다.
 관찰 가능한 조건·행동·결과와 적용 가능한 추적 ID를 도출합니다. tooling-only
 비적용은 [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)의
 이슈 계약을 따릅니다. 모든 단위 테스트에 Gherkin을 강제하지 않으며 결정적인
-단위·구성요소·통합·계약 테스트를 선택합니다. 상세 축과 흐름은
+단위·구성요소·통합·계약 테스트를 선택합니다. 구현 중에는 이슈별 빠른 행동
+테스트만 반복하고 저장소 고정 게이트 전체는 리뷰 뒤 최종 snapshot까지
+미룹니다. 상세 축과 흐름은
 [BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)을 따릅니다.
 
+독립 리뷰 전에 전체 diff와 변경 경로를 PRD·Policy·Architecture 정본에
+대조합니다. 필요한 정본 갱신이 누락됐거나 금지 경로에 있으면 commit과 PR을
+중단하고, tooling-only 이슈 범위를 넓히지 않은 채 별도 제품 계약 이슈가
+완료된 새 기준에서 다시 판정합니다.
+
 독립 리뷰는 작성 컨텍스트와 분리된 읽기 전용 reviewer에게 원본 요구사항, raw
-diff와 실제 테스트 결과를 제공해 수행합니다. 기대 답을 주입하지 않고
-작성·수정자와 승인 역할을 분리합니다. P0~P2에는 `file:line`과 재현 근거를
-남기고, 수정 뒤 새 snapshot을 별도 pass로 확인합니다.
+diff와 실제 행동 테스트·정본 영향 결과를 제공해 수행합니다. clean 독립
+worktree에서 검토한 경로만 명시적으로 stage하고 unstaged tracked 변경과
+예상하지 않은 untracked 입력이 없는 cached diff·candidate tree를 모든
+reviewer에게 동일하게 제공합니다. 기대 답을 주입하지 않고 작성·수정자와 승인
+역할을 분리합니다. 같은 snapshot의 P0~P2에는 `file:line`과 재현 근거를
+남기며 발견 사항을 모아 일괄 수정합니다. 수정 뒤 필요한 행동 테스트와 정본
+영향 판정을 갱신하고 새 snapshot을 별도 pass로 확인하되, review-fix 사이에는
+저장소 고정 게이트 전체를 실행하지 않습니다.
 
 - 단순 문서·국소 변경은 최소 1명, 계약·validator·workflow 변경은 최소 2명,
   분산 통신·정합성·보안은 전문 관점별 reviewer를 사용합니다.
@@ -127,6 +144,19 @@ diff와 실제 테스트 결과를 제공해 수행합니다. 기대 답을 주�
   기록합니다. Ready PR에서는 이 행이 통과해야 합니다.
 - 현재 계약에는 기존 네 Skill이면 충분하며 새 리뷰 전용 Skill을 추가하지
   않습니다.
+- 더 이상 계획된 수정이 없으면 같은 filesystem에서 현재 `AGENTS.md`의 고정
+  게이트 전체를 한 번 실행합니다. 서로 독립된 읽기 전용·격리 명령만 병렬로
+  실행하고 같은 index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은
+  순차 실행한 뒤 모든 결과를 모읍니다.
+- 검증 전후 candidate tree와 input이 같아야 합니다. tracked content가
+  바뀌면 행동·리뷰·게이트 증거를 모두 폐기하고 필요한 빠른 행동 테스트, 의미
+  영향 판정과 새 독립 리뷰부터 시작합니다. 동일 tree·input의 환경 전용 실패는
+  원인과 동일성 근거를 기록한 새 명령 한 번만 허용하며 자동 반복하지
+  않습니다. 의미 영향·리뷰 증거가
+  불완전하면 같은 candidate·input에서 그 판정과 새 리뷰부터 복구하고, 최종
+  gate 증거만 불완전하면 exact candidate의 고정 게이트 전체를 새로
+  실행합니다. candidate tree나 input이 다르면 모든 로컬 증거를 무효화하고
+  필요한 빠른 행동 테스트, 영향 판정과 새 독립 리뷰부터 다시 시작합니다.
 
 ## 6. 커밋 컨벤션
 
@@ -134,7 +164,8 @@ diff와 실제 테스트 결과를 제공해 수행합니다. 기대 답을 주�
 [`commit-work-item` 계약](.agents/skills/commit-work-item/references/commit-contract.md)입니다.
 
 - 하나의 커밋에는 하나의 설명 가능한 목적만 담습니다.
-- `git add .`, `git add -A` 대신 검토한 경로를 명시적으로 stage합니다.
+- `git add .`, `git add -A` 대신 검토한 경로를 명시적으로 stage하고 cached
+  diff·candidate tree를 리뷰와 최종 검증에 결속합니다.
 - 사용자 소유 파일, 로컬 설정, 인증 정보와 작업 범위 밖 변경을 포함하지
   않습니다.
 - 제목은 다음 형식을 기본으로 사용합니다.
@@ -148,6 +179,8 @@ diff와 실제 테스트 결과를 제공해 수행합니다. 기대 답을 주�
   사용할 수 있습니다.
 - 커밋은 push하지 않습니다. 원격 게시와 풀 리퀘스트 생성은
   `open-pull-request` 단계에서 수행합니다.
+- candidate tree와 commit tree가 같고 최종 게이트 증거가 완전하면 같은 로컬
+  게이트를 커밋 단계에서 반복하지 않습니다.
 
 ## 7. 풀 리퀘스트 컨벤션
 
@@ -166,6 +199,8 @@ diff와 실제 테스트 결과를 제공해 수행합니다. 기대 답을 주�
 - 검증은 자기 선언 체크박스가 아니라 대상, 명령·확인, 실제 결과와 증거로
   기록합니다.
 - `독립 리뷰` 검증 행은 정확히 하나 두며 Ready에는 통과한 증거만 허용합니다.
+- review tree, verification tree, commit tree와 PR head tree가 모두 같을
+  때만 로컬 검증 증거를 재사용합니다. 원격 required CI는 생략하지 않습니다.
 - 미완료 작업을 숨기지 않습니다. 완료 조건이 남아 있으면 Draft로 열고 남은
   조건을 명시합니다.
 - 인증 정보, 내부 네트워크 식별자, 개인 데이터와 로컬 절대 경로를 본문에

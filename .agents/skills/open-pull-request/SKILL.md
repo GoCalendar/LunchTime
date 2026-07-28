@@ -69,6 +69,10 @@ git diff --check origin/main...HEAD
 
 커밋 범위에는 `commit-work-item`의 메시지 validator를 실행한다. 브랜치가
 원격 `main`보다 뒤처졌거나 충돌하면 자동 rebase하지 않고 중단한다.
+`commit-work-item`이 인계한 base OID, cached diff digest, review tree,
+verification tree와 commit tree 증거를 읽고, 현재 `HEAD^{tree}`가 그
+candidate tree와 같은지 확인한다. 동일하고 증거가 완전하면 로컬 고정
+게이트를 다시 실행하지 않는다.
 
 ### `merged-recovery`
 
@@ -111,11 +115,24 @@ issue worktree가 이미 없으면 clean `main` worktree에서 재개한다.
 후보가 둘 이상이거나 다른 브랜치가 같은 이슈를 닫고 있으면 중단한다. 닫힌
 브랜치를 새 작업에 재사용하지 않는다.
 
-`update-product-docs`로 PRD·정책·제품 정의 영향을 판정한다. 정본끼리
-충돌하거나 제품 결정이 없으면 Ready PR을 만들지 않는다. Ready validator는
-추적 표의 모든 PRD·Policy ID가 현재 branch의 `docs/prd/`,
-`docs/policies/`에서 FR·AC·Policy visible heading 또는 PRD 기술 스파이크
-표의 첫 셀로 실제 정의되어 있는지도 확인한다.
+현재 commit tree와 같은 candidate에 결속된 `update-product-docs`의
+PRD·Policy·Architecture·제품 정의 의미 영향 판정을 확인한다. tree나 입력이
+다르면 기존 행동·판정·리뷰·게이트 증거를 재사용하지 않고 새 candidate의
+필요한 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰로 돌아간다. 같은 clean
+tree·input이어도 의미 영향·독립 리뷰 증거가 불완전하면 같은 candidate에서
+의미 영향 판정과 새 독립 리뷰를 수행한 뒤 최종 게이트로 진행한다. 최종 gate
+결과 증거만 불완전하면 commit parent를
+기준으로 한 별도 clean recovery worktree에 exact cached diff·candidate tree를
+재구성하고 digest·tree 동일성을 확인한 뒤 현재 `AGENTS.md` 고정 게이트 전체를
+한 번 새로 실행한다. clean branch에서 빈 working diff만 검사해 복구 증거로
+삼지 않는다. 정본끼리 충돌하거나 제품 결정이 없으면 Ready PR을 만들지
+않는다. Ready validator는 추적 표의 모든 PRD·Policy ID가 현재 branch의
+`docs/prd/`, `docs/policies/`에서 FR·AC·Policy visible heading 또는 PRD
+기술 스파이크 표의 첫 셀로 실제 정의되어 있는지도 확인한다.
+
+로컬 게이트의 환경 전용 실패가 남아 있지만 tree·input이 같으면 실패 원인과
+동일성 근거를 기록한 새 명령 한 번만 허용한다. tracked content를 고치거나
+자동 반복해 이전 리뷰·게이트 증거를 유지하지 않는다.
 
 ## 3. 제목과 본문 작성
 
@@ -138,21 +155,35 @@ issue worktree가 이미 없으면 clean `main` worktree에서 재개한다.
 - **Ready:** placeholder, 실패·미실행 검증, 미확정 결정이 없어야 한다.
   `독립 리뷰` 행이 정확히 하나이고 `통과`여야 하며 검토 snapshot, 원본
   요구사항, raw diff, 테스트 결과, 검토자 수·관점과 P0~P2 발견·해소 결과를
-  재구성할 수 있는 증거가 필요하다. snapshot에는 검토한 exact head commit
-  SHA를 `review-head=<40자리 SHA>`로 정확히 한 번 적고 Ready validator
-  입력의 현재 head와 완전히 일치시킨다. 짧은 prefix나 다른 용도의 SHA는
-  review-head 증거를 대신하지 않는다.
+  재구성할 수 있는 증거가 필요하다. 검증 표의 증거에는 pre-commit
+  candidate diff의 `review-base=<40자리 commit OID>`, candidate 전체의
+  `review-tree=<40자리 tree OID>`, 최종 게이트의
+  `verification-tree=<40자리 tree OID>`, `commit-tree=<40자리 tree OID>`와
+  push 뒤 `pr-head-tree=<40자리 tree OID>`를 기록한다. 네 tree는 모두 같고
+  review-base는 candidate identity의 base OID와 같아야 한다.
+  snapshot에는 이 reviewed tree를 가진 exact head commit SHA를
+  `review-head=<40자리 SHA>`로 정확히 한 번 적고 Ready validator 입력의 현재
+  head와 완전히 일치시킨다. 짧은 prefix나 다른 용도의 SHA는 review-head
+  증거를 대신하지 않는다.
 
-독립 리뷰는 구현 테스트와 `update-product-docs` 문서 영향 판정 뒤 작성
-컨텍스트와 분리된 읽기 전용 검토자가 수행한다. 작성자 자기 검토는 인정하지
-않고 작성·수정자와 최종 승인자를 분리하며, 의도한 답이나 예상 결론 없이
-원본 요구사항, raw diff와 테스트 결과를 제공한다. 검토자는 직접 수정하지
-않고 P0~P2를 파일 위치와 재현 근거로 보고한다. 낮은 위험은 최소 1명,
-계약·validator·workflow 변경은 최소 2명, 고위험 변경은 필요한 전문 관점별
-검토자를 사용한다. 수정 후 새 snapshot을 별도 패스로 검토하며 최초 리뷰를
-1회로 세어 review-fix cycle을 최대 3회로 제한한다. 3회 뒤에도 P0/P1이
-남으면 Ready 전환이나 PR 승인을 중단하고 blocker로 보고한다. 새 리뷰 전용
-Skill은 만들지 않는다.
+독립 리뷰는 이슈별 행동 테스트와 `update-product-docs` 의미 영향 판정 뒤,
+저장소 고정 게이트 전체보다 먼저 staged candidate를 작성 컨텍스트와 분리된
+읽기 전용 검토자가 확인한다. 작성자 자기 검토는 인정하지 않고 작성·수정자와
+최종 승인자를 분리하며, 의도한 답이나 예상 결론 없이 원본 요구사항, 같은
+cached diff·candidate tree와 행동 테스트 결과를 제공한다. 검토자는 직접
+수정하지 않고 P0~P2를 파일 위치와 재현 근거로 보고한다. 낮은 위험은 최소
+1명, 계약·validator·workflow 변경은 최소 2명, 고위험 변경은 필요한 전문
+관점별 검토자를 병렬 배치한다. 같은 snapshot의 발견 사항을 합쳐 일괄
+수정하고 행동 테스트·의미 영향 판정 뒤 새 snapshot을 별도 패스로 검토한다.
+review-fix 사이에는 고정 게이트 전체를 실행하지 않으며 최초 리뷰를 1회로 세어
+최대 3회로 제한한다. 3회 뒤에도 P0/P1이 남으면 Ready 전환이나 PR 승인을
+중단하고 blocker로 보고한다. 새 리뷰 전용 Skill은 만들지 않는다.
+
+더 이상 계획된 수정이 없는 candidate에서 현재 `AGENTS.md` 고정 게이트 전체를
+한 번 통과하고 검증 전후 tree·input이 같아야 commit·PR로 진행한다. push 뒤
+현재 PR head commit의 tree를 읽어 commit tree와 대조한다. 네 tree가 같고
+명령·결과·input 증거가 완전하면 로컬 게이트를 반복하지 않지만, GitHub의
+required CI는 독립된 원격 검증이므로 항상 통과해야 한다.
 
 작성한 제목과 본문을 검증한다.
 

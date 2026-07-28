@@ -431,6 +431,10 @@ function scanInlineCodeRanges(text) {
 
     let openingEnd = cursor + 1;
     while (text[openingEnd] === "`") openingEnd += 1;
+    if (isEscapedMarkdownCharacter(text, cursor)) {
+      cursor = openingEnd;
+      continue;
+    }
     const markerLength = openingEnd - cursor;
     let closingStart = openingEnd;
     let foundClosing = false;
@@ -441,6 +445,10 @@ function scanInlineCodeRanges(text) {
 
       let closingEnd = closingStart + 1;
       while (text[closingEnd] === "`") closingEnd += 1;
+      if (isEscapedMarkdownCharacter(text, closingStart)) {
+        closingStart = closingEnd;
+        continue;
+      }
       if (closingEnd - closingStart === markerLength) {
         ranges.push({ start: cursor, end: closingEnd });
         cursor = closingEnd;
@@ -464,6 +472,403 @@ function maskMarkdownStructureForLinkScan(text) {
     withoutIndentedCode,
     scanInlineCodeRanges(withoutIndentedCode),
   );
+}
+
+const finalSnapshotHtmlVoidElements = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+const finalSnapshotHtmlBlockElements = new Set([
+  "address",
+  "article",
+  "aside",
+  "base",
+  "basefont",
+  "blockquote",
+  "body",
+  "caption",
+  "center",
+  "col",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "dir",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "frame",
+  "frameset",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hr",
+  "html",
+  "iframe",
+  "legend",
+  "li",
+  "link",
+  "main",
+  "menu",
+  "menuitem",
+  "nav",
+  "noframes",
+  "ol",
+  "optgroup",
+  "option",
+  "p",
+  "param",
+  "search",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "title",
+  "tr",
+  "track",
+  "ul",
+]);
+
+function finalSnapshotHtmlTagConceals(raw) {
+  if (/(?:^|[\t\n\f\r ])hidden(?:[\t\n\f\r ]|=|\/?>|$)/i.test(raw)) {
+    return true;
+  }
+
+  const styleAttributes =
+    raw.matchAll(
+      /(?:^|[\t\n\f\r ])style\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
+    );
+  for (const match of styleAttributes) {
+    const value = match[1] ?? match[2] ?? match[3] ?? "";
+    if (
+      /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:!important\s*)?(?:;|$)/i.test(
+        value,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function scanFinalSnapshotHtmlTags(text) {
+  const tags = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const start = text.indexOf("<", cursor);
+    if (start < 0) break;
+    const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+    let index = start + 1;
+    if (text[index] === "/") index += 1;
+    if (!/[A-Za-z]/.test(text[index] ?? "")) {
+      cursor = start + 1;
+      continue;
+    }
+
+    let quote = "";
+    while (index < text.length) {
+      const character = text[index];
+      if (quote) {
+        if (character === quote) quote = "";
+      } else if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === ">") {
+        break;
+      }
+      index += 1;
+    }
+    if (index >= text.length) {
+      cursor = start + 1;
+      continue;
+    }
+
+    const raw = text.slice(start, index + 1);
+    const parsed = /^<\/?\s*([A-Za-z][A-Za-z0-9-]*)\b/.exec(raw);
+    if (parsed) {
+      tags.push({
+        start,
+        end: index + 1,
+        name: parsed[1].toLowerCase(),
+        closing: /^<\//.test(raw),
+        selfClosing: /\/\s*>$/.test(raw),
+        concealing: finalSnapshotHtmlTagConceals(raw),
+        blockOpening: /^ {0,3}$/.test(
+          text.slice(lineStart, start),
+        ),
+      });
+    }
+    cursor = index + 1;
+  }
+
+  return tags;
+}
+
+function finalSnapshotRawHtmlBlockStart(line) {
+  const typeOne = /^ {0,3}<(script|pre|style|textarea)(?=[\t >]|$)/i.exec(
+    line,
+  );
+  if (typeOne) {
+    return {
+      kind: "terminated",
+      closing: new RegExp(`</${typeOne[1]}>`, "i"),
+    };
+  }
+  if (/^ {0,3}<\?/.test(line)) {
+    return { kind: "terminated", closing: /\?>/ };
+  }
+  if (/^ {0,3}<![A-Z]/.test(line)) {
+    return { kind: "terminated", closing: />/ };
+  }
+  if (/^ {0,3}<!\[CDATA\[/.test(line)) {
+    return { kind: "terminated", closing: /\]\]>/ };
+  }
+
+  const namedTag =
+    /^ {0,3}<(\/?)([A-Za-z][A-Za-z0-9-]*)(.*)$/.exec(line);
+  if (namedTag) {
+    const name = namedTag[2].toLowerCase();
+    const suffix = namedTag[3];
+    const validBoundary = namedTag[1]
+      ? suffix === "" || /^[\t >]/.test(suffix)
+      : suffix === "" || /^[\t >]/.test(suffix) || suffix.startsWith("/>");
+    if (validBoundary && finalSnapshotHtmlBlockElements.has(name)) {
+      return { kind: "blank-line" };
+    }
+  }
+
+  const indentation = /^ {0,3}/.exec(line)?.[0].length ?? 0;
+  const tags = scanFinalSnapshotHtmlTags(line);
+  if (
+    tags.length > 0 &&
+    tags[0].start === indentation &&
+    line.slice(tags[0].end).trim() === ""
+  ) {
+    return { kind: "blank-line" };
+  }
+  return null;
+}
+
+function finalSnapshotLogicalLineRecords(text) {
+  const lines = commonMarkLineRecords(text);
+  let activeContainers = [];
+  let nextContainerId = 1;
+
+  return lines.map((line) => {
+    const matched = matchCommonMarkContainers(
+      line.expanded,
+      activeContainers,
+      null,
+      false,
+    );
+    const opened = openCommonMarkContainers(
+      line.expanded,
+      matched.cursor,
+      nextContainerId,
+    );
+    nextContainerId = opened.nextContainerId;
+    activeContainers = [
+      ...matched.containers,
+      ...opened.containers,
+    ];
+    return {
+      ...line,
+      containers: [...activeContainers],
+      logical: line.expanded.slice(opened.cursor),
+    };
+  });
+}
+
+function finalSnapshotLineInContainers(line, containers) {
+  const matched = matchCommonMarkContainers(
+    line.expanded,
+    containers,
+    null,
+    false,
+  );
+  if (matched.containers.length !== containers.length) return null;
+  return line.expanded.slice(matched.cursor);
+}
+
+function scanFinalSnapshotRawHtmlBlockRanges(text) {
+  const startSource = maskMarkdownStructureForLinkScan(text);
+  const sourceLines = finalSnapshotLogicalLineRecords(startSource);
+  const rawLines = finalSnapshotLogicalLineRecords(text);
+  const ranges = [];
+
+  for (let index = 0; index < sourceLines.length; index += 1) {
+    const sourceLine = sourceLines[index].logical;
+    const start = finalSnapshotRawHtmlBlockStart(sourceLine);
+    if (!start) continue;
+    const startContainers = sourceLines[index].containers;
+
+    let end = text.length;
+    let endingLine = rawLines.length - 1;
+    if (start.kind === "blank-line") {
+      for (
+        let cursor = index + 1;
+        cursor < rawLines.length;
+        cursor += 1
+      ) {
+        const logical = finalSnapshotLineInContainers(
+          rawLines[cursor],
+          startContainers,
+        );
+        if (logical === null) {
+          end = rawLines[cursor].index;
+          endingLine = cursor - 1;
+          break;
+        }
+        if (logical.trim() !== "") continue;
+        end = rawLines[cursor].index;
+        endingLine = cursor - 1;
+        break;
+      }
+    } else {
+      for (let cursor = index; cursor < rawLines.length; cursor += 1) {
+        const logical =
+          cursor === index
+            ? rawLines[cursor].logical
+            : finalSnapshotLineInContainers(
+                rawLines[cursor],
+                startContainers,
+              );
+        if (logical === null) {
+          end = rawLines[cursor].index;
+          endingLine = cursor - 1;
+          break;
+        }
+        if (!start.closing.test(logical)) continue;
+        end = rawLines[cursor].index + rawLines[cursor].length;
+        endingLine = cursor;
+        break;
+      }
+    }
+
+    ranges.push({ start: rawLines[index].index, end });
+    index = Math.max(index, endingLine);
+  }
+  return ranges;
+}
+
+function maskPairedFinalSnapshotHtmlContainers(text) {
+  const rawBlockRanges = scanFinalSnapshotRawHtmlBlockRanges(text);
+  const tagSource = maskMarkdownStructureForLinkScan(text);
+  const stack = [];
+  const ranges = [...rawBlockRanges];
+
+  for (const tag of scanFinalSnapshotHtmlTags(tagSource)) {
+    if (tag.closing) {
+      const openingIndex = stack
+        .map((opening) => opening.name)
+        .lastIndexOf(tag.name);
+      if (openingIndex < 0) continue;
+      const opening = stack[openingIndex];
+      ranges.push({ start: opening.start, end: tag.end });
+      stack.splice(openingIndex);
+      continue;
+    }
+    if (
+      !tag.selfClosing &&
+      !finalSnapshotHtmlVoidElements.has(tag.name)
+    ) {
+      stack.push(tag);
+    }
+  }
+
+  const unclosedContainer = stack.find(
+    (opening) => opening.blockOpening || opening.concealing,
+  );
+  if (unclosedContainer) {
+    ranges.push({
+      start: unclosedContainer.start,
+      end: text.length,
+    });
+  }
+
+  ranges.sort((left, right) => left.start - right.start);
+  const mergedRanges = [];
+  for (const range of ranges) {
+    const previous = mergedRanges.at(-1);
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+    } else {
+      mergedRanges.push({ ...range });
+    }
+  }
+  return maskRanges(text, mergedRanges);
+}
+
+function maskInlineMarkdownLinkTails(text) {
+  const linkSource = maskMarkdownStructureForLinkScan(text);
+  return maskRanges(
+    text,
+    scanInlineMarkdownLinks(linkSource).map((link) => ({
+      start: link.tailStart + 1,
+      end: link.end - 1,
+    })),
+  );
+}
+
+function visibleFinalSnapshotMarkdown(text) {
+  const containerMasked =
+    maskPairedFinalSnapshotHtmlContainers(text);
+  const inlineCodeRanges = scanInlineCodeRanges(
+    maskInvisibleMarkdown(containerMasked),
+  );
+  let result = "";
+  let cursor = 0;
+
+  for (const range of inlineCodeRanges) {
+    result += containerMasked.slice(cursor, range.start);
+    result += containerMasked
+      .slice(range.start, range.end)
+      .replace(/[<>]/g, " ");
+    cursor = range.end;
+  }
+  const neutralized =
+    result + containerMasked.slice(cursor);
+  const projected = visibleContractMarkdown(
+    maskInlineMarkdownLinkTails(neutralized),
+  );
+  result = "";
+  cursor = 0;
+  for (const range of inlineCodeRanges) {
+    result += projected.slice(cursor, range.start);
+    const projectedCode = projected.slice(range.start, range.end);
+    result += /\S/.test(projectedCode)
+      ? containerMasked.slice(range.start, range.end)
+      : projectedCode;
+    cursor = range.end;
+  }
+  return result + projected.slice(cursor);
 }
 
 function maskMarkdownForLinkScan(text) {
@@ -753,6 +1158,7 @@ function scanInlineMarkdownLinks(text) {
     links.push({
       start: cursor,
       end: tail.end,
+      tailStart: labelEnd + 1,
       isImage,
       label: text.slice(labelStart + 1, labelEnd),
       target: tail.target,
@@ -1109,6 +1515,211 @@ const harnessDetailOwners = [
     label: "PR 쓰기·exact-head finalize·원격·로컬 정리",
     name: "open-pull-request",
     file: ".agents/skills/open-pull-request/SKILL.md",
+  },
+];
+const finalSnapshotGateOrder = [
+  {
+    order: "1",
+    stage: "빠른 행동 검증",
+    contracts: [
+      [
+        "행동 테스트만 반복하고 고정 게이트 전체는 실행하지 않음",
+        /행동 테스트[\s\S]*고정 게이트 전체[\s\S]*실행하지/,
+      ],
+    ],
+  },
+  {
+    order: "2",
+    stage: "정본 의미 영향",
+    contracts: [
+      [
+        "리뷰 전 정본·경로 guard",
+        /독립 리뷰 전[\s\S]*PRD·Policy·Architecture[\s\S]*이슈 경로[\s\S]*(?:누락|충돌|금지 경로)[\s\S]*중단/,
+      ],
+    ],
+  },
+  {
+    order: "3",
+    stage: "candidate 고정",
+    contracts: [
+      [
+        "clean worktree의 명시적 staged candidate",
+        /clean 독립 worktree[\s\S]*명시적으로 stage[\s\S]*cached diff·candidate tree[\s\S]*unstaged tracked[\s\S]*예상하지 않은 untracked/,
+      ],
+    ],
+  },
+  {
+    order: "4",
+    stage: "독립 리뷰",
+    contracts: [
+      [
+        "동일 candidate 병렬 리뷰와 일괄 수정",
+        /같은 cached diff·candidate tree[\s\S]*병렬[\s\S]*발견 사항[\s\S]*(?:합쳐|모아)[\s\S]*일괄 수정[\s\S]*새 snapshot[\s\S]*다시 리뷰/,
+      ],
+    ],
+  },
+  {
+    order: "5",
+    stage: "최종 저장소 게이트",
+    contracts: [
+      [
+        "수정 종료 뒤 고정 게이트 전체 1회",
+        /계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정 게이트 전체[\s\S]*(?:한 번|1회)/,
+      ],
+      [
+        "격리 명령만 병렬, 공유 명령은 순차·join",
+        /독립[\s\S]*격리[\s\S]*병렬[\s\S]*index·working tree·외부 상태·공유 cache·자원[\s\S]*순차[\s\S]*모든 결과[\s\S]*join/,
+      ],
+      [
+        "검증 전후 candidate tree·input 동일",
+        /검증 전후 candidate tree[\s\S]*gate input[\s\S]*같/,
+      ],
+    ],
+  },
+  {
+    order: "6",
+    stage: "commit",
+    contracts: [
+      [
+        "동일 tree의 완전한 로컬 증거 인계",
+        /candidate tree[\s\S]*commit tree[\s\S]*같[\s\S]*증거[\s\S]*완전[\s\S]*로컬 게이트[\s\S]*반복하지[\s\S]*기존 증거[\s\S]*인계/,
+      ],
+    ],
+  },
+  {
+    order: "7",
+    stage: "PR·필수 CI",
+    contracts: [
+      [
+        "동일 tree의 로컬 증거 재사용과 원격 CI 유지",
+        /commit tree[\s\S]*PR head tree[\s\S]*같[\s\S]*로컬 증거[\s\S]*재사용[\s\S]*원격 required CI[\s\S]*생략하지/,
+      ],
+    ],
+  },
+];
+const finalSnapshotRecoveryOrder = [
+  {
+    situation: "tracked content 변경",
+    evidence: /review·gate 증거 모두 무효/,
+    reentry:
+      /새 candidate[\s\S]*행동 테스트[\s\S]*PRD·Policy·Architecture 의미 영향 판정[\s\S]*독립 리뷰[\s\S]*다시 시작/,
+  },
+  {
+    situation: "환경 전용 실패·동일 tree·input",
+    evidence: /review 증거 유지[\s\S]*실패 gate 미완료/,
+    reentry:
+      /원인[\s\S]*동일 tree·input 근거[\s\S]*기록[\s\S]*새 명령[\s\S]*한 번[\s\S]*자동 반복하지/,
+  },
+  {
+    situation: "의미 영향·리뷰 증거 불완전·동일 tree·input",
+    evidence: /review·gate 증거 재사용 거부/,
+    reentry:
+      /같은 candidate·input[\s\S]*PRD·Policy·Architecture 의미 영향 판정[\s\S]*새 독립 리뷰[\s\S]*최종 게이트/,
+  },
+  {
+    situation: "최종 gate 증거 불완전·동일 tree·input",
+    evidence: /gate 증거 재사용 거부/,
+    reentry:
+      /exact candidate·input[\s\S]*동일한 clean snapshot[\s\S]*AGENTS\.md[\s\S]*고정 게이트 전체[\s\S]*새로 실행/,
+  },
+  {
+    situation: "candidate tree·input 불일치",
+    evidence: /review·gate 증거 모두 무효/,
+    reentry:
+      /다른 tree나 input[\s\S]*gate만 실행하지 않고[\s\S]*새 candidate[\s\S]*행동 테스트·의미 영향 판정·독립 리뷰[\s\S]*다시 시작/,
+  },
+];
+const finalSnapshotOwnerContracts = [
+  {
+    file: "AGENTS.md",
+    section: "행동 시나리오와 독립 리뷰",
+    label: "행동 테스트→정본 guard→staged candidate 리뷰·일괄 수정",
+    pattern:
+      /이슈별 빠른 테스트[\s\S]*고정 게이트 전체[\s\S]*리뷰 전에[\s\S]*PRD·Policy·Architecture[\s\S]*cached diff·candidate tree[\s\S]*독립 리뷰[\s\S]*일괄 수정[\s\S]*review-fix 사이[\s\S]*고정 게이트 전체[\s\S]*실행하지/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "문서와 검증",
+    label: "최종 gate 1회와 분리된 증거 복구",
+    pattern:
+      /계획된 변경[\s\S]*없는 staged\s+candidate[\s\S]*고정 게이트 전체[\s\S]*한 번[\s\S]*tracked\s+content[\s\S]*행동·리뷰·게이트 증거[\s\S]*모두 무효화[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*독립 리뷰[\s\S]*tree·input[\s\S]*환경 전용 실패[\s\S]*의미\s+영향·독립 리뷰 증거[\s\S]*최종 gate\s+증거만[\s\S]*candidate tree나 input[\s\S]*모든 로컬\s+증거[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*영향 판정[\s\S]*독립 리뷰/,
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "5. 테스트와 독립 리뷰",
+    label: "review-fix 중 전체 gate 금지와 마지막 1회 실행",
+    pattern:
+      /(?:독립 리뷰 전에[\s\S]*PRD·Policy·Architecture|PRD·Policy·Architecture[\s\S]*독립 리뷰 전에)[\s\S]*cached diff·candidate tree[\s\S]*review-fix 사이[\s\S]*고정 게이트 전체[\s\S]*실행하지[\s\S]*계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정\s+게이트 전체[\s\S]*한 번[\s\S]*tracked content[\s\S]*행동·리뷰·게이트 증거[\s\S]*폐기[\s\S]*빠른 행동 테스트[\s\S]*의미\s+영향 판정[\s\S]*독립 리뷰[\s\S]*tree·input[\s\S]*환경 전용 실패[\s\S]*의미 영향·리뷰 증거[\s\S]*최종\s+gate 증거만[\s\S]*candidate tree나 input[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*영향 판정[\s\S]*독립 리뷰/,
+  },
+  {
+    file: ".agents/skills/update-product-docs/SKILL.md",
+    section: "품질 게이트 실행",
+    label: "정본 의미 영향 판정 뒤 리뷰·최종 gate",
+    pattern:
+      /좁은 행동 테스트[\s\S]*최종 저장소 게이트[\s\S]*대신하지[\s\S]*PRD·Policy·Architecture[\s\S]*독립 리뷰 전에[\s\S]*candidate\s+tree[\s\S]*review-fix 사이[\s\S]*고정 게이트 전체[\s\S]*실행하지[\s\S]*계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정 게이트 전체[\s\S]*한 번[\s\S]*tracked content[\s\S]*행동·의미 영향·리뷰·게이트 증거[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*tree·input[\s\S]*환경 전용\s+실패[\s\S]*의미\s+영향·독립 리뷰 증거[\s\S]*최종 gate 증거만[\s\S]*candidate tree나 input[\s\S]*다르면[\s\S]*빠른 행동 테스트[\s\S]*의미 영향/,
+  },
+  {
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+    section: "구현 snapshot 검증",
+    label: "행동 테스트→정본 영향→candidate 리뷰→최종 gate",
+    pattern:
+      /빠른 행동 테스트[\s\S]*PRD·Policy·Architecture[\s\S]*cached diff·candidate tree[\s\S]*같은 snapshot[\s\S]*발견 사항[\s\S]*한 번에 수정[\s\S]*새 candidate[\s\S]*계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정 게이트 전체[\s\S]*한 번/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "3. Candidate staging과 독립 리뷰",
+    label: "빠른 증거→정본 영향→staged candidate 리뷰",
+    pattern:
+      /빠른 행동 테스트[\s\S]*고정\s+게이트 전체[\s\S]*실행하지[\s\S]*PRD·Policy·Architecture[\s\S]*candidate tree[\s\S]*독립 리뷰[\s\S]*(?:일괄 수정|한 번에 수정)[\s\S]*review-fix 사이[\s\S]*고정 게이트 전체[\s\S]*실행하지/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "최종 gate 1회와 증거 유형별 복구",
+    pattern:
+      /계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정\s+게이트[\s\S]*한 번[\s\S]*tracked content[\s\S]*행동·의미 영향·리뷰·게이트 증거[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*새 candidate[\s\S]*tree·input[\s\S]*환경 전용 실패[\s\S]*의미 영향·독립 리뷰 증거[\s\S]*최종 gate 증거만[\s\S]*candidate tree나 input[\s\S]*모든 로컬 증거[\s\S]*빠른 행동 테스트[\s\S]*새 candidate/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "6. 커밋 후 검증과 보고",
+    label: "commit 뒤 path gate 증거 재사용",
+    pattern:
+      /HEAD\^\{tree\}[\s\S]*candidate tree[\s\S]*commit path gate 증거[\s\S]*재사용[\s\S]*반복하지/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "candidate→commit→PR tree 결속과 원격 CI",
+    pattern:
+      /이슈별 행동 테스트[\s\S]*PRD·Policy·Architecture[\s\S]*cached diff digest[\s\S]*candidate tree[\s\S]*독립 리뷰[\s\S]*고정 게이트 전체[\s\S]*한 번[\s\S]*commit tree[\s\S]*PR head tree[\s\S]*원격 required CI[\s\S]*생략하지[\s\S]*tracked content[\s\S]*행동 테스트·의미 영향·리뷰·게이트 증거[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*의미\s+영향 판정[\s\S]*독립 리뷰[\s\S]*의미 영향·독립 리뷰 증거[\s\S]*최종 gate 증거만[\s\S]*candidate tree나 input[\s\S]*다르면[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*독립 리뷰/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "9. 커밋 후 검증",
+    label: "commit 뒤 path gate 증거 재사용",
+    pattern:
+      /HEAD\^\{tree\}[\s\S]*candidate tree[\s\S]*commit path gate 증거[\s\S]*재사용[\s\S]*다시 실행하지/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "2. 중복 PR과 문서 영향 확인",
+    label: "증거 유형별 PR 복구",
+    pattern:
+      /commit tree[\s\S]*candidate[\s\S]*tree나 입력[\s\S]*새 candidate[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*독립 리뷰[\s\S]*의미 영향·독립 리뷰 증거[\s\S]*새 독립 리뷰[\s\S]*최종 gate\s+결과 증거만[\s\S]*recovery worktree[\s\S]*고정 게이트 전체[\s\S]*한 번/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "3. 제목과 본문 작성",
+    label: "review→verification→commit→PR tree와 required CI",
+    pattern:
+      /review-tree=<40자리 tree OID>[\s\S]*verification-tree=<40자리 tree OID>[\s\S]*commit-tree=<40자리 tree OID>[\s\S]*pr-head-tree=<40자리 tree OID>[\s\S]*네 tree[\s\S]*같[\s\S]*고정 게이트 전체[\s\S]*한 번[\s\S]*required CI[\s\S]*항상 통과/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/references/pr-body-contract.md",
+    section: "4. 검증",
+    label: "로컬 증거 재사용과 원격 required CI 분리",
+    pattern:
+      /review-tree=<40자리 tree OID>[\s\S]*verification-tree=<40자리 tree OID>[\s\S]*commit-tree=<40자리 tree OID>[\s\S]*pr-head-tree=<40자리 tree OID>[\s\S]*candidate tree와 input[\s\S]*의미 영향·독립 리뷰\s+증거[\s\S]*새 독립 리뷰[\s\S]*최종 gate 결과 증거만[\s\S]*고정 게이트 전체[\s\S]*candidate\s+tree·input[\s\S]*다르면[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*독립 리뷰[\s\S]*GitHub required CI[\s\S]*대신하지/,
   },
 ];
 const plannedIdDetailOwner = {
@@ -1501,6 +2112,15 @@ function readStrictH2Sections(content, visibleContent) {
       visibleContent: visibleContent.slice(contentStart, end),
     };
   });
+}
+
+function strictH2SourceIsVisible(visibleContent, section) {
+  return (
+    visibleContent.slice(
+      section.start,
+      section.start + section.source.length,
+    ) === section.source
+  );
 }
 
 function normalizeFinalizeDetailText(text) {
@@ -3266,6 +3886,177 @@ function validateHarnessOrchestration(file) {
   }
 }
 
+function validateFinalSnapshotGateOrder(file) {
+  if (!isFile(file)) return;
+
+  const content = fs.readFileSync(path.join(root, file), "utf8");
+  const visibleDocument = visibleFinalSnapshotMarkdown(content);
+  const sections = readStrictH2Sections(content, content);
+  const orderSections = sections.filter(
+    (section) =>
+      section.source === "## 최종 snapshot 검증 순서" &&
+      strictH2SourceIsVisible(visibleDocument, section),
+  );
+  const recoverySections = sections.filter(
+    (section) =>
+      section.source === "## 실패와 증거 무효화" &&
+      strictH2SourceIsVisible(visibleDocument, section),
+  );
+  const orderProtectedCount = protectedH2Matches(
+    content,
+    "최종 snapshot 검증 순서",
+  ).length;
+  const recoveryProtectedCount = protectedH2Matches(
+    content,
+    "실패와 증거 무효화",
+  ).length;
+
+  if (orderSections.length !== 1 || orderProtectedCount !== 1) {
+    errors.push(
+      `${file}: '## 최종 snapshot 검증 순서' exact plain-text top-level H2가 정확히 하나 필요합니다. (canonical ${orderSections.length}개, 보호 후보 ${orderProtectedCount}개)`,
+    );
+  } else {
+    const rows = readTraceTableRows(orderSections[0].content, {
+      file,
+      label: "최종 snapshot 검증 순서",
+      headers: [["순서", "단계", "필수 계약"]],
+      visibleContracts: true,
+    });
+    const actualOrder = rows.map((row) => row.slice(0, 2));
+    const expectedOrder = finalSnapshotGateOrder.map(({ order, stage }) => [
+      order,
+      stage,
+    ]);
+    if (
+      actualOrder.length !== expectedOrder.length ||
+      actualOrder.some(
+        (row, index) => !sameCells(row, expectedOrder[index]),
+      )
+    ) {
+      errors.push(
+        `${file}: 최종 snapshot 검증 순서는 빠른 행동 검증→정본 의미 영향→candidate 고정→독립 리뷰→최종 저장소 게이트→commit→PR·필수 CI의 exact 7행이어야 합니다.`,
+      );
+    }
+
+    for (const expected of finalSnapshotGateOrder) {
+      const row = rows.find(
+        (candidate) =>
+          candidate[0] === expected.order &&
+          candidate[1] === expected.stage,
+      );
+      if (!row) continue;
+      for (const [label, pattern] of expected.contracts) {
+        pattern.lastIndex = 0;
+        if (!pattern.test(row[2])) {
+          errors.push(
+            `${file}: 최종 snapshot 검증 순서의 '${expected.stage}' 행에 필수 계약이 없습니다: ${label}`,
+          );
+        }
+      }
+    }
+  }
+
+  if (
+    recoverySections.length !== 1 ||
+    recoveryProtectedCount !== 1
+  ) {
+    errors.push(
+      `${file}: '## 실패와 증거 무효화' exact plain-text top-level H2가 정확히 하나 필요합니다. (canonical ${recoverySections.length}개, 보호 후보 ${recoveryProtectedCount}개)`,
+    );
+  } else {
+    const rows = readTraceTableRows(recoverySections[0].content, {
+      file,
+      label: "실패와 증거 무효화",
+      headers: [["상황", "기존 증거", "재진입"]],
+      visibleContracts: true,
+    });
+    const actualSituations = rows.map((row) => row[0]);
+    const expectedSituations = finalSnapshotRecoveryOrder.map(
+      ({ situation }) => situation,
+    );
+    if (
+      actualSituations.length !== expectedSituations.length ||
+      actualSituations.some(
+        (situation, index) => situation !== expectedSituations[index],
+      )
+    ) {
+      errors.push(
+        `${file}: 실패와 증거 무효화는 tracked content 변경→환경 전용 실패·동일 tree·input→의미 영향·리뷰 증거 불완전·동일 tree·input→최종 gate 증거 불완전·동일 tree·input→candidate tree·input 불일치의 exact 5행이어야 합니다.`,
+      );
+    }
+
+    for (const expected of finalSnapshotRecoveryOrder) {
+      const row = rows.find(
+        (candidate) => candidate[0] === expected.situation,
+      );
+      if (!row) continue;
+      expected.evidence.lastIndex = 0;
+      if (!expected.evidence.test(row[1])) {
+        errors.push(
+          `${file}: 실패와 증거 무효화의 '${expected.situation}' 기존 증거 계약이 불완전합니다.`,
+        );
+      }
+      expected.reentry.lastIndex = 0;
+      if (!expected.reentry.test(row[2])) {
+        errors.push(
+          `${file}: 실패와 증거 무효화의 '${expected.situation}' 재진입 계약이 불완전합니다.`,
+        );
+      }
+    }
+  }
+}
+
+function validateFinalSnapshotOwnerContracts() {
+  const documents = new Map();
+
+  for (const { file, section, label, pattern } of finalSnapshotOwnerContracts) {
+    if (!isFile(file)) {
+      errors.push(`최종 snapshot 계약 owner 파일이 없습니다: ${file}`);
+      continue;
+    }
+
+    if (!documents.has(file)) {
+      const source = fs
+        .readFileSync(path.join(root, file), "utf8")
+        .replaceAll("\r\n", "\n");
+      const visibleDocument = visibleFinalSnapshotMarkdown(source);
+      documents.set(file, {
+        source,
+        visibleDocument,
+        sections: readStrictH2Sections(source, source),
+      });
+    }
+
+    const { source, visibleDocument, sections } = documents.get(file);
+    const matchingSections = sections.filter(
+      (candidate) =>
+        candidate.source === `## ${section}` &&
+        strictH2SourceIsVisible(visibleDocument, candidate),
+    );
+    const protectedHeadingCount =
+      protectedH2Matches(source, section).length;
+    if (
+      matchingSections.length !== 1 ||
+      protectedHeadingCount !== 1
+    ) {
+      errors.push(
+        `${file}: 최종 snapshot 계약 owner 구역은 exact plain-text top-level H2로 정확히 하나여야 합니다: ${section} (canonical ${matchingSections.length}개, 보호 후보 ${protectedHeadingCount}개)`,
+      );
+      continue;
+    }
+
+    const content = maskIndentedCodeLines(
+      visibleFinalSnapshotMarkdown(matchingSections[0].content),
+    );
+    pattern.lastIndex = 0;
+    if (!pattern.test(content)) {
+      errors.push(
+        `${file}: '${section}'에 최종 snapshot 검증 계약이 없습니다: ${label}`,
+      );
+    }
+  }
+}
+
 function validateHarnessSkillContracts() {
   const requiredFiles = [
     ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
@@ -3411,7 +4202,7 @@ function validateHarnessSkillContracts() {
         ],
         [
           "Ready ID 정의 형식",
-          /FR·AC·Policy visible heading[\s\S]{0,160}PRD 기술 스파이크[\s\S]{0,80}표의 첫 셀/,
+          /FR·AC·Policy visible heading[\s\S]{0,160}PRD\s+기술 스파이크[\s\S]{0,80}표의 첫 셀/,
         ],
         [
           "병합 뒤 remote 삭제",
@@ -3928,8 +4719,19 @@ function sameCells(actual, expected) {
   );
 }
 
-function readTraceTableRows(section, { file, label, headers }) {
-  const lines = maskInvisibleMarkdown(section).split("\n");
+function readTraceTableRows(
+  section,
+  {
+    file,
+    label,
+    headers,
+    visibleContracts = false,
+  },
+) {
+  const projectedSection = visibleContracts
+    ? maskIndentedCodeLines(visibleFinalSnapshotMarkdown(section))
+    : maskInvisibleMarkdown(section);
+  const lines = projectedSection.split("\n");
   const headerIndexes = lines
     .map((line, index) => {
       const cells = parseMarkdownTableCells(line);
@@ -4175,10 +4977,12 @@ for (const file of developmentFiles) {
 }
 validateHarnessSteps(developmentFiles[0]);
 validateHarnessOrchestration(developmentFiles[0]);
+validateFinalSnapshotGateOrder(developmentFiles[0]);
 validateHarnessRoutingBoundaries();
 validatePlannedIdRoutingBoundaries();
 validatePlannedIdDetailOwnerBoundary();
 validateHarnessSkillContracts();
+validateFinalSnapshotOwnerContracts();
 
 for (const file of markdownFiles) {
   const content = fs.readFileSync(path.join(root, file), "utf8");

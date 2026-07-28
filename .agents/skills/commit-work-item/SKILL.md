@@ -34,40 +34,53 @@ description: LunchTime GitHub 작업 이슈의 로컬 변경을 범위·제품 �
    스테이징하지 않고 사용자에게 정확한 경로와 이유를 보고한다.
 4. 서로 독립적으로 되돌려야 하는 결과가 섞였으면 커밋 경계를 제안하고
    선택된 원자적 결과 하나만 진행한다.
-5. 제품 동작·상태·권한·실패·동기화·보존·보안의 변경에는
-   `update-product-docs`로 구현 영향을 확인한다. 정본 갱신이 필요하지만
-   이슈 경로 계약이 허용하지 않으면 커밋하지 않는다.
+5. 제품 동작·상태·권한·실패·동기화·보존·보안 또는 앱 아키텍처 변경에는
+   `update-product-docs`로 PRD·Policy·Architecture 의미 영향을 독립 리뷰
+   전에 확인한다. 정본 갱신이 필요하지만 이슈 경로 계약이 허용하지 않으면
+   tooling-only 비적용을 승인하거나 커밋하지 않는다.
 
-## 3. 검증 증거 수집
+## 3. Candidate staging과 독립 리뷰
 
-1. 이슈에 지정된 검증과 현재 `AGENTS.md`의 관련 게이트를 실행한다.
-2. 실제로 통과한 명령, 테스트 수와 필요한 수동 확인만 증거로 기록한다.
-3. `update-product-docs`의 최종 문서 영향 판정을 끝내고 선택할 경로의 raw
-   diff snapshot을 고정한다.
-4. 작성 컨텍스트와 분리된 읽기 전용 검토자가 원본 요구사항, raw diff와
-   테스트 결과를 예상 결론 없이 검토한 최종 증거를 확인한다. 작성자 자기
-   검토는 독립 리뷰가 아니며 작성·수정자와 최종 승인자를 분리한다.
-5. 증거에는 P0~P2 발견 사항의 파일 위치·재현 근거와 해소 결과, 검토
-   snapshot, 검토자 수·관점이 있어야 한다. 낮은 위험은 최소 1명,
+1. 이슈에 지정된 빠른 행동 테스트를 수행하고 실제 통과한 명령·테스트 수와
+   필요한 수동 확인만 기록한다. 바뀔 snapshot에 현재 `AGENTS.md`의 고정
+   게이트 전체를 실행하지 않는다.
+2. `update-product-docs`의 PRD·Policy·Architecture 의미 영향과 이슈의
+   변경 허용·금지 경로 판정을 끝낸다.
+3. 스킬 진입 전에 존재하던 index가 비어 있는지 확인한다. 다른 작업의 staged
+   변경이 있으면 임의로 해제하거나 덮지 않고 중단한다.
+4. 선택한 개별 파일만 `git add -- <path>...`로 stage한다. `git add .`,
+   `git add -A`, `git add --all`, 디렉터리·glob 경로와 `git commit -a`를
+   사용하지 않는다.
+5. unstaged tracked 변경과 예상하지 않은 untracked 입력이 없는지 확인하고
+   base OID, 전체 cached diff digest, `git write-tree`의 candidate tree OID와
+   filesystem input 상태를 하나의 candidate identity로 고정한다.
+6. 전체 cached diff를 다시 읽어 이슈 범위, 비밀·개인 정보, 로컬 절대 경로,
+   개인 설정과 우발적 파일을 확인한다.
+7. 작성 컨텍스트와 분리된 읽기 전용 검토자가 원본 요구사항, 같은 cached
+   diff·candidate tree, 행동 테스트와 의미 영향 결과를 예상 결론 없이
+   검토한다. 작성자 자기 검토는 독립 리뷰가 아니며 작성·수정자와 최종
+   승인자를 분리한다.
+8. 증거에는 P0~P2 발견 사항의 파일 위치·재현 근거와 해소 결과, candidate
+   identity, 검토자 수·관점이 있어야 한다. 낮은 위험은 최소 1명,
    계약·validator·workflow 변경은 최소 2명, 고위험 변경은 필요한 전문
-   관점별 검토자를 사용한다.
-6. 수정이 있었다면 새 snapshot의 별도 리뷰인지 확인한다. 최초 리뷰를
-   1회로 세어 review-fix cycle은 최대 3회이며, 3회 뒤에도 P0/P1이 남으면
-   스테이징하지 않고 blocker로 보고한다. 이 절차는 기존 Skill로 조정하며
-   새 리뷰 전용 Skill을 만들지 않는다.
-7. 실패하면 추가 변경과 자동 재시도를 멈추고 실패 명령과 현재 상태를
-   보고한다.
+   관점별 검토자를 병렬 배치한다.
+9. 같은 snapshot의 발견 사항을 모두 합쳐 한 번에 수정한다. 수정이 있었다면
+   필요한 행동 테스트와 의미 영향 판정을 갱신하고 다시 명시적으로 stage한 새
+   candidate를 별도 리뷰한다. review-fix 사이에는 저장소 고정 게이트 전체를
+   실행하지 않는다. 최초 리뷰를 1회로 세어 최대 3회이며, 3회 뒤에도 P0/P1이
+   남으면 blocker로 보고한다. 새 리뷰 전용 Skill을 만들지 않는다.
 
-## 4. 명시적 경로만 스테이징
+## 4. 최종 게이트와 snapshot 결속
 
-1. 최종 독립 리뷰 증거와 문서 영향 판정이 현재 snapshot과 일치하지 않으면
-   스테이징하지 않는다.
-2. 기존 index에 다른 작업이 들어 있으면 임의로 해제하거나 덮지 말고
-   중단한다.
-3. 검토한 개별 파일 경로를 `git add -- <path>...`로만 스테이징한다.
-4. `git add .`, `git add -A`, `git add --all`, 디렉터리·glob 경로,
-   `git commit -a`를 사용하지 않는다.
-5. 다음 결정적 gate로 전체 Git index에서 `.omc`, OS 메타데이터와 명백한
+1. 더 이상 계획된 수정이 없고 최종 독립 리뷰·의미 영향 증거가 현재
+   candidate identity와 일치할 때만 이슈 검증과 현재 `AGENTS.md` 고정
+   게이트의 중복 제거된 합집합을 한 번 실행한다.
+2. 서로 독립된 읽기 전용·격리 명령만 같은 candidate에서 병렬 실행한다. 같은
+   index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은 순차 실행하고
+   모든 결과를 join한 뒤 한 번에 판정한다.
+3. 게이트 전후 candidate tree와 filesystem input 상태가 같고 unstaged tracked
+   변경과 예상하지 않은 untracked 입력이 없는지 확인한다.
+4. 다음 결정적 gate로 전체 Git index에서 `.omc`, OS 메타데이터와 명백한
    편집기·IDE 개인 상태를 검사한다.
 
    ```bash
@@ -77,9 +90,17 @@ description: LunchTime GitHub 작업 이슈의 로컬 변경을 범위·제품 �
    실패하면 커밋하거나 파일을 자동 삭제·unstage하지 말고 정확한 경로와 이유를
    보고한다. `.gitignore`는 일반 staging과 상태 노이즈를 줄일 뿐 이 gate를
    대체하지 않는다.
-6. 전체 cached diff를 다시 읽어 이슈 범위, 독립 검토한 snapshot, 비밀·개인
-   정보, 로컬 절대 경로, 개인 설정과 우발적 파일을 확인한다.
-7. 커밋할 패치 자체에 `git diff --cached --check`를 실행한다.
+5. 커밋할 패치 자체에 `git diff --cached --check`를 실행한다.
+6. tracked content를 수정하면 행동·의미 영향·리뷰·게이트 증거를 모두
+   무효화하고 3절의 필요한 빠른 행동 테스트부터 새 candidate를 다시 만든다.
+   tree·input이 같은 환경 전용 실패만 원인과 동일성 근거를 기록한 새 명령으로
+   한 번 실행하며 자동 반복하지 않는다.
+7. candidate와 input이 같아도 의미 영향·독립 리뷰 증거가 불완전하면 3절의
+   의미 영향 판정과 새 독립 리뷰부터 복구한 뒤 최종 게이트로 진행한다.
+8. 최종 gate 증거만 불완전하고 candidate와 input이 같으면 같은 clean
+   snapshot에서 고정 게이트 전체를 새로 실행한다.
+9. candidate tree나 input이 다르면 모든 로컬 증거 재사용을 거부하고 3절의
+   필요한 빠른 행동 테스트부터 새 candidate를 다시 만든다.
 
 ## 5. 메시지와 신원 확인
 
@@ -99,14 +120,18 @@ description: LunchTime GitHub 작업 이슈의 로컬 변경을 범위·제품 �
 
 ## 6. 커밋 후 검증과 보고
 
-1. 생성된 커밋의 해시, 제목, 본문과 포함 경로를 다시 읽고 메시지 validator와
-   commit path gate로 재검증한다.
-2. 사전 확인한 로컬 신원, 이슈 범위와 메시지 계약이 모두 일치하는지
+1. 생성된 커밋의 해시, 제목, 본문과 포함 경로 metadata를 다시 읽고 메시지
+   validator로 재검증한다.
+2. `HEAD^{tree}`가 검토·검증한 candidate tree와 정확히 같은지 확인한다.
+   같으면 candidate에서 통과한 commit path gate 증거를 재사용하고 이 gate와
+   다른 로컬 고정 게이트를 반복하지 않는다.
+3. 사전 확인한 로컬 신원, 이슈 범위와 메시지 계약이 모두 일치하는지
    확인한다.
-3. `git status --short --branch`로 남은 변경을 확인한다. 남은 사용자 변경을
+4. `git status --short --branch`로 남은 변경을 확인한다. 남은 사용자 변경을
    수정하거나 추가 스테이징하지 않는다.
-4. 실패한 hook이나 커밋을 자동으로 재시도하거나 자동으로 amend하지 않는다.
-5. 이슈, 브랜치, 커밋 해시, 포함·제외 경로, 검증, 문서 영향, 독립 리뷰의
-   snapshot·검토자 수·관점·P0~P2 결과, hook 결과와 남은 변경을 보고한다.
-6. `git push`를 실행하지 않았음을 명시한다. 푸시와 PR 작성은 별도
-   `open-pull-request` 작업으로 넘긴다.
+5. 실패한 hook이나 커밋을 자동으로 재시도하거나 자동으로 amend하지 않는다.
+6. 이슈, 브랜치, 커밋 해시, 포함·제외 경로, base·cached diff·candidate·commit
+   tree 결속, 검증 filesystem과 결과, 의미 영향, 독립 리뷰의 검토자
+   수·관점·P0~P2 결과, hook 결과와 남은 변경을 보고한다.
+7. `git push`를 실행하지 않았음을 명시한다. 같은 tree의 로컬 증거를
+   재실행 없이 푸시와 PR 작성의 `open-pull-request` 작업으로 넘긴다.

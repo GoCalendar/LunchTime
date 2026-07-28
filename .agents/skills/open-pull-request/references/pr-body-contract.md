@@ -89,11 +89,32 @@ section은 다음 형태로 감싼다.
 - Ready의 `독립 리뷰`는 `통과`여야 한다. 증거만으로 검토 snapshot(commit
   SHA 또는 base...head), 원본 요구사항 위치, raw diff, 테스트 결과,
   검토자 수·전문 관점과 P0~P2 발견·해소 결과를 재구성할 수 있어야 한다.
+- 같은 기존 검증 표의 증거 셀에서 pre-commit candidate 리뷰부터 PR까지의
+  연속 동일성을 `review-base=<40자리 commit OID>`,
+  `review-tree=<40자리 tree OID>`,
+  `verification-tree=<40자리 tree OID>`,
+  `commit-tree=<40자리 tree OID>`,
+  `pr-head-tree=<40자리 tree OID>`로 기록한다. review-base는 검토한 cached
+  diff의 base이고 네 tree는 모두 같아야 하며 새 필수 행이나 템플릿 필드를
+  추가하지 않는다.
 - Ready의 snapshot은 `review-head=<40자리 SHA>`를 정확히 한 번 포함하고
-  현재 PR head와 완전히 일치해야 한다. 짧은 prefix나 CI 등 다른 용도의 SHA는
-  review-head를 대신하지 않는다. Ready validator와 finalize는 GitHub에서
-  다시 읽은 exact head에 이 증거를 대조하며, head가 바뀌면 이전 리뷰 증거를
-  재사용하지 않는다.
+  현재 PR head와 완전히 일치해야 한다. 이 commit의 tree가 review tree와
+  같다는 위 연속 증거가 있어야 pre-commit 리뷰를 current head에 결속할 수
+  있다. 짧은 prefix나 CI 등 다른 용도의 SHA는 review-head를 대신하지 않는다.
+  Ready validator와 finalize는 GitHub에서 다시 읽은 exact head에 이 증거를
+  대조하며, head나 tree가 바뀌면 이전 리뷰·로컬 게이트 증거를 재사용하지
+  않는다.
+- candidate tree와 input이 같고 의미 영향·리뷰·게이트 명령과 결과가 완전할
+  때만 commit과 PR 단계에서 로컬 증거를 재사용한다. 의미 영향·독립 리뷰
+  증거가 불완전하면 같은 candidate에서 의미 영향 판정과 새 독립 리뷰를 먼저
+  수행한다. 최종 gate 결과 증거만 불완전하면 동일한 clean recovery
+  worktree에 commit parent 기준 exact cached diff·candidate tree를 재구성해
+  현재 `AGENTS.md` 고정 게이트 전체를 새로 실행한다. clean branch의 빈
+  working diff는 복구 증거가 아니다. tracked content가 바뀌거나 candidate
+  tree·input이 다르면 모든 로컬 증거를 무효화하고 필요한 빠른 행동 테스트,
+  의미 영향 판정과 독립 리뷰부터 다시 시작한다.
+- 로컬 증거 재사용은 GitHub required CI를 대신하지 않는다. Ready와 finalize는
+  현재 PR head의 원격 required CI를 계속 요구한다.
 - Ready의 추적 표에 적은 모든 PRD·Policy ID는 현재 branch의 제품 정본에서
   FR·AC·Policy visible heading 또는 PRD 기술 스파이크 표의 첫 셀로 실제
   정의되어 있어야 한다. planned 표식이나 이슈의 예상 ID만으로 Ready 증거를
@@ -102,25 +123,33 @@ section은 다음 형태로 감싼다.
   닫힌 `<details>`, link destination과 주석 안 문자열은 visible 정의·추적
   증거로 인정하지 않는다.
 
-독립 리뷰는 구현 테스트와 제품 문서 영향 판정이 끝난 snapshot을 작성
-컨텍스트와 분리된 읽기 전용 검토자가 확인하는 절차다. 작성자 자기 검토는
-독립 리뷰가 아니며 작성·수정자와 최종 승인자를 분리한다. 의도한 답이나 예상
-결론을 주입하지 않고 원본 요구사항, raw diff와 테스트 결과를 입력으로
-제공한다. 검토자는 직접 수정하지 않고 P0~P2 발견 사항을 파일 위치와 재현
-근거로 보고한다.
+독립 리뷰는 이슈별 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정이
+끝난 staged candidate를 저장소 고정 게이트 전체보다 먼저 작성 컨텍스트와
+분리된 읽기 전용 검토자가 확인하는 절차다. 작성자 자기 검토는 독립 리뷰가
+아니며 작성·수정자와 최종 승인자를 분리한다. 의도한 답이나 예상 결론을
+주입하지 않고 원본 요구사항, 같은 cached diff·candidate tree와 행동 테스트
+결과를 입력으로 제공한다. 검토자는 직접 수정하지 않고 P0~P2 발견 사항을 파일
+위치와 재현 근거로 보고한다.
 
 - 낮은 위험의 단순 변경은 최소 1명이 검토한다.
 - 계약·validator·workflow 변경은 최소 2명이 검토한다.
 - 분산 통신·정합성·보안 같은 고위험 변경은 필요한 전문 관점별 검토자를
-  배치한다.
-- 수정하면 새 snapshot을 별도의 독립 리뷰 패스에 제공한다.
+  병렬 배치한다.
+- 같은 snapshot의 발견 사항을 모두 모아 고정 게이트 전체 없이 일괄
+  수정한다. 행동 테스트와 의미 영향 판정 뒤 새 snapshot을 별도의 독립 리뷰
+  패스에 제공한다.
 - 최초 리뷰를 1회로 세어 review-fix cycle은 최대 3회다. 3회 뒤에도 P0/P1이
   남으면 Ready 전환과 승인을 중단하고 blocker로 기록한다.
+- 더 이상 계획된 수정이 없는 reviewed candidate에서만 현재 `AGENTS.md` 고정
+  게이트 전체를 한 번 실행한다. 독립된 읽기 전용·격리 명령만 병렬 실행하고
+  공유 index·working tree·외부 상태·cache·자원 명령은 순차 실행해 모두
+  join하며 검증 전후 tree·input이 같아야 한다.
 
 ## 5. 문서 영향
 
 - `판정`은 `변경`, `변경 없음`, `결정 필요` 중 하나다.
-- `대상 파일·ID`는 저장소 상대 경로와 변경하거나 검토한 정본 ID를 적는다.
+- `대상 파일·ID`는 저장소 상대 경로와 변경하거나 검토한
+  PRD·Policy·Architecture 정본 ID 또는 파일을 적는다.
 - `근거`는 구현과 정본의 차이 또는 제품 동작이 달라지지 않는 이유를 적는다.
 - Ready에는 `결정 필요`를 허용하지 않는다.
 
