@@ -635,6 +635,16 @@ function createFixture() {
   );
   write(
     root,
+    ".github/workflows/validate-harness-paths.mjs",
+    "#!/usr/bin/env node\n",
+  );
+  write(
+    root,
+    ".github/workflows/validate-harness-paths.test.mjs",
+    "import test from \"node:test\";\ntest(\"fixture\", () => {});\n",
+  );
+  write(
+    root,
     ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
     "export const fixture = true;\n",
   );
@@ -668,21 +678,90 @@ function createFixture() {
     ".github/workflows/validate-harness.yml",
     [
       "name: fixture",
+      "on:",
+      "  workflow_dispatch:",
+      "  schedule:",
+      "    - cron: \"17 18 * * 0\"",
       "jobs:",
-      "  validate:",
+      "  classify:",
+      "    outputs:",
+      "      full: ${{ steps.paths.outputs.full }}",
+      "      product_docs: ${{ steps.paths.outputs.product_docs }}",
+      "      work_item: ${{ steps.paths.outputs.work_item }}",
+      "      commit_pr: ${{ steps.paths.outputs.commit_pr }}",
+      "      finalize: ${{ steps.paths.outputs.finalize }}",
+      "    steps:",
+      "      - id: paths",
+      "        run: |",
+      "          node .github/workflows/validate-harness-paths.mjs \\",
+      "            --event \"$GITHUB_EVENT_NAME\" \\",
+      "            --base \"$BASE_SHA\" \\",
+      "            --head \"$HEAD_SHA\" \\",
+      "            --output \"$GITHUB_OUTPUT\"",
+      "  harness:",
       "    steps:",
       "      - run: |",
+      "          node --check .github/workflows/validate-harness-paths.mjs",
+      "          node --check .github/workflows/validate-harness-paths.test.mjs",
+      "          node --test .github/workflows/validate-harness-paths.test.mjs",
       "          node --check .agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
       "          node --check .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
-      "          node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
       "          node --check .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs",
-      "          node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs",
       "          node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs \\",
       "            --index",
       "          node --check .agents/skills/open-pull-request/scripts/validate-finalize.mjs",
-      "          node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
       "          node --check .agents/skills/open-pull-request/scripts/finalize-merge.mjs",
+      "  product-docs-regression:",
+      "    needs: classify",
+      "    if: ${{ needs.classify.outputs.product_docs == 'true' }}",
+      "    steps:",
+      "      - run: node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
+      "  work-item-regression:",
+      "    needs: classify",
+      "    if: ${{ needs.classify.outputs.work_item == 'true' }}",
+      "    steps:",
+      "      - run: node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs",
+      "  commit-pr-regression:",
+      "    needs: classify",
+      "    if: ${{ needs.classify.outputs.commit_pr == 'true' }}",
+      "    steps:",
+      "      - run: node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs",
+      "  finalize-regression:",
+      "    needs: classify",
+      "    if: ${{ needs.classify.outputs.finalize == 'true' }}",
+      "    steps:",
+      "      - run: |",
+      "          node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
       "          node --test .agents/skills/open-pull-request/scripts/finalize-merge.test.mjs",
+      "  validate:",
+      "    if: ${{ always() }}",
+      "    needs:",
+      "      - classify",
+      "      - harness",
+      "      - product-docs",
+      "      - patch-whitespace",
+      "      - product-docs-regression",
+      "      - work-item-regression",
+      "      - commit-pr-regression",
+      "      - finalize-regression",
+      "    steps:",
+      "      - env:",
+      "          CLASSIFY_RESULT: ${{ needs.classify.result }}",
+      "          HARNESS_RESULT: ${{ needs.harness.result }}",
+      "          PRODUCT_DOCS_RESULT: ${{ needs.product-docs.result }}",
+      "          PATCH_WHITESPACE_RESULT: ${{ needs.patch-whitespace.result }}",
+      "          FULL_SELECTED: ${{ needs.classify.outputs.full }}",
+      "          PRODUCT_DOCS_SELECTED: ${{ needs.classify.outputs.product_docs }}",
+      "          WORK_ITEM_SELECTED: ${{ needs.classify.outputs.work_item }}",
+      "          COMMIT_PR_SELECTED: ${{ needs.classify.outputs.commit_pr }}",
+      "          FINALIZE_SELECTED: ${{ needs.classify.outputs.finalize }}",
+      "          PRODUCT_DOCS_REGRESSION_RESULT: ${{ needs.product-docs-regression.result }}",
+      "          WORK_ITEM_REGRESSION_RESULT: ${{ needs.work-item-regression.result }}",
+      "          COMMIT_PR_REGRESSION_RESULT: ${{ needs.commit-pr-regression.result }}",
+      "          FINALIZE_REGRESSION_RESULT: ${{ needs.finalize-regression.result }}",
+      "        run: |",
+      "          node .github/workflows/validate-harness-paths.mjs \\",
+      "            --verify-results",
       "",
     ].join("\n"),
   );
@@ -4368,6 +4447,146 @@ test("제품 문서와 PR Skill의 수명주기 핵심 계약을 요구한다", 
       result.stderr.includes(`필수 하네스 검증 파일이 없습니다: ${file}`),
       result.stderr,
     );
+  });
+});
+
+test("변경 경로별 하네스 workflow 정적 계약을 요구한다", () => {
+  const cases = [
+    {
+      source: "--event \"$GITHUB_EVENT_NAME\"",
+      replacement: "--trigger \"$GITHUB_EVENT_NAME\"",
+      message: /하네스 수명주기 계약이 없습니다: CI base\/head 경로 분류 실행/,
+    },
+    {
+      source: "  schedule:",
+      replacement: "  scheduled:",
+      message: /하네스 수명주기 계약이 없습니다: CI schedule 전체 회귀 trigger/,
+    },
+    {
+      source: "  workflow_dispatch:",
+      replacement: "  manual:",
+      message:
+        /하네스 수명주기 계약이 없습니다: CI workflow_dispatch 전체 회귀 trigger/,
+    },
+    {
+      source: "full: ${{ steps.paths.outputs.full }}",
+      replacement: "full: false",
+      message: /하네스 수명주기 계약이 없습니다: CI classifier full 선택 출력/,
+    },
+    {
+      source: "needs.classify.outputs.product_docs == 'true'",
+      replacement: "needs.classify.outputs.product_docs == 'false'",
+      message: /하네스 수명주기 계약이 없습니다: CI product docs 조건부 회귀군/,
+    },
+    {
+      source: "needs.classify.outputs.work_item == 'true'",
+      replacement: "needs.classify.outputs.work_item == 'false'",
+      message: /하네스 수명주기 계약이 없습니다: CI work item 조건부 회귀군/,
+    },
+    {
+      source: "needs.classify.outputs.commit_pr == 'true'",
+      replacement: "needs.classify.outputs.commit_pr == 'false'",
+      message: /하네스 수명주기 계약이 없습니다: CI commit PR 조건부 회귀군/,
+    },
+    {
+      source: "needs.classify.outputs.finalize == 'true'",
+      replacement: "needs.classify.outputs.finalize == 'false'",
+      message: /하네스 수명주기 계약이 없습니다: CI finalize 조건부 회귀군/,
+    },
+    {
+      source: "if: ${{ always() }}",
+      replacement: "if: ${{ success() }}",
+      message: /하네스 수명주기 계약이 없습니다: CI aggregate always 실행/,
+    },
+    {
+      source: "      - finalize-regression",
+      replacement: "      - omitted-finalize-regression",
+      message:
+        /하네스 수명주기 계약이 없습니다: CI aggregate direct needs: finalize-regression/,
+    },
+    {
+      source: "FULL_SELECTED: ${{ needs.classify.outputs.full }}",
+      replacement: "FULL_SELECTED: ${{ needs.classify.outputs.finalize }}",
+      message:
+        /하네스 수명주기 계약이 없습니다: CI aggregate 선택값 결속: FULL_SELECTED/,
+    },
+    {
+      source:
+        "FINALIZE_REGRESSION_RESULT: ${{ needs.finalize-regression.result }}",
+      replacement:
+        "FINALIZE_RESULT: ${{ needs.finalize-regression.result }}",
+      message:
+        /하네스 수명주기 계약이 없습니다: CI aggregate job 결과 결속: FINALIZE_REGRESSION_RESULT/,
+    },
+    {
+      source: "--verify-results",
+      replacement: "--report-results",
+      message: /하네스 수명주기 계약이 없습니다: CI 선택 결과 aggregate/,
+    },
+  ];
+
+  for (const { source, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, ".github/workflows/validate-harness.yml");
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(source), `fixture pattern missing: ${source}`);
+      fs.writeFileSync(target, content.replace(source, replacement));
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, source);
+      assert.match(result.stderr, message);
+    });
+  }
+
+  for (const file of [
+    ".github/workflows/validate-harness-paths.mjs",
+    ".github/workflows/validate-harness-paths.test.mjs",
+  ]) {
+    withFixture((root) => {
+      fs.unlinkSync(path.join(root, file));
+      const result = runValidator(root);
+      assert.equal(result.status, 1, file);
+      assert.ok(
+        result.stderr.includes(`필수 하네스 검증 파일이 없습니다: ${file}`),
+        result.stderr,
+      );
+    });
+  }
+});
+
+test("aggregate wiring 검증은 주석을 거부하고 의미 없는 순서에는 독립적이다", () => {
+  for (const source of [
+    "      - finalize-regression",
+    "          FINALIZE_REGRESSION_RESULT: ${{ needs.finalize-regression.result }}",
+  ]) {
+    withFixture((root) => {
+      const target = path.join(root, ".github/workflows/validate-harness.yml");
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(source), `fixture pattern missing: ${source}`);
+      fs.writeFileSync(target, content.replace(source, `      # ${source.trim()}`));
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, source);
+      assert.match(result.stderr, /CI aggregate/);
+    });
+  }
+
+  withFixture((root) => {
+    const target = path.join(root, ".github/workflows/validate-harness.yml");
+    const content = fs
+      .readFileSync(target, "utf8")
+      .replace(
+        "      - classify\n      - harness",
+        "      - harness\n      - classify",
+      )
+      .replace(
+        "          CLASSIFY_RESULT: ${{ needs.classify.result }}\n          HARNESS_RESULT: ${{ needs.harness.result }}",
+        "          HARNESS_RESULT: ${{ needs.harness.result }}\n          CLASSIFY_RESULT: ${{ needs.classify.result }}",
+      );
+    fs.writeFileSync(target, content);
+
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
   });
 });
 
