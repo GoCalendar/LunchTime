@@ -1,0 +1,85 @@
+name: macOS 앱 검증
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # job id가 곧 GitHub check 이름이 된다. ruleset의 필수 검사로 등록할 때 이
+  # 이름을 사용하므로 `name:`을 붙이지 않는다.
+  app-test:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      # runner 이미지 기본값은 Xcode 16.4이므로 명시하지 않으면 로컬과 다른 SDK로
+      # 컴파일된다. 개발 기준과 같은 버전을 고정해 게이트를 결정적으로 만든다.
+      # 이미지에서 이 버전이 제거되면 아래 단계가 실패하며, 그때 지원 버전을
+      # 다시 정한다.
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+
+      - name: 도구 버전 고정 확인
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "고정한 Xcode를 찾을 수 없습니다: $DEVELOPER_DIR"
+            echo "이 runner 이미지에 설치된 Xcode:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i macos
+          swift --version
+
+      - name: 앱 빌드
+        run: |
+          xcodebuild build \
+            -project LunchTime.xcodeproj \
+            -scheme LunchTime \
+            -destination 'platform=macOS'
+
+      # UI 테스트는 automation mode 권한과 앱 실행 타이밍에 의존해 결정적이지
+      # 않으므로 실행에서 제외한다. 기본 scheme도 이미 제외하지만 scheme이 바뀌어도
+      # 게이트가 결정적으로 유지되도록 여기서 한 번 더 제외한다. 대상은 계속
+      # 빌드되므로 컴파일 회귀는 잡는다. BDD/ATDD 테스트 표준도 E2E를 MVP 필수
+      # 게이트로 두지 않는다.
+      - name: 앱 테스트
+        run: |
+          xcodebuild test \
+            -project LunchTime.xcodeproj \
+            -scheme LunchTime \
+            -destination 'platform=macOS' \
+            -skip-testing:LunchTimeUITests \
+            -resultBundlePath "${{ runner.temp }}/LunchTime.xcresult"
+
+      - name: Release 구성 빌드
+        run: |
+          xcodebuild build \
+            -project LunchTime.xcodeproj \
+            -scheme LunchTime \
+            -configuration Release \
+            -destination 'platform=macOS'
+
+      - name: 실패 진단 자료 업로드
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lunchtime-xcresult-${{ github.run_id }}
+          path: ${{ runner.temp }}/LunchTime.xcresult
+          retention-days: 14
+          if-no-files-found: ignore

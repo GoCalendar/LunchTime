@@ -19,3 +19,11 @@ Desktop.ini
 **/.idea/dataSources.local.xml
 **/.idea/shelf/
 **/.idea/httpRequests/
+
+# Xcode build output and private workspace state
+/build/
+/DerivedData/
+*.xcuserstate
+**/xcuserdata/
+**/xcshareddata/IDEWorkspaceChecks.plist
+**/xcshareddata/WorkspaceSettings.xcsettings
