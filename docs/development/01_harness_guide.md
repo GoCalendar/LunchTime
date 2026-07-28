@@ -58,7 +58,7 @@ flowchart TD
 | 이슈·Project 상태 전이·재조회·복구 | [run-github-work-item](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈·Project 요청을 단일 owner로 라우팅 |
 | PR 쓰기·exact-head finalize·원격·로컬 정리 | [open-pull-request](../../.agents/skills/open-pull-request/SKILL.md) | PR 수명주기 요청을 단일 owner로 라우팅 |
 | PR의 고정 필드 | [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md)과 [PR 본문 계약](../../.agents/skills/open-pull-request/references/pr-body-contract.md) | STEP 10·11 입력으로 연결 |
-| CI의 결정적 증거 | [하네스 workflow](../../.github/workflows/validate-harness.yml)의 `validate`, [앱 workflow](../../.github/workflows/app-ci.yml)의 `app-test`, [PR metadata workflow](../../.github/workflows/validate-pr-metadata.yml)의 `pr-metadata` | 현재 required `validate`·`app-test`와 [후행 #65](https://github.com/GoCalendar/LunchTime/issues/65)의 ruleset 활성화를 기다리는 live PR metadata check를 연결 |
+| CI의 결정적 증거 | [하네스 workflow](../../.github/workflows/validate-harness.yml)의 `validate`, [앱 workflow](../../.github/workflows/app-ci.yml)의 `app-test`, [PR metadata workflow](../../.github/workflows/validate-pr-metadata.yml)의 `pr-metadata` | strict required `validate`·`app-test`·`pr-metadata`를 각 독립 workflow의 결정적 결론으로 연결 |
 
 ## 구성요소와 책임
 
@@ -71,12 +71,9 @@ flowchart TD
 | [MVP 작업 이슈 양식](../../.github/ISSUE_TEMPLATE/work-item.yml) | 11개 기존 본문 구역과 행동 시나리오를 담는 `완료 조건` |
 | [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md) | 다섯 H2 안에서 변경 결과·추적성·검증·문서 영향 인계 |
 | [MVP Project](https://github.com/orgs/GoCalendar/projects/1) · [보드](https://github.com/orgs/GoCalendar/projects/1/views/2) | `Todo`·`In Progress`·`Done` 작업 상태 관측 |
-| [`validate` workflow](../../.github/workflows/validate-harness.yml) | PR과 `main`에서 문서·계약·회귀 테스트·commit·diff 결과를 required check `validate`로 결속 |
+| [`validate` workflow](../../.github/workflows/validate-harness.yml) | PR의 `opened`·`synchronize`·`reopened`와 `main` push에서 문서·계약·회귀 테스트·commit·diff 결과를 required check `validate`로 결속 |
 | [`app-test` workflow](../../.github/workflows/app-ci.yml) | PR과 `main`에서 macOS 앱의 Debug build·UI 제외 test·Release build를 required check `app-test`로 검증 |
-| [`pr-metadata` workflow](../../.github/workflows/validate-pr-metadata.yml) | 설정된 `opened`·`synchronize`·`reopened`·`edited`·`ready_for_review` event마다 live 제목·본문·Draft·head·base를 다시 읽어 check `pr-metadata`로 검증하며, [#65](https://github.com/GoCalendar/LunchTime/issues/65)의 required 활성화 전까지 `validate`의 기존 metadata trigger도 유지 |
-
-#65는 required 활성화·trigger 제거와 같은 변경에서 위 두 migration 상태
-문구를 최종 ruleset과 workflow 상태에 맞게 갱신한다.
+| [`pr-metadata` workflow](../../.github/workflows/validate-pr-metadata.yml) | `opened`·`synchronize`·`reopened`·`edited`·`ready_for_review` event마다 live 제목·본문·Draft·head·base를 다시 읽어 required check `pr-metadata`로 검증 |
 
 명령 인자, 이슈 본문 구조와 GitHub 전이의 상세 정본은 각 Skill과 참조 계약에
 둔다. 이 가이드와 세부 계약이 어긋나면 한쪽을 우회하지 말고 같은 변경에서
@@ -176,9 +173,9 @@ flowchart TD
 
 - **목적:** 전체 branch 결과를 다음 작업자가 재구성할 수 있는 Draft 또는 Ready PR로 게시하고 원격 게이트를 확인하며 PR 생성·갱신만 요청한 경우 여기서 멈춘다.
 
-- **핵심 입력:** commit된 clean branch, [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md), [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md), base `main`, required check `validate`·`app-test`와 live PR check `pr-metadata`다.
+- **핵심 입력:** commit된 clean branch, [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md), [`open-pull-request`](../../.agents/skills/open-pull-request/SKILL.md), base `main`, required check `validate`·`app-test`·`pr-metadata`다.
 
-- **완료 조건:** `Closes #N`, 다섯 H2, 실제 추적·문서 영향·검증 증거와 정확히 하나의 `독립 리뷰` 행을 가진 PR이 생성·재조회되고, Ready이면 리뷰 증거가 현재 head를 가리키며 모든 행, 최신 `main` 기준 required check `validate`·`app-test`와 live `pr-metadata`가 통과한다.
+- **완료 조건:** `Closes #N`, 다섯 H2, 실제 추적·문서 영향·검증 증거와 정확히 하나의 `독립 리뷰` 행을 가진 PR이 생성·재조회되고, Ready이면 리뷰 증거가 현재 head를 가리키며 모든 행과 최신 `main` 기준 required check `validate`·`app-test`·`pr-metadata`가 통과한다.
 
 - **대표 실패·중단 조건:** dirty·뒤처진 branch, 중복 PR, 미실행·실패·결정 필요를 숨긴 Ready, stale review snapshot, CI 실패 또는 생성 뒤 재조회 불일치이며 PR-only 요청을 임의로 finalize하지 않는다.
 

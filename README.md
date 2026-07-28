@@ -236,14 +236,10 @@ Release 구성에서 빌드되지 않습니다.
 하네스의 회귀, 제품 문서와 패치 공백 job도 서로 독립적으로 실행되며 required
 `validate`가 실패·취소·예상 밖 skip을 하나의 실패 결론으로 묶습니다.
 
-병합을 차단하는 필수 검사는 저장소 ruleset이 정합니다. 현재 ruleset은 `app-test`와
-`validate`를 필수로 요구합니다. `pr-metadata`는 producer를 먼저 게시하는
-migration 단계이며 [후행 #65](https://github.com/GoCalendar/LunchTime/issues/65)가
-default branch 게시를 확인한 뒤 required로 활성화합니다. 그때까지 `validate`의
-`edited`·`ready_for_review` trigger를 유지해 기존 보호를 약화시키지 않습니다.
-#65는 활성화·trigger 제거와 같은 변경에서 이 문단과 하네스 가이드의 상태
-문구도 최종 상태로 갱신합니다. 세 workflow 모두 해당 job에 별도 표시 이름을
-두지 않으므로 job ID가 검사 이름이 됩니다.
+병합을 차단하는 필수 검사는 저장소 ruleset이 정합니다. 현재 ruleset은
+`app-test`·`validate`·`pr-metadata`를 strict required check로 요구합니다.
+세 workflow 모두 해당 job에 별도 표시 이름을 두지 않으므로 job ID가 검사
+이름이 됩니다.
 
 ## 제품 문서 갱신 절차
 

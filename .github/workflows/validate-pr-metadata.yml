@@ -18,8 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 후행 migration에서 이 job id를 ruleset required check로 등록한다.
-  # 그전까지는 기존 validate의 PR metadata 검사를 함께 유지한다.
+  # 이 job id는 GitHub ruleset의 required check 이름이다.
   pr-metadata:
     runs-on: ubuntu-latest
     timeout-minutes: 5
