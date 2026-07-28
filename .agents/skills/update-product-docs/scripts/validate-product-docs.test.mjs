@@ -645,6 +645,16 @@ function createFixture() {
   );
   write(
     root,
+    ".github/workflows/validate-app-paths.mjs",
+    "#!/usr/bin/env node\n",
+  );
+  write(
+    root,
+    ".github/workflows/validate-app-paths.test.mjs",
+    "import test from \"node:test\";\ntest(\"fixture\", () => {});\n",
+  );
+  write(
+    root,
     ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
     "export const fixture = true;\n",
   );
@@ -762,6 +772,87 @@ function createFixture() {
       "        run: |",
       "          node .github/workflows/validate-harness-paths.mjs \\",
       "            --verify-results",
+      "",
+    ].join("\n"),
+  );
+  write(
+    root,
+    ".github/workflows/app-ci.yml",
+    [
+      "name: fixture app CI",
+      "on:",
+      "  pull_request:",
+      "    types:",
+      "      - opened",
+      "      - synchronize",
+      "      - reopened",
+      "      - edited",
+      "  push:",
+      "    branches:",
+      "      - main",
+      "  workflow_dispatch:",
+      "  schedule:",
+      "    - cron: \"23 18 * * 0\"",
+      "jobs:",
+      "  classify:",
+      "    outputs:",
+      "      app: ${{ steps.paths.outputs.app }}",
+      "      full: ${{ steps.paths.outputs.full }}",
+      "    steps:",
+      "      - run: |",
+      "          node --check .github/workflows/validate-app-paths.mjs",
+      "          node --check .github/workflows/validate-app-paths.test.mjs",
+      "          node --test .github/workflows/validate-app-paths.test.mjs",
+      "      - id: paths",
+      "        env:",
+      "          EVENT_NAME: ${{ github.event_name }}",
+      "          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}",
+      "          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha || '' }}",
+      "        run: |",
+      "          node .github/workflows/validate-app-paths.mjs \\",
+      "            --event \"$EVENT_NAME\" \\",
+      "            --base \"$BASE_SHA\" \\",
+      "            --head \"$HEAD_SHA\" \\",
+      "            --output \"$GITHUB_OUTPUT\"",
+      "  app-build:",
+      "    needs: classify",
+      "    if: ${{ needs.classify.outputs.app == 'true' }}",
+      "    runs-on: macos-15",
+      "    steps:",
+      "      - name: 앱 빌드",
+      "        run: |",
+      "          xcodebuild build \\",
+      "            -project LunchTime.xcodeproj \\",
+      "            -scheme LunchTime \\",
+      "            -destination 'platform=macOS'",
+      "      - name: 앱 테스트",
+      "        run: |",
+      "          xcodebuild test \\",
+      "            -project LunchTime.xcodeproj \\",
+      "            -scheme LunchTime \\",
+      "            -destination 'platform=macOS' \\",
+      "            -skip-testing:LunchTimeUITests \\",
+      "            -resultBundlePath \"${{ runner.temp }}/LunchTime.xcresult\"",
+      "      - name: Release 구성 빌드",
+      "        run: |",
+      "          xcodebuild build \\",
+      "            -project LunchTime.xcodeproj \\",
+      "            -scheme LunchTime \\",
+      "            -configuration Release \\",
+      "            -destination 'platform=macOS'",
+      "  app-test:",
+      "    if: ${{ always() }}",
+      "    needs:",
+      "      - classify",
+      "      - app-build",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - env:",
+      "          APP_SELECTED: ${{ needs.classify.outputs.app }}",
+      "          FULL_SELECTED: ${{ needs.classify.outputs.full }}",
+      "          CLASSIFY_RESULT: ${{ needs.classify.result }}",
+      "          APP_BUILD_RESULT: ${{ needs.app-build.result }}",
+      "        run: node .github/workflows/validate-app-paths.mjs --verify-results",
       "",
     ].join("\n"),
   );
@@ -4585,6 +4676,347 @@ test("aggregate wiring 검증은 주석을 거부하고 의미 없는 순서에�
       );
     fs.writeFileSync(target, content);
 
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("변경 경로별 앱 workflow 정적 계약을 요구한다", () => {
+  const cases = [
+    {
+      source: "      - opened",
+      replacement: "      - converted_to_draft",
+      message: /앱 CI 계약이 없습니다: pull_request head 변경 trigger/,
+    },
+    {
+      source: "      - edited",
+      replacement: "      - labeled",
+      message: /앱 CI 계약이 없습니다: pull_request head 변경 trigger/,
+    },
+    {
+      source: "      - main",
+      replacement: "      - develop",
+      message: /앱 CI 계약이 없습니다: main push trigger/,
+    },
+    {
+      source: "  workflow_dispatch:",
+      replacement: "  manual:",
+      message: /앱 CI 계약이 없습니다: workflow_dispatch 전체 앱 검증 trigger/,
+    },
+    {
+      source: "  schedule:",
+      replacement: "  scheduled:",
+      message: /앱 CI 계약이 없습니다: schedule 전체 앱 검증 trigger/,
+    },
+    {
+      source: "app: ${{ steps.paths.outputs.app }}",
+      replacement: "app: false",
+      message: /앱 CI 계약이 없습니다: classifier app 선택 출력/,
+    },
+    {
+      source: "full: ${{ steps.paths.outputs.full }}",
+      replacement: "full: false",
+      message: /앱 CI 계약이 없습니다: classifier full 선택 출력/,
+    },
+    {
+      source: "          node --test .github/workflows/validate-app-paths.test.mjs",
+      replacement:
+        "          echo skipped # node --test .github/workflows/validate-app-paths.test.mjs",
+      message: /앱 CI 계약이 없습니다: 앱 경로 classifier 회귀 테스트/,
+    },
+    {
+      source: "--event \"$EVENT_NAME\"",
+      replacement: "--trigger \"$EVENT_NAME\"",
+      message: /앱 CI 계약이 없습니다: 앱 base\/head 경로 분류 실행/,
+    },
+    {
+      source: "      - id: paths",
+      replacement: "      - id: classifier-run",
+      message: /앱 CI 계약이 없습니다: classifier output producer step id/,
+    },
+    {
+      source:
+        "          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}",
+      replacement: "          BASE_SHA: ${{ github.sha }}",
+      message:
+        /앱 CI 계약이 없습니다: classifier producer env 결속: BASE_SHA/,
+    },
+    {
+      source: "needs.classify.outputs.app == 'true'",
+      replacement: "needs.classify.outputs.app == 'false'",
+      message: /앱 CI 계약이 없습니다: app-build 조건부 실행/,
+    },
+    {
+      source: "    runs-on: macos-15",
+      replacement: "    runs-on: ubuntu-latest",
+      message: /앱 CI 계약이 없습니다: app-build macOS runner/,
+    },
+    {
+      source: "          xcodebuild test \\",
+      replacement: "          xcodebuild archive \\",
+      message: /앱 CI 계약이 없습니다: app-build 앱 테스트/,
+    },
+    {
+      source: "    if: ${{ always() }}",
+      replacement: "    if: ${{ success() }}",
+      message: /앱 CI 계약이 없습니다: required app-test always 실행/,
+    },
+    {
+      source: "  app-test:\n    if: ${{ always() }}",
+      replacement:
+        "  app-test:\n    name: renamed-app-check\n    if: ${{ always() }}",
+      message: /앱 CI 계약이 없습니다: required check context app-test/,
+    },
+    {
+      source: "      - app-build",
+      replacement: "      - omitted-app-build",
+      message: /앱 CI 계약이 없습니다: required app-test direct needs: app-build/,
+    },
+    {
+      source: "APP_SELECTED: ${{ needs.classify.outputs.app }}",
+      replacement: "APP_SELECTED: false",
+      message: /앱 CI 계약이 없습니다: required app-test 선택값 결속: APP_SELECTED/,
+    },
+    {
+      source: "FULL_SELECTED: ${{ needs.classify.outputs.full }}",
+      replacement: "FULL_SELECTED: false",
+      message: /앱 CI 계약이 없습니다: required app-test 선택값 결속: FULL_SELECTED/,
+    },
+    {
+      source: "CLASSIFY_RESULT: ${{ needs.classify.result }}",
+      replacement: "CLASSIFY_RESULT: success",
+      message: /앱 CI 계약이 없습니다: required app-test job 결과 결속: CLASSIFY_RESULT/,
+    },
+    {
+      source: "APP_BUILD_RESULT: ${{ needs.app-build.result }}",
+      replacement: "APP_BUILD_RESULT: success",
+      message: /앱 CI 계약이 없습니다: required app-test job 결과 결속: APP_BUILD_RESULT/,
+    },
+    {
+      source: "--verify-results",
+      replacement:
+        "--report-results # node .github/workflows/validate-app-paths.mjs --verify-results",
+      message: /앱 CI 계약이 없습니다: required app-test 선택 결과 aggregate/,
+    },
+  ];
+
+  for (const { source, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, ".github/workflows/app-ci.yml");
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(source), `fixture pattern missing: ${source}`);
+      fs.writeFileSync(target, content.replace(source, replacement));
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, source);
+      assert.match(result.stderr, message);
+    });
+  }
+
+  withFixture((root) => {
+    const target = path.join(root, ".github/workflows/app-ci.yml");
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(
+      target,
+      content.replace(
+        "      - reopened",
+        "      - reopened\n      - ready_for_review",
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /앱 CI 계약이 없습니다: same-head ready_for_review 재실행 제거/,
+    );
+  });
+
+  for (const file of [
+    ".github/workflows/validate-app-paths.mjs",
+    ".github/workflows/validate-app-paths.test.mjs",
+  ]) {
+    withFixture((root) => {
+      fs.unlinkSync(path.join(root, file));
+      const result = runValidator(root);
+      assert.equal(result.status, 1, file);
+      assert.ok(
+        result.stderr.includes(`필수 하네스 검증 파일이 없습니다: ${file}`),
+        result.stderr,
+      );
+    });
+  }
+});
+
+test("앱 workflow 구조 검증은 env와 run 문자열 decoy를 거부한다", () => {
+  const cases = [
+    {
+      mutate(content) {
+        return content.replace(
+          [
+            "    outputs:",
+            "      app: ${{ steps.paths.outputs.app }}",
+            "      full: ${{ steps.paths.outputs.full }}",
+          ].join("\n"),
+          [
+            "    outputs:",
+            "      app: false",
+            "      full: ${{ steps.paths.outputs.full }}",
+            "    env:",
+            "      app: ${{ steps.paths.outputs.app }}",
+          ].join("\n"),
+        );
+      },
+      message: /앱 CI 계약이 없습니다: classifier app 선택 출력/,
+    },
+    {
+      mutate(content) {
+        return content
+          .replace("      - id: paths", "      - id: classifier-run")
+          .replace(
+            "  app-build:",
+            [
+              "      - id: paths",
+              "        run: |",
+              "          echo \"app=false\" >> \"$GITHUB_OUTPUT\"",
+              "          echo \"full=false\" >> \"$GITHUB_OUTPUT\"",
+              "  app-build:",
+            ].join("\n"),
+          );
+      },
+      message: /앱 CI 계약이 없습니다: classifier output producer step id/,
+    },
+    {
+      mutate(content) {
+        return content.replace("      - run: |", "      - run: >");
+      },
+      message: /앱 CI 계약이 없습니다: 앱 경로 classifier 구문 검사/,
+    },
+    {
+      mutate(content) {
+        return content
+          .replace(
+            "    runs-on: macos-15\n    steps:",
+            [
+              "    runs-on: macos-15",
+              "    env:",
+              "      DECOY: |",
+              "        xcodebuild test \\",
+              "    steps:",
+            ].join("\n"),
+          )
+          .replace(
+            "          xcodebuild test \\",
+            "          echo skipped-test",
+          );
+      },
+      message: /앱 CI 계약이 없습니다: app-build 앱 테스트/,
+    },
+    {
+      mutate(content) {
+        return content.replace(
+          [
+            "    runs-on: ubuntu-latest",
+            "    steps:",
+            "      - env:",
+            "          APP_SELECTED: ${{ needs.classify.outputs.app }}",
+          ].join("\n"),
+          [
+            "    runs-on: ubuntu-latest",
+            "    env:",
+            "      APP_SELECTED: ${{ needs.classify.outputs.app }}",
+            "    steps:",
+            "      - env:",
+            "          APP_SELECTED: false",
+          ].join("\n"),
+        );
+      },
+      message:
+        /앱 CI 계약이 없습니다: required app-test 선택값 결속: APP_SELECTED/,
+    },
+    {
+      mutate(content) {
+        return content.replace(
+          "        run: node .github/workflows/validate-app-paths.mjs --verify-results",
+          [
+            "        env:",
+            "          DECOY: |",
+            "            node .github/workflows/validate-app-paths.mjs --verify-results",
+            "        run: echo skipped-aggregate",
+          ].join("\n"),
+        );
+      },
+      message: /앱 CI 계약이 없습니다: required app-test 선택 결과 aggregate/,
+    },
+  ];
+
+  for (const { mutate, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, ".github/workflows/app-ci.yml");
+      const content = fs.readFileSync(target, "utf8");
+      const mutated = mutate(content);
+      assert.notEqual(mutated, content);
+      fs.writeFileSync(target, mutated);
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("앱 aggregate 검증은 주석을 거부하고 job 순서에는 독립적이다", () => {
+  withFixture((root) => {
+    const target = path.join(root, ".github/workflows/app-ci.yml");
+    const content = fs.readFileSync(target, "utf8");
+    const source = "      - app-build";
+    assert.ok(content.includes(source));
+    fs.writeFileSync(
+      target,
+      content.replace(
+        source,
+        "      - omitted-app-build\n      # - app-build",
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /앱 CI 계약이 없습니다: required app-test direct needs: app-build/,
+    );
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, ".github/workflows/app-ci.yml");
+    const content = fs.readFileSync(target, "utf8");
+    const appTestStart = content.indexOf("  app-test:\n");
+    const jobsMarker = "jobs:\n";
+    const insertAt = content.indexOf(jobsMarker) + jobsMarker.length;
+    assert.ok(appTestStart > insertAt);
+
+    const appTestBlock = content.slice(appTestStart).trimEnd();
+    const withoutAppTest = content.slice(0, appTestStart).trimEnd();
+    const reordered = [
+      withoutAppTest.slice(0, insertAt),
+      appTestBlock,
+      withoutAppTest.slice(insertAt),
+      "",
+    ]
+      .join("\n")
+      .replace(
+        "      - classify\n      - app-build",
+        "      - app-build\n      - classify",
+      )
+      .replace(
+        "          APP_SELECTED: ${{ needs.classify.outputs.app }}\n          FULL_SELECTED: ${{ needs.classify.outputs.full }}",
+        "          FULL_SELECTED: ${{ needs.classify.outputs.full }}\n          APP_SELECTED: ${{ needs.classify.outputs.app }}",
+      )
+      .replace(
+        "      - reopened",
+        "      - reopened\n      # - ready_for_review",
+      );
+    fs.writeFileSync(target, reordered);
     const result = runValidator(root);
     assert.equal(result.status, 0, result.stderr);
   });

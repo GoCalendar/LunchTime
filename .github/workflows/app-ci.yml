@@ -6,22 +6,63 @@ on:
       - opened
       - synchronize
       - reopened
-      - ready_for_review
+      - edited
   push:
     branches:
       - main
+  workflow_dispatch:
+  schedule:
+    - cron: "23 18 * * 0"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # job id가 곧 GitHub check 이름이 된다. ruleset의 필수 검사로 등록할 때 이
-  # 이름을 사용하므로 `name:`을 붙이지 않는다.
-  app-test:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.paths.outputs.app }}
+      full: ${{ steps.paths.outputs.full }}
+      reason: ${{ steps.paths.outputs.reason }}
+      changed_paths_json: ${{ steps.paths.outputs.changed_paths_json }}
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Node.js 고정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: 경로 classifier 자체 검증
+        run: |
+          node --check .github/workflows/validate-app-paths.mjs
+          node --check .github/workflows/validate-app-paths.test.mjs
+          node --test .github/workflows/validate-app-paths.test.mjs
+
+      - name: 변경 경로 분류
+        id: paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha || '' }}
+        run: |
+          node .github/workflows/validate-app-paths.mjs \
+            --event "$EVENT_NAME" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --output "$GITHUB_OUTPUT"
+
+  app-build:
+    needs: classify
+    if: ${{ needs.classify.outputs.app == 'true' }}
     runs-on: macos-15
     timeout-minutes: 45
     env:
@@ -83,3 +124,24 @@ jobs:
           path: ${{ runner.temp }}/LunchTime.xcresult
           retention-days: 14
           if-no-files-found: ignore
+
+  # job id가 곧 GitHub check 이름이 된다. ruleset의 필수 검사 `app-test`는
+  # macOS 실행 여부와 실제 결과를 대조하는 이 빠른 결론 job에 연결한다.
+  app-test:
+    if: ${{ always() }}
+    needs:
+      - classify
+      - app-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+
+      - name: 선택 결과와 실행 결과 결속
+        env:
+          APP_SELECTED: ${{ needs.classify.outputs.app }}
+          FULL_SELECTED: ${{ needs.classify.outputs.full }}
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          APP_BUILD_RESULT: ${{ needs.app-build.result }}
+        run: node .github/workflows/validate-app-paths.mjs --verify-results

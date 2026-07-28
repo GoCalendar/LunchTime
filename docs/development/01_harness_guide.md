@@ -72,7 +72,7 @@ flowchart TD
 | [PR 템플릿](../../.github/PULL_REQUEST_TEMPLATE.md) | 다섯 H2 안에서 변경 결과·추적성·검증·문서 영향 인계 |
 | [MVP Project](https://github.com/orgs/GoCalendar/projects/1) · [보드](https://github.com/orgs/GoCalendar/projects/1/views/2) | `Todo`·`In Progress`·`Done` 작업 상태 관측 |
 | [`validate` workflow](../../.github/workflows/validate-harness.yml) | PR의 `opened`·`synchronize`·`reopened`와 `main` push에서 문서·계약·회귀 테스트·commit·diff 결과를 required check `validate`로 결속 |
-| [`app-test` workflow](../../.github/workflows/app-ci.yml) | PR과 `main`에서 macOS 앱의 Debug build·UI 제외 test·Release build를 required check `app-test`로 검증 |
+| [`app-test` workflow](../../.github/workflows/app-ci.yml) | 앱 영향 경로에서만 macOS Debug build·UI 제외 test·Release build를 실행하고 선택·실행 결과를 required check `app-test`로 결속 |
 | [`pr-metadata` workflow](../../.github/workflows/validate-pr-metadata.yml) | `opened`·`synchronize`·`reopened`·`edited`·`ready_for_review` event마다 live 제목·본문·Draft·head·base를 다시 읽어 required check `pr-metadata`로 검증 |
 
 명령 인자, 이슈 본문 구조와 GitHub 전이의 상세 정본은 각 Skill과 참조 계약에
@@ -90,6 +90,15 @@ workflow·경로 classifier·공유 하네스 계약 변경, 확정할 수 없�
 required check `validate`는 classifier가 선택한 회귀군(`true`)의 `success`와
 선택하지 않은 회귀군(`false`)의 `skipped`를 각각 요구하므로, 생략과 실패를
 혼동하지 않는다.
+
+`app-test` workflow도 docs·tooling-only 변경에는 macOS runner를 할당하지
+않는다. 앱·workflow·classifier 변경, 확정할 수 없는 diff,
+`schedule`·`workflow_dispatch`는 macOS 검증을 선택해 fail-closed하고,
+required `app-test`가 classifier 선택값과 `app-build`의 실제
+`success`·`skipped` 결과를 결속한다. PR `edited`는 base 변경을 놓치지 않도록
+현재 base/head를 다시 분류하되 docs·tooling-only면 macOS를 계속 생략한다.
+같은 head의 Draft→Ready 전환은 앱 내용을 바꾸지 않으므로 앱 workflow를 다시
+실행하지 않으며, Ready 상태 자체는 `pr-metadata`가 검증한다.
 
 ## 최종 snapshot 검증 순서
 
