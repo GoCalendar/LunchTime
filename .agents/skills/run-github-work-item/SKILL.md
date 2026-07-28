@@ -46,16 +46,31 @@ node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs apply --dry-r
 `create` 실제 쓰기는 직전 같은 입력의 dry-run token 없이는 거부한다. `check`와
 `validate-body`는 항상 읽기 전용이다.
 
-구현은 이슈의 시나리오를 테스트하고 제품 문서 영향을 판정한 뒤 고정한 raw
-diff snapshot을 작성 컨텍스트와 분리된 읽기 전용 검토자에게 넘긴다. 작성자
-자기 검토는 독립 리뷰가 아니며 작성·수정자와 최종 승인자를 분리한다. 의도한
-답이나 예상 결론을 주입하지 않고 원본 요구사항, raw diff와 테스트 결과를
-제공하며, 검토자는 P0~P2 발견 사항을 파일 위치와 재현 근거로 보고하고 직접
-수정하지 않는다. 낮은 위험은 최소 1명, 계약·validator·workflow 변경은 최소
-2명, 고위험 변경은 필요한 전문 관점별 검토자를 사용한다. 수정 후에는 새
-snapshot을 별도 패스로 검토하고 최초 리뷰를 1회로 세어 최대 3회까지만
-review-fix를 반복한다. 3회 뒤에도 P0/P1이 남으면 상태 전이나 승인을 진행하지
-않고 blocker로 보고한다. 이 흐름을 위해 새 리뷰 전용 Skill을 만들지 않는다.
+## 구현 snapshot 검증
+
+구현 중에는 이슈의 시나리오를 확인하는 빠른 행동 테스트만 반복한다. 그 뒤
+`update-product-docs`로 전체 diff와 변경 경로를 PRD·Policy·Architecture
+정본에 대조하며, 필요한 정본이 누락됐거나 금지 경로에 있으면 tooling-only
+비적용을 승인하지 않고 별도 제품 계약 이슈로 차단한다.
+
+`commit-work-item`은 진입 시 기존 index가 다른 작업을 포함하지 않는지 확인한
+뒤 검토한 경로만 명시적으로 stage한다. unstaged tracked 변경과 예상하지 않은
+untracked 입력이 없는 cached diff·candidate tree를 고정해 작성 컨텍스트와
+분리된 읽기 전용 검토자들에게 같은 snapshot으로 넘긴다. 작성자 자기 검토는
+독립 리뷰가 아니며 작성·수정자와 최종 승인자를 분리한다. 의도한 답이나 예상
+결론을 주입하지 않고 원본 요구사항, cached diff, 행동 테스트와 정본 영향
+결과를 제공하며, 검토자는 P0~P2 발견 사항을 파일 위치와 재현 근거로 보고하고
+직접 수정하지 않는다. 낮은 위험은 최소 1명, 계약·validator·workflow 변경은
+최소 2명, 고위험 변경은 필요한 전문 관점별 검토자를 병렬 배치한다.
+
+같은 snapshot의 발견 사항을 모두 모은 뒤 저장소 고정 게이트 전체를 실행하지
+않고 한 번에 수정한다. 수정하면 필요한 행동 테스트와 정본 영향 판정을
+갱신하고 새 candidate만 별도 패스로 검토한다. 최초 리뷰를 1회로 세어 최대
+3회까지만 review-fix를 반복하며, 3회 뒤에도 P0/P1이 남으면 상태 전이나 승인을
+진행하지 않고 blocker로 보고한다. 더 이상 계획된 수정이 없을 때만 같은
+candidate에서 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다. tracked
+content가 바뀌면 정본 영향·리뷰·게이트 증거를 모두 무효화하고 새 candidate로
+돌아간다. 이 흐름을 위해 새 리뷰 전용 Skill을 만들지 않는다.
 
 ## 안전 규칙
 

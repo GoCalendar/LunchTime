@@ -145,6 +145,32 @@ const harnessFields = [
   "완료 조건",
   "대표 실패·중단 조건",
 ];
+const finalSnapshotOrderFixture = [
+  "## 최종 snapshot 검증 순서",
+  "",
+  "| 순서 | 단계 | 필수 계약 |",
+  "|---|---|---|",
+  "| 1 | 빠른 행동 검증 | 구현 중에는 이슈별 행동 테스트만 빠르게 반복하며 저장소 고정 게이트 전체를 실행하지 않는다. |",
+  "| 2 | 정본 의미 영향 | 독립 리뷰 전에 PRD·Policy·Architecture 의미 영향과 이슈 경로를 판정하고 필요한 정본의 누락·충돌·금지 경로가 있으면 중단한다. |",
+  "| 3 | candidate 고정 | clean 독립 worktree에서 검토한 경로만 명시적으로 stage하고 cached diff·candidate tree를 고정하며 unstaged tracked 변경과 예상하지 않은 untracked 입력이 없어야 한다. |",
+  "| 4 | 독립 리뷰 | 위험도별 reviewer가 같은 cached diff·candidate tree를 병렬 검토하고 발견 사항을 합쳐 일괄 수정하며, 수정하면 행동 테스트·정본 의미 영향 판정 뒤 새 snapshot만 다시 리뷰한다. |",
+  "| 5 | 최종 저장소 게이트 | 계획된 수정이 없을 때 같은 filesystem에서 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다. 독립된 읽기 전용·격리 명령만 병렬 실행하고 같은 index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은 순차 실행한 뒤 모든 결과를 join한다. 검증 전후 candidate tree와 gate input은 같아야 한다. |",
+  "| 6 | commit | candidate tree와 commit tree가 같고 증거가 완전하면 로컬 게이트를 반복하지 않고 기존 증거를 인계한다. |",
+  "| 7 | PR·필수 CI | commit tree와 PR head tree가 같을 때 로컬 증거를 재사용하되 원격 required CI는 생략하지 않는다. |",
+  "",
+];
+const finalSnapshotRecoveryFixture = [
+  "## 실패와 증거 무효화",
+  "",
+  "| 상황 | 기존 증거 | 재진입 |",
+  "|---|---|---|",
+  "| tracked content 변경 | review·gate 증거 모두 무효 | 새 candidate에서 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정 뒤 독립 리뷰부터 다시 시작한다. |",
+  "| 환경 전용 실패·동일 tree·input | review 증거 유지, 실패 gate 미완료 | 원인과 동일 tree·input 근거를 기록하고 새 명령을 한 번만 실행한다. 자동 반복하지 않는다. |",
+  "| 의미 영향·리뷰 증거 불완전·동일 tree·input | review·gate 증거 재사용 거부 | 같은 candidate·input에서 PRD·Policy·Architecture 의미 영향 판정과 새 독립 리뷰를 수행한 뒤 최종 게이트로 진행한다. |",
+  "| 최종 gate 증거 불완전·동일 tree·input | 로컬 gate 증거 재사용 거부 | exact candidate·input을 동일한 clean snapshot에 재구성하고 현재 `AGENTS.md` 고정 게이트 전체를 새로 실행한다. |",
+  "| candidate tree·input 불일치 | review·gate 증거 모두 무효 | 다른 tree나 input에 gate만 실행하지 않고 새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다. |",
+  "",
+];
 const updateProductDocsFixtureContract = [
   "## Planned ID 계약",
   "",
@@ -166,10 +192,59 @@ const updateProductDocsFixtureContract = [
   "  block scanner가 fenced·indented code와 숨겨진 raw HTML을 후보에서 제외한",
   "  뒤, 다른 H2 후보의 visible/source skeleton이 보호 이름 token sequence를",
   "  나타내거나 포함할 수 있으면 실제 rendering과 무관하게 fail-closed한다.",
+  "",
+  "## 품질 게이트 실행",
+  "",
+  "좁은 행동 테스트는 최종 저장소 게이트를 대신하지 않는다.",
+  "PRD·Policy·Architecture 의미 영향 판정은 독립 리뷰 전에 끝내고 cached diff·candidate tree를 검토한다.",
+  "review-fix 사이에는 고정 게이트 전체를 실행하지 않는다.",
+  "계획된 수정이 없으면 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다.",
+  "tracked content가 바뀌면 행동·의미 영향·리뷰·게이트 증거를 무효화하고 빠른 행동 테스트와 의미 영향 판정부터 다시 시작한다.",
+  "tree·input이 같은 환경 전용 실패는 한 번만 복구한다.",
+  "의미 영향·독립 리뷰 증거가 불완전하면 새 리뷰부터 복구하고 최종 gate 증거만 불완전하면 gate를 새로 실행한다. candidate tree나 input이 다르면 빠른 행동 테스트와 의미 영향 판정부터 다시 시작한다.",
 ];
 const runGithubWorkItemFixtureContract = [
   "요청·파생 label의 정확한 집합을 요구하며 요청하지 않은 label은 보존한다.",
   "stale `dependency:blocked`는 live 의존 관계를 재확인한 뒤 제한적으로 복구한다.",
+  "",
+  "## 구현 snapshot 검증",
+  "",
+  "빠른 행동 테스트 뒤 PRD·Policy·Architecture를 확인한다.",
+  "cached diff·candidate tree를 같은 snapshot으로 검토한다.",
+  "발견 사항을 한 번에 수정하고 새 candidate를 다시 검토한다.",
+  "계획된 수정이 없으면 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다.",
+];
+const commitWorkItemFixtureContract = [
+  "## 3. Candidate staging과 독립 리뷰",
+  "",
+  "빠른 행동 테스트 동안 고정 게이트 전체를 실행하지 않는다.",
+  "PRD·Policy·Architecture를 대조하고 candidate tree를 독립 리뷰한 뒤 발견 사항을 일괄 수정한다.",
+  "review-fix 사이에는 고정 게이트 전체를 실행하지 않는다.",
+  "",
+  "## 4. 최종 게이트와 snapshot 결속",
+  "",
+  "계획된 수정이 없으면 현재 `AGENTS.md` 고정 게이트를 한 번 실행한다.",
+  "tracked content가 바뀌면 행동·의미 영향·리뷰·게이트 증거를 모두 무효화하고 빠른 행동 테스트부터 새 candidate를 만든다. tree·input이 같은 환경 전용 실패는 한 번 복구한다.",
+  "의미 영향·독립 리뷰 증거가 불완전하면 새 리뷰부터, 최종 gate 증거만 불완전하면 gate부터 복구한다. candidate tree나 input이 다르면 모든 로컬 증거를 버리고 빠른 행동 테스트부터 새 candidate를 만든다.",
+  "",
+  "## 6. 커밋 후 검증과 보고",
+  "",
+  "`HEAD^{tree}`와 candidate tree가 같으면 commit path gate 증거를 재사용하고 반복하지 않는다.",
+];
+const commitContractFixture = [
+  "# 커밋 계약",
+  "",
+  "## 5. 검증 증거",
+  "",
+  "이슈별 행동 테스트 뒤 PRD·Policy·Architecture를 판정하고 cached diff digest와 candidate tree를 고정해 독립 리뷰한다.",
+  "고정 게이트 전체를 한 번 실행하고 commit tree와 PR head tree를 결속하며 원격 required CI는 생략하지 않는다.",
+  "tracked content가 바뀌면 행동 테스트·의미 영향·리뷰·게이트 증거를 무효화하고 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시 시작한다.",
+  "의미 영향·독립 리뷰 증거가 불완전하면 새 리뷰부터, 최종 gate 증거만 불완전하면 gate부터 복구하고 candidate tree나 input이 다르면 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 새 candidate로 돌아간다.",
+  "",
+  "## 9. 커밋 후 검증",
+  "",
+  "`HEAD^{tree}`와 candidate tree가 같으면 commit path gate 증거를 재사용하고 다시 실행하지 않는다.",
+  "",
 ];
 const openPullRequestFixtureContract = [
   "PR 생성·갱신만 요청은 재조회에서 멈춘다.",
@@ -186,7 +261,7 @@ const openPullRequestFixtureContract = [
   "review-head=<40자리 SHA>를 정확히 한 번 기록하고 현재 head와 완전히 일치시킨다.",
   "FR·AC·Policy visible heading 또는 PRD 기술 스파이크 표의 첫 셀로 실제 정의한다.",
   "## 7. Exact-head squash merge\nfinalize-merge.mjs --snapshot <snapshot> --confirm-plan <token>을 사용한다.",
-  "gh pr merge는 shell 문자열이 아니라 --squash와 --match-head-commit <head>를 포함한 각각 별도 argv로 실행한다.",
+  "gh pr merge는 shell 문자열이 아니라 `--squash`와 `--match-head-commit <head>`를 포함한 각각 별도 argv로 실행한다.",
   "`--delete-branch`는 사용하지 않는다.",
   "병합 재조회가 성공한 뒤에만 exact remote ref를 읽는다.",
   "git ls-remote --heads origin refs/heads/<validated-branch>",
@@ -217,6 +292,25 @@ const openPullRequestFixtureContract = [
   "git status --porcelain=v1 --untracked-files=all --ignored=matching --ignore-submodules=none 뒤 git ls-files --others --ignored를 확인한다.",
   "git -C <main-worktree> update-ref -d refs/heads/<validated-branch> <validated-head>",
   "dirty·staged·untracked 사용자 변경이면 중단한다.",
+  "",
+  "## 2. 중복 PR과 문서 영향 확인",
+  "",
+  "commit tree와 candidate를 대조하고 tree나 입력이 다르면 새 candidate의 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰로 돌아간다.",
+  "의미 영향·독립 리뷰 증거가 불완전하면 새 독립 리뷰를 수행하고, 최종 gate 결과 증거만 불완전하면 recovery worktree에서 고정 게이트 전체를 한 번 실행한다.",
+  "",
+  "## 3. 제목과 본문 작성",
+  "",
+  "`review-tree=<40자리 tree OID>`, `verification-tree=<40자리 tree OID>`, `commit-tree=<40자리 tree OID>`, `pr-head-tree=<40자리 tree OID>`의 네 tree는 같아야 한다.",
+  "고정 게이트 전체를 한 번 실행하고 required CI는 항상 통과해야 한다.",
+];
+const prBodyContractFixture = [
+  "# PR 본문 계약",
+  "",
+  "## 4. 검증",
+  "",
+  "`review-tree=<40자리 tree OID>`, `verification-tree=<40자리 tree OID>`, `commit-tree=<40자리 tree OID>`, `pr-head-tree=<40자리 tree OID>`를 기록한다.",
+  "candidate tree와 input의 의미 영향·독립 리뷰 증거가 불완전하면 새 독립 리뷰를 수행하고, 최종 gate 결과 증거만 불완전하면 고정 게이트 전체를 실행한다. candidate tree·input이 다르면 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 새 candidate로 돌아간다.",
+  "로컬 증거 재사용은 GitHub required CI를 대신하지 않는다.",
 ];
 
 function write(root, relativePath, content) {
@@ -398,6 +492,18 @@ function createFixture() {
       "- PR finalize와 로컬 정리는 [open-pull-request](.agents/skills/open-pull-request/SKILL.md)가 소유한다.",
       "- 이슈·Project 완료 전이는 [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)가 소유한다.",
       "",
+      "## 행동 시나리오와 독립 리뷰",
+      "",
+      "- 이슈별 빠른 테스트만 수행하고 고정 게이트 전체는 실행하지 않는다.",
+      "- 리뷰 전에 PRD·Policy·Architecture를 확인하고 cached diff·candidate tree를 독립 리뷰해 발견 사항을 일괄 수정한다.",
+      "- review-fix 사이에는 고정 게이트 전체를 실행하지 않는다.",
+      "",
+      "## 문서와 검증",
+      "",
+      "- 계획된 변경이 없는 staged candidate에서 고정 게이트 전체를 한 번 실행한다.",
+      "- tracked content가 바뀌면 행동·리뷰·게이트 증거를 모두 무효화하고 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시 시작한다. tree·input이 같은 환경 전용 실패는 한 번 복구한다.",
+      "- 의미 영향·독립 리뷰 증거가 불완전하면 새 리뷰부터, 최종 gate 증거만 불완전하면 gate부터 복구한다. candidate tree나 input이 다르면 모든 로컬 증거를 무효화하고 빠른 행동 테스트, 영향 판정과 독립 리뷰부터 다시 시작한다.",
+      "",
     ].join("\n"),
   );
   write(
@@ -416,6 +522,14 @@ function createFixture() {
       "- 이슈·Project 완료 전이는 [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)가 소유한다.",
       "- 필수 승인 수는 1인 운영을 막지 않도록 0으로 유지합니다. 승인 수와 무관하게 생성된 리뷰 대화는 모두 해결해야 합니다.",
       "",
+      "## 5. 테스트와 독립 리뷰",
+      "",
+      "- PRD·Policy·Architecture를 독립 리뷰 전에 확인하고 cached diff·candidate tree를 검토한다.",
+      "- review-fix 사이에는 고정 게이트 전체를 실행하지 않는다. 계획된 수정이 없으면 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다.",
+      "- tracked content가 바뀌면 행동·리뷰·게이트 증거를 폐기하고 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시 시작한다.",
+      "- 동일 tree·input의 환경 전용 실패는 한 번만 복구한다.",
+      "- 의미 영향·리뷰 증거가 불완전하면 새 리뷰부터, 최종 gate 증거만 불완전하면 gate부터 복구하고 candidate tree나 input이 다르면 모든 증거를 무효화하고 빠른 행동 테스트, 영향 판정과 독립 리뷰부터 다시 시작한다.",
+      "",
     ].join("\n"),
   );
   write(
@@ -429,6 +543,8 @@ function createFixture() {
       ...developmentOverview,
       ...harnessRouting,
       ...harnessOwnership,
+      ...finalSnapshotOrderFixture,
+      ...finalSnapshotRecoveryFixture,
       ...Array.from({ length: 11 }, (_, index) => {
         const number = String(index + 1).padStart(2, "0");
         const projectCondition =
@@ -470,9 +586,11 @@ function createFixture() {
         ? updateProductDocsFixtureContract
         : skillName === "run-github-work-item"
           ? runGithubWorkItemFixtureContract
-        : skillName === "open-pull-request"
-          ? openPullRequestFixtureContract
-          : [];
+          : skillName === "commit-work-item"
+            ? commitWorkItemFixtureContract
+            : skillName === "open-pull-request"
+              ? openPullRequestFixtureContract
+              : [];
     write(
       root,
       `${skillDirectory}/SKILL.md`,
@@ -504,6 +622,16 @@ function createFixture() {
     root,
     ".agents/skills/run-github-work-item/references/issue-contract.md",
     "# GitHub 이슈 계약\n\n제품 추적 적용 경계를 정의한다.\n",
+  );
+  write(
+    root,
+    ".agents/skills/commit-work-item/references/commit-contract.md",
+    commitContractFixture.join("\n"),
+  );
+  write(
+    root,
+    ".agents/skills/open-pull-request/references/pr-body-contract.md",
+    prBodyContractFixture.join("\n"),
   );
   write(
     root,
@@ -964,6 +1092,495 @@ test("parent list가 없는 1~3칸 들여쓰기 STEP bullet은 top-level로 허�
     const result = runValidator(root);
     assert.equal(result.status, 0, result.stderr);
   });
+});
+
+test("최종 snapshot 검증 순서와 recovery 표의 정상 fixture를 허용한다", () => {
+  withFixture((root) => {
+    const result = runValidator(root);
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("최종 저장소 게이트는 정본 영향과 독립 리뷰 뒤에만 올 수 있다", () => {
+  const cases = [
+    {
+      first: finalSnapshotOrderFixture.find((line) =>
+        line.startsWith("| 4 |"),
+      ),
+      second: finalSnapshotOrderFixture.find((line) =>
+        line.startsWith("| 5 |"),
+      ),
+    },
+    {
+      first: finalSnapshotOrderFixture.find((line) =>
+        line.startsWith("| 2 |"),
+      ),
+      second: finalSnapshotOrderFixture.find((line) =>
+        line.startsWith("| 5 |"),
+      ),
+    },
+  ];
+
+  for (const { first, second } of cases) {
+    assert.ok(first);
+    assert.ok(second);
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        content
+          .replace(first, "__ORDER_FIRST__")
+          .replace(second, first)
+          .replace("__ORDER_FIRST__", second),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /exact 7행/);
+    });
+  }
+});
+
+test("최종 게이트는 병렬·공유 자원 순차·join·전후 동일성 계약을 모두 요구한다", () => {
+  const cases = [
+    {
+      source: "독립된 읽기 전용·격리 명령만 병렬 실행하고",
+      replacement: "모든 명령을 실행하고",
+      message: /격리 명령만 병렬/,
+    },
+    {
+      source:
+        "같은 index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은 순차 실행한 뒤",
+      replacement: "공유 명령도 동시에 실행한 뒤",
+      message: /공유 명령은 순차·join/,
+    },
+    {
+      source: "모든 결과를 join한다.",
+      replacement: "먼저 끝난 결과만 확인한다.",
+      message: /공유 명령은 순차·join/,
+    },
+    {
+      source:
+        "검증 전후 candidate tree와 gate input은 같아야 한다.",
+      replacement: "검증 뒤 결과만 확인한다.",
+      message: /검증 전후 candidate tree·input 동일/,
+    },
+  ];
+
+  for (const { source, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      fs.writeFileSync(
+        target,
+        fs.readFileSync(target, "utf8").replace(source, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("최종 snapshot 표는 숨긴 H2와 비가시 계약 cell을 거부한다", () => {
+  const hiddenSectionWrappers = [
+    ["<details>\n", "</details>\n"],
+    ["<details>\n\n", "</details>\n"],
+    [
+      "<details><summary>숨김</summary>\n\n",
+      "</details>\n",
+    ],
+    ["<div>\n\n", "</div>\n"],
+    ["<center hidden>\n\n", "</center>\n"],
+    ["<x-contract hidden>\n\n", "</x-contract>\n"],
+    ["<center hidden>\n\n", ""],
+    ["<x-contract hidden>\n\n", ""],
+  ];
+
+  for (const [opening, closing] of hiddenSectionWrappers) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          "최종 snapshot 검증 순서",
+          (section) => `${opening}${section}${closing}`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /최종 snapshot 검증 순서.*exact plain-text top-level H2/,
+      );
+    });
+  }
+
+  const contract =
+    "독립 리뷰 전에 PRD·Policy·Architecture 의미 영향";
+  const replacements = [
+    `[계약 없음](<${contract}>)`,
+    `[계약 없음][${contract}]`,
+    `<span data-contract="${contract}">계약 없음</span>`,
+    `<details>${contract}</details>`,
+    `<center hidden>${contract}</center>`,
+    `<x-contract hidden>${contract}</x-contract>`,
+    `계약 없음\n    ${contract}`,
+  ];
+
+  for (const replacement of replacements) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(contract));
+      fs.writeFileSync(
+        target,
+        content.replace(contract, replacement),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /(?:정본 의미 영향.*필수 계약이 없습니다|exact 7행|raw HTML)/,
+      );
+    });
+  }
+
+  withFixture((root) => {
+    const target = path.join(root, developmentFiles[0]);
+    const content = fs.readFileSync(target, "utf8");
+    const recoveryContract =
+      "새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다.";
+    assert.ok(content.includes(recoveryContract));
+    fs.writeFileSync(
+      target,
+      content.replace(
+        recoveryContract,
+        `[계약 없음](<${recoveryContract}>)`,
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /candidate tree·input 불일치.*재진입 계약이 불완전/,
+    );
+  });
+});
+
+test("content 변경과 동일 tree·input 환경 실패는 서로 다른 recovery를 요구한다", () => {
+  const cases = [
+    {
+      source:
+        "새 candidate에서 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정 뒤 독립 리뷰부터 다시 시작한다.",
+      replacement: "실패한 gate만 다시 실행한다.",
+      message: /tracked content 변경.*재진입 계약이 불완전/,
+    },
+    {
+      source:
+        "원인과 동일 tree·input 근거를 기록하고 새 명령을 한 번만 실행한다. 자동 반복하지 않는다.",
+      replacement: "성공할 때까지 자동 재시도한다.",
+      message: /환경 전용 실패·동일 tree·input.*재진입 계약이 불완전/,
+    },
+  ];
+
+  for (const { source, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      fs.writeFileSync(
+        target,
+        fs.readFileSync(target, "utf8").replace(source, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("local evidence 재사용은 연속 tree 결속과 remote required CI를 요구한다", () => {
+  const cases = [
+    {
+      source: "candidate tree와 commit tree가 같고 증거가 완전하면",
+      replacement: "commit이 만들어지면",
+      message: /동일 tree의 완전한 로컬 증거 인계/,
+    },
+    {
+      source: "commit tree와 PR head tree가 같을 때",
+      replacement: "PR이 열리면",
+      message: /동일 tree의 로컬 증거 재사용과 원격 CI 유지/,
+    },
+    {
+      source:
+        "같은 candidate·input에서 PRD·Policy·Architecture 의미 영향 판정과 새 독립 리뷰를 수행한 뒤 최종 게이트로 진행한다.",
+      replacement: "gate만 다시 실행한다.",
+      message: /의미 영향·리뷰 증거 불완전·동일 tree·input.*재진입 계약이 불완전/,
+    },
+    {
+      source:
+        "exact candidate·input을 동일한 clean snapshot에 재구성하고 현재 `AGENTS.md` 고정 게이트 전체를 새로 실행한다.",
+      replacement: "이전 gate 증거를 사용한다.",
+      message: /최종 gate 증거 불완전·동일 tree·input.*재진입 계약이 불완전/,
+    },
+    {
+      source:
+        "다른 tree나 input에 gate만 실행하지 않고 새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다.",
+      replacement:
+        "다른 tree에만 gate를 실행하지 않고 새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다.",
+      message: /candidate tree·input 불일치.*재진입 계약이 불완전/,
+    },
+  ];
+
+  for (const { source, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      fs.writeFileSync(
+        target,
+        fs.readFileSync(target, "utf8").replace(source, replacement),
+      );
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("관련 owner 문서는 최종 snapshot 실행·복구·재사용 경계를 유지한다", () => {
+  const cases = [
+    {
+      file: "AGENTS.md",
+      source: "tracked content",
+      replacement: "tracked 변경",
+    },
+    {
+      file: "AGENTS.md",
+      source: "빠른 행동 테스트",
+      replacement: "이전 행동 증거",
+    },
+    {
+      file: "CONTRIBUTING.md",
+      source: "review-fix 사이",
+      replacement: "수정 사이",
+    },
+    {
+      file: "CONTRIBUTING.md",
+      source: "빠른 행동 테스트",
+      replacement: "이전 행동 증거",
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      source: "PRD·Policy·Architecture 의미 영향 판정",
+      replacement: "정본 영향 판정",
+    },
+    {
+      file: ".agents/skills/update-product-docs/SKILL.md",
+      source: "빠른 행동 테스트와 의미 영향 판정",
+      replacement: "이전 행동 증거와 의미 영향 판정",
+    },
+    {
+      file: ".agents/skills/run-github-work-item/SKILL.md",
+      source: "빠른 행동 테스트",
+      replacement: "일반 작업",
+    },
+    {
+      file: ".agents/skills/commit-work-item/SKILL.md",
+      source: "빠른 행동 테스트",
+      replacement: "일반 테스트",
+    },
+    {
+      file: ".agents/skills/commit-work-item/SKILL.md",
+      source: "commit path gate 증거",
+      replacement: "path 증거",
+    },
+    {
+      file: ".agents/skills/commit-work-item/SKILL.md",
+      source: "빠른 행동 테스트부터 새 candidate",
+      replacement: "이전 행동 증거로 새 candidate",
+    },
+    {
+      file:
+        ".agents/skills/commit-work-item/references/commit-contract.md",
+      source: "PR head tree",
+      replacement: "PR 상태",
+    },
+    {
+      file:
+        ".agents/skills/commit-work-item/references/commit-contract.md",
+      source: "commit path gate 증거",
+      replacement: "path 증거",
+    },
+    {
+      file:
+        ".agents/skills/commit-work-item/references/commit-contract.md",
+      source: "빠른 행동 테스트, 의미 영향 판정",
+      replacement: "이전 행동 증거, 의미 영향 판정",
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "required CI는 항상 통과해야 한다",
+      replacement: "remote check",
+    },
+    {
+      file: ".agents/skills/open-pull-request/SKILL.md",
+      source: "새 candidate의 빠른 행동 테스트",
+      replacement: "새 candidate의 이전 행동 증거",
+    },
+    {
+      file:
+        ".agents/skills/open-pull-request/references/pr-body-contract.md",
+      source: "GitHub required CI",
+      replacement: "GitHub check",
+    },
+    {
+      file:
+        ".agents/skills/open-pull-request/references/pr-body-contract.md",
+      source: "빠른 행동 테스트, 의미 영향 판정",
+      replacement: "이전 행동 증거, 의미 영향 판정",
+    },
+  ];
+
+  for (const { file, source, replacement } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, file);
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(source), `${file}: ${source}`);
+      fs.writeFileSync(target, content.replace(source, replacement));
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /최종 snapshot 검증 계약이 없습니다/);
+    });
+  }
+});
+
+test("최종 snapshot owner 계약은 비가시·비규범 source로 대체할 수 없다", () => {
+  const visibleContract = commitContractFixture.slice(4, 8).join("\n");
+  const compactContract = visibleContract.replaceAll("\n", " ");
+  for (const [opening, closing] of [
+    ["<details>\n\n", "</details>\n"],
+    [
+      "<details><summary>숨김</summary>\n\n",
+      "</details>\n",
+    ],
+    ["<div>\n\n", "</div>\n"],
+    ["<center hidden>\n\n", "</center>\n"],
+    ["<x-contract hidden>\n\n", "</x-contract>\n"],
+    ["<center hidden>\n\n", ""],
+    ["<x-contract hidden>\n\n", ""],
+  ]) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/commit-work-item/references/commit-contract.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      fs.writeFileSync(
+        target,
+        mutateH2Section(
+          content,
+          "5. 검증 증거",
+          (section) => `${opening}${section}${closing}`,
+        ),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /commit-contract\.md: 최종 snapshot 계약 owner 구역은 exact plain-text top-level H2/,
+      );
+    });
+  }
+
+  const replacements = [
+    [
+      "<details>",
+      "<summary>숨김</summary>",
+      visibleContract,
+      "</details>",
+    ].join("\n"),
+    visibleContract
+      .split("\n")
+      .map((line) => `    ${line}`)
+      .join("\n"),
+    `<div data-contract="${compactContract}">숨김</div>`,
+    `[숨김](<${compactContract}>)`,
+    `<center hidden>\n\n${visibleContract}\n</center>`,
+    `<x-contract hidden>\n\n${visibleContract}\n</x-contract>`,
+    `<center hidden>${compactContract}</center>`,
+    `<x-contract hidden>${compactContract}</x-contract>`,
+    `앞 문장 <center hidden>${compactContract}</center> 뒤`,
+    `앞 문장 <x-contract hidden>${compactContract}</x-contract> 뒤`,
+    `앞 문장 <x-contract style="display:none">${compactContract}</x-contract> 뒤`,
+    `앞 문장 <x-contract style='visibility: hidden'>${compactContract}`,
+    `앞 문장 <span style=display:none>${compactContract}`,
+    `앞 문장 <x-contract style=visibility:hidden>${compactContract}`,
+    `<center hidden>\n\n${visibleContract}`,
+    `<x-contract hidden>\n\n${visibleContract}`,
+    `앞 문장 <x-contract hidden>${compactContract}`,
+    `[숨김](\`${compactContract}\`)`,
+    `[숨김](https://example.invalid "\`${compactContract}\`")`,
+    `[숨김](https://example.invalid "제목 ) \`${compactContract}\`")`,
+    `[숨김](https://example.invalid '제목 ) \`${compactContract}\`')`,
+    `[숨김](https://example.invalid/\`x "제목 ) ${compactContract}\`")`,
+    `[숨김]: \`${compactContract}\``,
+    `![\`${compactContract}\`](image.png)`,
+    `<img alt="\`${compactContract}\`">`,
+    `<div\n${visibleContract}`,
+    `<div></div>\n${visibleContract}`,
+    `<?숨김\n${visibleContract}\n?>`,
+    `<!DECLARATION\n${visibleContract}\n>`,
+    `<![CDATA[\n${visibleContract}\n]]>`,
+    [
+      "> <?숨김",
+      ...visibleContract.split("\n").map((line) => `> ${line}`),
+      "> ?>",
+    ].join("\n"),
+    [
+      "- <!DECLARATION",
+      ...visibleContract.split("\n").map((line) => `  ${line}`),
+      "  >",
+    ].join("\n"),
+    [
+      "- <![CDATA[",
+      ...visibleContract.split("\n").map((line) => `  ${line}`),
+      "  ]]>",
+    ].join("\n"),
+    "\\`<x-contract hidden>" +
+      compactContract +
+      "</x-contract>\\`",
+    `<script\n${visibleContract}`,
+    `<pre\n${visibleContract}`,
+    `<style\n${visibleContract}`,
+    `<textarea\n${visibleContract}`,
+    `<x-contract />\n${visibleContract}`,
+    `계약 없음\n\n## 무관한 구역\n\n${visibleContract}`,
+  ];
+
+  for (const replacement of replacements) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/commit-work-item/references/commit-contract.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(visibleContract));
+      fs.writeFileSync(
+        target,
+        content.replace(visibleContract, replacement),
+      );
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /commit-contract\.md: '5\. 검증 증거'에 최종 snapshot 검증 계약이 없습니다/,
+      );
+    });
+  }
 });
 
 test("하네스 가이드는 요청 라우팅과 단일 규칙 소유 인덱스를 요구한다", () => {

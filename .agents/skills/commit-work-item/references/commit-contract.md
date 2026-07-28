@@ -74,50 +74,93 @@ git ls-files --others --exclude-standard
 - PRD: 사용자에게 보이는 기능, 흐름, 입력·출력, 범위, 제약과 수용 동작
 - 정책: 생명주기, 상태, 권한, 검증, 충돌, 실패, 복구, 동기화, 보존,
   암호화와 신뢰 경계
+- Architecture: 앱 구성요소, 통신·프로토콜, 복제·정합성·복구, 저장·보안
+  구조와 구현 경계
 - 제품 정의: 승인된 결정, 근거, 가정과 미결정 질문
 
 문서 변경이 필요하면 코드와 관련 정본을 같은 원자적 결과에 포함한다. 필요한
 문서가 이슈의 변경 허용 경로 밖이거나 변경 금지 경로에 있으면 정본을
-무단으로 수정하거나 생략하지 말고 계약 충돌을 보고한다. 문서 변경이
-불필요하면 제품 동작이 달라지지 않는 구체적인 이유를 기록한다.
+무단으로 수정하거나 생략하거나 tooling-only 비적용을 승인하지 않는다. 별도
+제품 계약 이슈로 차단하고 그 정본 변경이 끝난 새 기준에서 의미 영향을 다시
+판정한다. 문서 변경이 불필요하면 제품·정책·아키텍처 계약이 달라지지 않는
+구체적인 이유를 기록한다.
 
 ## 5. 검증 증거
 
-스테이징 전에 다음 순서로 검증한다.
+candidate와 commit은 다음 순서로 만든다.
 
-1. 이슈의 `검증` 구역에 적힌 명령과 수동 확인을 수행한다.
-2. 변경 종류에 필요한 단위·통합·UI 테스트를 수행한다.
-3. 현재 `AGENTS.md`가 요구하는 관련 저장소 게이트를 수행한다.
-4. `update-product-docs`로 PRD·Policy·제품 정의 영향을 최종 판정한다.
-5. 커밋할 explicit path의 raw diff snapshot을 고정하고 독립 리뷰를 수행한다.
+1. 구현 중에는 이슈별 행동 테스트와 필요한 국소 회귀 테스트만 빠르게
+   수행한다. 현재 `AGENTS.md` 고정 게이트 전체를 바뀔 snapshot에 반복하지
+   않는다.
+2. `update-product-docs`로 PRD·Policy·Architecture 의미 영향 판정과 변경
+   허용·금지 경로 guard를 독립 리뷰 전에 끝낸다.
+3. 진입 전에 index가 비어 있음을 확인하고, 이슈가 소유한 explicit path만
+   명시적으로 stage한다. unstaged tracked 변경과 예상하지 않은 untracked
+   입력이 없는 상태에서 base OID, cached diff digest, candidate tree OID와
+   filesystem input 상태를 candidate identity로 고정한다.
+4. 작성 컨텍스트와 분리된 읽기 전용 reviewer가 같은 cached diff·candidate
+   tree, 원본 요구사항, 행동 테스트와 의미 영향 결과를 독립 리뷰한다.
+5. 같은 snapshot의 발견 사항을 모아 저장소 고정 게이트 전체를 실행하지 않고
+   일괄 수정한다. 수정하면 행동 테스트와 의미 영향 판정을 갱신하고 다시
+   stage한 새 candidate만 리뷰한다.
+6. 더 이상 계획된 수정이 없을 때 이슈 `검증`과 현재 `AGENTS.md` 고정 게이트
+   전체의 중복 제거된 합집합을 같은 filesystem에서 한 번 실행한다.
+7. 게이트 전후 candidate tree·filesystem input이 같고 모든 결과가
+   통과한 경우에만 같은 staged tree를 commit한다.
+8. commit tree와 이후 PR head tree가 candidate tree와 같을 때만 완전한 로컬
+   증거를 재실행 없이 인계한다. 원격 required CI는 생략하지 않는다.
+
+candidate identity와 최종 증거에는 base OID, cached diff digest, candidate
+tree OID, unstaged tracked·untracked input 상태, review pass와 검토자
+수·관점·P0~P2 결과, 실행한 gate 집합·명령·종료 상태, 검증 전후 tree·input,
+commit tree OID를 기록한다. PR 단계에서는 PR head tree OID를 같은 연속
+증거에 추가한다.
 
 독립 리뷰는 작성 컨텍스트와 분리된 읽기 전용 검토자가 수행한다. 작성자의
 자기 검토는 독립 리뷰가 아니며, 작성·수정자와 최종 승인자를 분리한다. 의도한
-답이나 예상 결론을 주입하지 않고 원본 요구사항, raw diff와 테스트 결과를
-제공한다. 검토자는 직접 수정하지 않고 P0~P2 발견 사항을 파일 위치와 재현
-근거로 보고한다.
+답이나 예상 결론을 주입하지 않고 검토자는 직접 수정하지 않으며 P0~P2 발견
+사항을 파일 위치와 재현 근거로 보고한다.
 
 - 낮은 위험의 단순 변경은 최소 1명이 검토한다.
 - 계약·validator·workflow 변경은 최소 2명이 검토한다.
 - 분산 통신·정합성·보안 같은 고위험 변경은 필요한 전문 관점별 검토자를
   병렬 배치한다.
-- 수정하면 새 raw diff snapshot을 별도 독립 리뷰 패스에 제공한다.
+- 같은 snapshot의 reviewer는 가능하면 병렬로 시작하고 모두 끝난 뒤 발견
+  사항을 합류시킨다.
+- 수정하면 새 cached diff·candidate tree를 별도 독립 리뷰 패스에 제공한다.
 - 최초 리뷰를 1회로 세어 review-fix cycle은 최대 3회다. 3회 뒤에도 P0/P1이
-  남으면 스테이징하지 않고 blocker로 보고한다.
+  남으면 최종 게이트와 commit을 진행하지 않고 blocker로 보고한다.
 
-현재 snapshot에 대한 최종 독립 리뷰와 문서 영향 판정이 있어야 다음 절의
-스테이징을 시작한다. 스테이징 뒤에는 cached diff가 검토한 snapshot과
-일치하는지 확인하고 `git diff --cached --check`를 수행한 다음, cached diff와
-검증 결과를 함께 검토한다.
+최종 게이트는 같은 candidate를 읽되 입력·출력이 격리된 읽기 전용 명령만
+병렬 실행한다. 같은 index·working tree·외부 상태·공유 cache·자원을 쓰거나
+자원 경합으로 더 느려지는 명령은 순차 실행하며, 모든 결과를 barrier에서
+join한 뒤 한 번에 판정한다. 게이트 일부가 먼저 통과해도 전체 결론을 앞당기지
+않는다.
+
+- tracked content를 수정하면 행동 테스트·의미 영향·리뷰·게이트 증거를 모두
+  무효화하고 새 candidate의 필요한 빠른 행동 테스트를 다시 수행한 뒤 의미
+  영향 판정과 독립 리뷰부터 다시 시작한다.
+- 환경만 복구되고 candidate tree와 input이 같으면 실패 원인과 동일성 근거를
+  남기고 실패한 새 명령을 한 번만 실행한다. 자동 반복하지 않는다.
+- 의미 영향·독립 리뷰 증거가 불완전하지만 candidate tree와 input이 같으면
+  같은 candidate의 의미 영향 판정과 새 독립 리뷰부터 복구한 뒤 최종 게이트로
+  진행한다.
+- 최종 gate 증거만 불완전하고 candidate tree와 input이 같으면 동일한 clean
+  snapshot에서 현재 고정 게이트 전체를 새로 실행한다.
+- candidate tree나 input이 다르면 기존 로컬 증거를 모두 무효화하고 새
+  candidate의 필요한 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시
+  시작한다.
 
 명령, 종료 상태, 테스트 수, 수동 확인 결과와 CI URL처럼 실제로 확보한
-증거만 기록한다. 실행하지 않은 검증을 통과로 표시하거나 다른 작업의 결과를
-재사용하지 않는다. 실패한 명령은 자동으로 반복하지 않는다. 원인을 고친 뒤
-사용자가 확인할 수 있는 새 실행으로만 재개한다.
+증거만 기록한다. 실행하지 않은 검증을 통과로 표시하거나 tree·input이 다른
+작업의 결과를 재사용하지 않는다.
 
 ## 6. 안전한 스테이징
 
-스테이징할 개별 파일을 먼저 목록으로 확정한 뒤 저장소 상대 경로를 명시한다.
+독립 리뷰용 candidate를 고정할 때 스테이징할 개별 파일을 먼저 목록으로
+확정한 뒤 저장소 상대 경로를 명시한다. 스킬 진입 전에 index에 다른 작업의
+변경이 있으면 임의로 해제하지 않고 중단하며, 이후에는 이 스킬이 고정한 exact
+candidate만 staged 상태로 허용한다.
 
 ```bash
 git add -- path/to/file-a path/to/file-b
@@ -239,8 +282,8 @@ test -n "$(git config --get user.email)"
 
 ```bash
 git show -s --format='%H%n%s%n%b' HEAD
+git rev-parse HEAD^{tree}
 git diff-tree --no-commit-id --name-status -r HEAD
-node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs --index
 git status --short --branch
 ```
 
@@ -248,6 +291,9 @@ git status --short --branch
 - Author와 Committer가 커밋 전에 확인한 로컬 Git 신원과 일치하는지는 값을
   출력하지 않고 비교하며, 결과 보고에는 일치 여부만 남긴다.
 - 커밋 경로가 검토한 explicit path 목록과 이슈 경로 계약에 맞는지 확인한다.
+- `HEAD^{tree}`가 review·verification candidate tree와 정확히 같은지
+  확인한다. 같으면 candidate에서 통과한 commit path gate 증거를 재사용하고
+  이 gate와 다른 고정 게이트를 다시 실행하지 않는다.
 - 남은 변경과 미추적 파일이 커밋 전 사용자 상태를 침범하지 않았는지 확인한다.
 
 검증이 실패하면 자동으로 `git commit --amend`, reset 또는 새 커밋을 실행하지
@@ -265,9 +311,10 @@ git status --short --branch
 - 커밋: 해시와 제목
 - 포함 경로: 명시적으로 스테이징한 파일
 - 제외 경로: 사용자 변경과 제외 이유
-- 검증: 통과한 명령과 결과
-- 제품 문서 영향: 변경 문서 또는 변경 불필요 근거
-- 독립 리뷰: 검토 snapshot, 검토자 수·관점, P0~P2 발견·해소 결과
+- 검증: gate 집합, 통과한 명령·결과와 전후 input 동일성
+- 정본 의미 영향: PRD·Policy·Architecture 변경 또는 변경 불필요 근거
+- 독립 리뷰: cached diff·candidate tree, 검토자 수·관점, P0~P2 발견·해소 결과
+- tree 결속: base·candidate·commit tree와 증거 재사용 판정
 - 신원·hook: 값이 아닌 로컬 설정 일치 여부와 hook 결과
 - 남은 변경: tracked·untracked 상태
 - push: 실행하지 않음
