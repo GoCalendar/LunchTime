@@ -229,16 +229,21 @@ Release 구성에서 빌드되지 않습니다.
 | 게이트 | 워크플로 | 검사 |
 |--------|----------|------|
 | 앱 빌드·테스트 | [`macOS 앱 검증`](.github/workflows/app-ci.yml) | `xcodebuild build`, `xcodebuild test`와 Release 구성 빌드 |
-| 제품 문서 | [`저장소 작업 도구 검증`](.github/workflows/validate-harness.yml) | `validate-product-docs.mjs` |
-| 패치 공백 | [`저장소 작업 도구 검증`](.github/workflows/validate-harness.yml) | `git diff --check` |
+| 하네스 콘텐츠 | [`저장소 작업 도구 검증`](.github/workflows/validate-harness.yml) | 회귀 테스트, 제품 문서, commit과 패치 공백 결과를 `validate`로 결속 |
+| PR metadata | [`PR 메타데이터 검증`](.github/workflows/validate-pr-metadata.yml) | 실행 시점의 live PR 제목·본문·Draft·head·base와 검증 중 입력 불변성 |
 
-두 워크플로는 서로 독립적으로 실패합니다. 제품 문서 검증과 패치 공백 검사는
-같은 job의 개별 단계이므로 앞 단계가 실패하면 실행되지 않습니다.
+앱, 하네스 콘텐츠와 PR metadata workflow는 서로 독립적으로 실행됩니다.
+하네스의 회귀, 제품 문서와 패치 공백 job도 서로 독립적으로 실행되며 required
+`validate`가 실패·취소·예상 밖 skip을 하나의 실패 결론으로 묶습니다.
 
 병합을 차단하는 필수 검사는 저장소 ruleset이 정합니다. 현재 ruleset은 `app-test`와
-`validate`를 모두 필수로 요구하므로 앱 게이트가 실패하면 병합이 막힙니다. 두
-워크플로 모두 job에 별도 표시 이름을 두지 않으므로 job 이름이 그대로 검사
-이름이 됩니다.
+`validate`를 필수로 요구합니다. `pr-metadata`는 producer를 먼저 게시하는
+migration 단계이며 [후행 #65](https://github.com/GoCalendar/LunchTime/issues/65)가
+default branch 게시를 확인한 뒤 required로 활성화합니다. 그때까지 `validate`의
+`edited`·`ready_for_review` trigger를 유지해 기존 보호를 약화시키지 않습니다.
+#65는 활성화·trigger 제거와 같은 변경에서 이 문단과 하네스 가이드의 상태
+문구도 최종 상태로 갱신합니다. 세 workflow 모두 해당 job에 별도 표시 이름을
+두지 않으므로 job ID가 검사 이름이 됩니다.
 
 ## 제품 문서 갱신 절차
 
@@ -278,6 +283,9 @@ Release 구성에서 빌드되지 않습니다.
   `main` 변경에서 문서·스킬 스크립트·패치 형식을 검사합니다.
 - [macOS 앱 검증 워크플로](.github/workflows/app-ci.yml)는 PR과 `main` 변경에서
   앱 빌드와 테스트를 검사합니다. PR 본문·제목 편집에서는 재실행하지 않습니다.
+- [PR 메타데이터 검증 워크플로](.github/workflows/validate-pr-metadata.yml)는
+  설정된 `opened`·`synchronize`·`reopened`·`edited`·`ready_for_review`
+  event마다 live 제목·본문·Draft·head·base를 다시 읽어 검증합니다.
 
 실제 요청 라우팅과 단계는
 [개발 하네스 가이드](docs/development/01_harness_guide.md), 사람용 규칙과 예외는

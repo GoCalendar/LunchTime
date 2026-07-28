@@ -1,0 +1,85 @@
+name: PR 메타데이터 검증
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # 후행 migration에서 이 job id를 ruleset required check로 등록한다.
+  # 그전까지는 기존 validate의 PR metadata 검사를 함께 유지한다.
+  pr-metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: live PR 입력 조회
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '{
+              pull_request: {
+                title: .title,
+                body: .body,
+                draft: .draft,
+                head: {ref: .head.ref, sha: .head.sha},
+                base: {ref: .base.ref}
+              }
+            }' > "${RUNNER_TEMP}/live-pr-before.json"
+
+      - name: PR 제목·본문·브랜치 검증
+        run: |
+          node .agents/skills/open-pull-request/scripts/validate-pr-body.mjs \
+            --event "${RUNNER_TEMP}/live-pr-before.json"
+
+      - name: 검증 중 PR 입력 불변 확인
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '{
+              pull_request: {
+                title: .title,
+                body: .body,
+                draft: .draft,
+                head: {ref: .head.ref, sha: .head.sha},
+                base: {ref: .base.ref}
+              }
+            }' > "${RUNNER_TEMP}/live-pr-after.json"
+          if ! cmp -s \
+            "${RUNNER_TEMP}/live-pr-before.json" \
+            "${RUNNER_TEMP}/live-pr-after.json"; then
+            echo "검증 중 PR 입력이 변경되었습니다. 최신 event 실행을 확인하세요."
+            exit 1
+          fi
