@@ -1525,6 +1525,7 @@ test("최종 snapshot owner 계약은 비가시·비규범 source로 대체할 �
     `[숨김](https://example.invalid "\`${compactContract}\`")`,
     `[숨김](https://example.invalid "제목 ) \`${compactContract}\`")`,
     `[숨김](https://example.invalid '제목 ) \`${compactContract}\`')`,
+    `[숨김](https://example.invalid/\`x "제목 ) ${compactContract}\`")`,
     `[숨김]: \`${compactContract}\``,
     `![\`${compactContract}\`](image.png)`,
     `<img alt="\`${compactContract}\`">`,

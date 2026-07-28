@@ -827,7 +827,9 @@ function maskPairedFinalSnapshotHtmlContainers(text) {
 }
 
 function maskInlineMarkdownLinkTails(text) {
-  const linkSource = maskMarkdownStructureForLinkScan(text);
+  const linkSource = maskIndentedCodeLines(
+    maskInvisibleMarkdown(text),
+  );
   return maskRanges(
     text,
     scanInlineMarkdownLinks(linkSource).map((link) => ({
