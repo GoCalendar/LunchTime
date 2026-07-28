@@ -1,5 +1,3 @@
-import Foundation
-
 /// 앱 Surface의 사용자에게 보이는 이름과 창 식별자.
 ///
 /// 진입점이 후속 작업의 변경 금지 경로이므로 Surface 식별자도 이 폴더에서

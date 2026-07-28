@@ -102,9 +102,9 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
 | 항목 | 값 |
 |------|-----|
 | 최소 지원 macOS | 14.0 |
-| Xcode | CI 고정 26.2. 로컬은 16.4와 26.1에서 게이트 통과를 확인했습니다. 구조적 하한은 16.0입니다. |
+| Xcode | CI 고정 26.2. 고정 이전 CI 실행이 16.4에서, 로컬이 26.1에서 게이트 통과를 확인했습니다. 구조적 하한은 16.0입니다. |
 | Swift 언어 모드 | 6.0. actor 격리 기본값은 `nonisolated`이며 `SWIFT_DEFAULT_ACTOR_ISOLATION`을 설정하지 않습니다. |
-| Node.js | 저장소 도구 게이트는 24 이상이 필요합니다. |
+| Node.js | CI는 24로 고정하며 24에서 게이트 전 항목 통과를 확인했습니다. 20.10.0에서는 한 항목이 실패합니다. |
 | UI 프레임워크 | SwiftUI 단독. AppKit을 직접 사용하지 않습니다. |
 | 앱·단위 테스트 scheme | `LunchTime` |
 | UI 테스트 scheme | `LunchTimeUITests` |
@@ -200,12 +200,13 @@ CI는 기본 scheme을 사용하고 `-skip-testing:LunchTimeUITests`로 한 번 
 scheme이 바뀌어도 게이트가 결정적으로 유지되게 합니다. UI 대상은 CI에서도 계속
 빌드되므로 컴파일 회귀는 잡힙니다.
 
-UI 테스트를 실제로 실행하려면 scheme의 skip 설정 또는 워크플로의 `-skip-testing`
-인자를 바꿔야 합니다. 두 파일(`LunchTime.xcodeproj/**`,
-`.github/workflows/**`)은 현재 LT-001만 소유하므로 UI 테스트 실행을 게이트로
-되돌릴 수 있는 후속 이슈가 없습니다. `LunchTimeUITests/**`를 소유한 열네 작업은
-테스트를 추가할 수 있지만 그 실행 경로를 열 수는 없습니다. 실행이 필요한
-release gate가 생기면 전용 이슈에서 소유권을 먼저 정리해야 합니다.
+UI 테스트를 실제로 실행하려면 scheme의 skip 설정 또는 `app-ci.yml`의
+`-skip-testing` 인자를 바꿔야 합니다. scheme이 있는 `LunchTime.xcodeproj/**`와
+`.github/workflows/app-ci.yml`은 작업 목록에서 LT-001만 소유하므로 UI 테스트
+실행을 게이트로 되돌릴 수 있는 후속 이슈가 없습니다. `LunchTimeUITests/**`를
+소유한 열네 작업은 테스트를 추가할 수 있지만 그 실행 경로를 열 수는 없습니다.
+실행이 필요한 release gate가 생기면 전용 이슈에서 소유권을 먼저 정리해야
+합니다.
 
 테스트는 Debug 구성에서만 실행합니다. `@testable import`가 필요한 테스트 대상은
 Release 구성에서 빌드되지 않습니다.
