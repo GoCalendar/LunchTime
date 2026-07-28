@@ -7,10 +7,10 @@ import SwiftUI
 /// 이 파일과 같은 폴더에서 확장한다.
 ///
 /// 진입점 `LunchTime/App/LunchTimeApp.swift`는 후속 작업의 변경 금지 경로이므로
-/// Scene 정의 대신 이 view를 교체 지점으로 둔다.
+/// Scene 정의는 같은 폴더의 `AppScenes`가, 창 내용은 이 view가 교체 지점이 된다.
 struct AppRootView: View {
     var body: some View {
-        Text(LunchTimeApp.appDisplayName)
+        Text(AppSurface.displayName)
             .frame(minWidth: 480, minHeight: 320)
     }
 }

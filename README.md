@@ -102,7 +102,9 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
 | 항목 | 값 |
 |------|-----|
 | 최소 지원 macOS | 14.0 |
-| Xcode | CI 고정 26.2. 로컬 하한은 미확정이며 26.1에서 통과를 확인했습니다. |
+| Xcode | CI 고정 26.2. 로컬은 16.4와 26.1에서 게이트 통과를 확인했습니다. 구조적 하한은 16.0입니다. |
+| Swift 언어 모드 | 6.0. actor 격리 기본값은 `nonisolated`이며 `SWIFT_DEFAULT_ACTOR_ISOLATION`을 설정하지 않습니다. |
+| Node.js | 저장소 도구 게이트는 24 이상이 필요합니다. |
 | UI 프레임워크 | SwiftUI 단독. AppKit을 직접 사용하지 않습니다. |
 | 앱·단위 테스트 scheme | `LunchTime` |
 | UI 테스트 scheme | `LunchTimeUITests` |
@@ -127,7 +129,15 @@ CI는 `DEVELOPER_DIR`로 Xcode 26.2를 고정합니다. runner 이미지 기본�
 
 이 고정은 CI에만 적용하며 로컬 Xcode 버전을 강제하지 않습니다. 로컬과 CI의 SDK가
 다르면 로컬에서 통과한 코드가 CI에서만 깨질 수 있으므로, 두 결과가 갈리면 이 차이를
-먼저 확인합니다. 로컬 지원 하한은 아직 확정하지 않았습니다.
+먼저 확인합니다. 실증된 하한은 Xcode 16.4입니다. `DEVELOPER_DIR` 고정 이전
+CI 실행이 runner 기본 툴체인 Xcode 16.4에서 앱 빌드·테스트·Release 빌드를 모두
+통과했습니다. 구조적 하한은 16.0이며 `project.pbxproj`의 `objectVersion = 77`,
+폴더 동기화 그룹과 `SWIFT_VERSION = 6.0`이 그보다 낮은 Xcode를 배제합니다.
+
+저장소 도구 게이트는 Node.js 24 이상에서 실행합니다. `.agents/skills/` 회귀
+테스트 일부가 확장자 없는 stub 파일에 ESM 문법을 사용하므로 Node 20에서는
+module 자동 감지가 없어 실패합니다. CI는 24로 고정하며 로컬도 같은 계열을
+사용해야 `AGENTS.md`의 게이트 목록이 그대로 재현됩니다.
 
 ### 소스 폴더 규칙
 
@@ -143,10 +153,15 @@ CI는 `DEVELOPER_DIR`로 Xcode 26.2를 고정합니다. runner 이미지 기본�
   번들에 평탄하게 복사되므로 서로 다른 폴더의 같은 이름 파일은 함께 빌드되지
   않습니다. `Alpha/thing.txt`와 `Beta/thing.txt`는 충돌하고,
   `thing.txt`와 `thing.json`은 공존합니다. Swift 파일은 확장자가 같으므로 결과적으로
-  이름 자체가 유일해야 합니다.
+  이름 자체가 유일해야 합니다. 이 두 규칙은 Xcode 폴더 동기화의 문서화된 동작에서
+  따온 것이며 이 저장소에서 실행으로 확인하지는 않았습니다.
 - 공통 테스트 fixture는 `LunchTimeTests/Support/`에 둡니다. 현재 이 폴더에는
   기준선 테스트도 함께 있습니다. 저장소 최상위 `Tests/`는 어떤 대상에도
-  동기화되지 않으므로 fixture 위치로 쓸 수 없습니다.
+  동기화되지 않으므로 번들 리소스로 쓰려면 `LunchTime.xcodeproj` 편집이
+  필요합니다. `#filePath` 기준 상대 경로로 읽는 fixture는 번들 동기화를 요구하지
+  않지만, `.github/mvp-work-items.json`이 LT-035~LT-040에 부여한
+  `Tests/Fixtures/**` 소유 경로와 이 규칙 중 어느 쪽을 정본으로 삼을지는 아직
+  결정되지 않았습니다.
 - 다음 변경은 폴더 추가로 해결할 수 없고 `LunchTime.xcodeproj`를 편집해야
   합니다: Swift Package 의존성, `Info.plist` 키, entitlement, 새 빌드 설정.
   이 파일은 단일 소유 대상이므로 전용 이슈에서 변경합니다. 현재 작업 목록에는
@@ -159,9 +174,12 @@ CI는 `DEVELOPER_DIR`로 Xcode 26.2를 고정합니다. runner 이미지 기본�
   이는 빌드 설정이며 출시 서명·배포 정책이 아닙니다.
 - App Sandbox와 Hardened Runtime은 현재 꺼져 있습니다. 공증, entitlement와
   배포 방식은 이 골격에서 확정하지 않습니다.
-- 최소 macOS 버전과 SwiftUI 경계는 [PRD-01](docs/prd/01_lunchtime_mvp.md)이 앱
-  기반 작업에 위임한 기술 선택이며 사용자에게 보이는 제품 동작을 바꾸지
-  않습니다. 같은 절이 요구하는 출시 검토 증거는 아직 확보하지 않았습니다.
+- [PRD-01](docs/prd/01_lunchtime_mvp.md) 10절은 최소 macOS 버전, SwiftUI/AppKit
+  경계, 코드 서명과 배포 방식 네 항목을 앱 기반 작업에 위임합니다. 이 골격은 앞
+  두 항목만 확정했고 서명·배포는 확정하지 않았습니다. 같은 절이 요구하는 출시
+  검토 증거도 아직 확보하지 않았습니다. 서명·배포를 확정하려면
+  `LunchTime.xcodeproj` 편집이 필요하지만 현재 작업 목록에 그 파일을 소유한
+  후속 이슈가 없어 전용 이슈를 새로 만들어야 합니다.
 
 ### 테스트 구성
 
@@ -181,6 +199,13 @@ xcodebuild test -project LunchTime.xcodeproj -scheme LunchTimeUITests -destinati
 CI는 기본 scheme을 사용하고 `-skip-testing:LunchTimeUITests`로 한 번 더 제외해
 scheme이 바뀌어도 게이트가 결정적으로 유지되게 합니다. UI 대상은 CI에서도 계속
 빌드되므로 컴파일 회귀는 잡힙니다.
+
+UI 테스트를 실제로 실행하려면 scheme의 skip 설정 또는 워크플로의 `-skip-testing`
+인자를 바꿔야 합니다. 두 파일(`LunchTime.xcodeproj/**`,
+`.github/workflows/**`)은 현재 LT-001만 소유하므로 UI 테스트 실행을 게이트로
+되돌릴 수 있는 후속 이슈가 없습니다. `LunchTimeUITests/**`를 소유한 열네 작업은
+테스트를 추가할 수 있지만 그 실행 경로를 열 수는 없습니다. 실행이 필요한
+release gate가 생기면 전용 이슈에서 소유권을 먼저 정리해야 합니다.
 
 테스트는 Debug 구성에서만 실행합니다. `@testable import`가 필요한 테스트 대상은
 Release 구성에서 빌드되지 않습니다.
@@ -209,11 +234,10 @@ Release 구성에서 빌드되지 않습니다.
 두 워크플로는 서로 독립적으로 실패합니다. 제품 문서 검증과 패치 공백 검사는
 같은 job의 개별 단계이므로 앞 단계가 실패하면 실행되지 않습니다.
 
-병합을 차단하는 필수 검사는 저장소 ruleset이 정합니다. 현재 ruleset은 하네스
-워크플로의 `validate` 검사만 필수로 요구하므로 앱 게이트는 아직 병합을 막지
-않습니다. 앱 게이트를 병합 조건으로 만들려면 ruleset에 `app-test`를 추가해야
-합니다. 두 워크플로 모두 job에 별도 표시 이름을 두지 않으므로 job 이름이 그대로
-검사 이름이 됩니다.
+병합을 차단하는 필수 검사는 저장소 ruleset이 정합니다. 현재 ruleset은 `app-test`와
+`validate`를 모두 필수로 요구하므로 앱 게이트가 실패하면 병합이 막힙니다. 두
+워크플로 모두 job에 별도 표시 이름을 두지 않으므로 job 이름이 그대로 검사
+이름이 됩니다.
 
 ## 제품 문서 갱신 절차
 

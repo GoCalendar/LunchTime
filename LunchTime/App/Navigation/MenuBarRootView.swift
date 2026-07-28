@@ -9,6 +9,6 @@ import SwiftUI
 /// 이 view는 `LunchTime/App/Navigation/**`을 소유하는 작업이 교체한다.
 struct MenuBarRootView: View {
     var body: some View {
-        Text(LunchTimeApp.appDisplayName)
+        Text(AppSurface.displayName)
     }
 }
