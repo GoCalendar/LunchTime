@@ -4090,10 +4090,433 @@ function activeYamlJobBlock(source, jobId) {
     .join("\n");
 }
 
+function activeYamlTopLevelBlock(source, key) {
+  const lines = source.split("\n");
+  const header = `${key}:`;
+  const starts = lines.flatMap((line, index) =>
+    line === header ? [index] : [],
+  );
+  if (starts.length !== 1) return "";
+
+  const start = starts[0];
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (
+      line.trim() &&
+      !line.trimStart().startsWith("#") &&
+      line.match(/^ */)[0].length === 0
+    ) {
+      end = index;
+      break;
+    }
+  }
+
+  return lines
+    .slice(start, end)
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+}
+
+function activeYamlMappingBlock(source, key, indent) {
+  const lines = source.split("\n");
+  const header = `${" ".repeat(indent)}${key}:`;
+  const starts = lines.flatMap((line, index) =>
+    line === header ? [index] : [],
+  );
+  if (starts.length !== 1) return "";
+
+  const start = starts[0];
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const leadingSpaces = line.match(/^ */)[0].length;
+    if (leadingSpaces <= indent) {
+      end = index;
+      break;
+    }
+  }
+
+  return lines.slice(start, end).join("\n");
+}
+
+function directYamlScalarValues(source, key, indent) {
+  const prefix = " ".repeat(indent);
+  const pattern = new RegExp(
+    `^${escapeRegExp(prefix + key)}:[ \\t]*(.*)$`,
+  );
+  return source
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .flatMap((line) => {
+      const match = line.match(pattern);
+      return match ? [match[1].trim()] : [];
+    });
+}
+
+function directYamlScalar(source, key, indent) {
+  const values = directYamlScalarValues(source, key, indent);
+  return values.length === 1 ? values[0] : undefined;
+}
+
+function directYamlListValues(source, indent) {
+  const pattern = new RegExp(`^ {${indent}}-\\s+(.+?)\\s*$`);
+  return source
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .flatMap((line) => {
+      const match = line.match(pattern);
+      return match ? [match[1]] : [];
+    });
+}
+
+function exactStringSet(actual, expected) {
+  return (
+    actual.length === expected.length &&
+    new Set(actual).size === actual.length &&
+    expected.every((value) => actual.includes(value))
+  );
+}
+
+function activeYamlStepBlocks(jobBlock) {
+  const stepsBlock = activeYamlMappingBlock(jobBlock, "steps", 4);
+  if (!stepsBlock) return [];
+
+  const lines = stepsBlock.split("\n");
+  const starts = lines.flatMap((line, index) =>
+    /^ {6}-\s+\S/.test(line) ? [index] : [],
+  );
+  return starts.map((start, index) => {
+    const end = starts[index + 1] ?? lines.length;
+    const stepLines = lines.slice(start, end);
+    stepLines[0] = stepLines[0].replace(/^ {6}-\s+/, "        ");
+    return stepLines.join("\n");
+  });
+}
+
+function yamlStepRun(stepBlock) {
+  const lines = stepBlock.split("\n");
+  const starts = lines.flatMap((line, index) =>
+    /^ {8}run:\s*/.test(line) ? [index] : [],
+  );
+  if (starts.length !== 1) return "";
+
+  const start = starts[0];
+  const value = lines[start].replace(/^ {8}run:\s*/, "");
+  if (!/^\|[+-]?$/.test(value)) return value.trim();
+
+  const content = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim()) {
+      const leadingSpaces = line.match(/^ */)[0].length;
+      if (leadingSpaces <= 8) break;
+    }
+    content.push(line);
+  }
+
+  const contentIndents = content
+    .filter((line) => line.trim())
+    .map((line) => line.match(/^ */)[0].length);
+  const contentIndent =
+    contentIndents.length > 0 ? Math.min(...contentIndents) : 10;
+  return content
+    .map((line) => (line.trim() ? line.slice(contentIndent) : ""))
+    .join("\n")
+    .trimEnd();
+}
+
+function stepWithExactRun(jobBlock, expectedRun) {
+  return activeYamlStepBlocks(jobBlock).find(
+    (step) => yamlStepRun(step) === expectedRun,
+  );
+}
+
+function hasExactShellLine(runScripts, pattern) {
+  return runScripts.some((script) => pattern.test(script));
+}
+
+function validateAppCiContract() {
+  const workflowFile = ".github/workflows/app-ci.yml";
+  if (!isFile(workflowFile)) return;
+
+  const workflowSource = fs
+    .readFileSync(path.join(root, workflowFile), "utf8")
+    .replaceAll("\r\n", "\n");
+  const triggerBlock = activeYamlTopLevelBlock(workflowSource, "on");
+  const classifyBlock = activeYamlJobBlock(workflowSource, "classify");
+  const appBuildBlock = activeYamlJobBlock(workflowSource, "app-build");
+  const appTestBlock = activeYamlJobBlock(workflowSource, "app-test");
+  const requireContract = (label, condition) => {
+    if (!condition) {
+      errors.push(`${workflowFile}: 앱 CI 계약이 없습니다: ${label}`);
+    }
+  };
+
+  const pullRequestBlock = activeYamlMappingBlock(
+    triggerBlock,
+    "pull_request",
+    2,
+  );
+  const pullRequestTypes = directYamlListValues(
+    activeYamlMappingBlock(pullRequestBlock, "types", 4),
+    6,
+  );
+  requireContract(
+    "pull_request head 변경 trigger",
+    exactStringSet(pullRequestTypes, [
+      "opened",
+      "synchronize",
+      "reopened",
+      "edited",
+    ]),
+  );
+  requireContract(
+    "same-head ready_for_review 재실행 제거",
+    !pullRequestTypes.includes("ready_for_review"),
+  );
+
+  const pushBlock = activeYamlMappingBlock(triggerBlock, "push", 2);
+  const pushBranches = directYamlListValues(
+    activeYamlMappingBlock(pushBlock, "branches", 4),
+    6,
+  );
+  requireContract(
+    "main push trigger",
+    exactStringSet(pushBranches, ["main"]),
+  );
+  requireContract(
+    "workflow_dispatch 전체 앱 검증 trigger",
+    Boolean(
+      activeYamlMappingBlock(triggerBlock, "workflow_dispatch", 2),
+    ),
+  );
+  const scheduleBlock = activeYamlMappingBlock(
+    triggerBlock,
+    "schedule",
+    2,
+  );
+  requireContract(
+    "schedule 전체 앱 검증 trigger",
+    /^ {4}- cron:\s*(?:"[^"]+"|'[^']+'|\S+)\s*$/m.test(scheduleBlock),
+  );
+
+  const classifyOutputs = activeYamlMappingBlock(
+    classifyBlock,
+    "outputs",
+    4,
+  );
+  requireContract(
+    "classifier app 선택 출력",
+    directYamlScalar(classifyOutputs, "app", 6) ===
+      "${{ steps.paths.outputs.app }}",
+  );
+  requireContract(
+    "classifier full 선택 출력",
+    directYamlScalar(classifyOutputs, "full", 6) ===
+      "${{ steps.paths.outputs.full }}",
+  );
+
+  const classifySteps = activeYamlStepBlocks(classifyBlock);
+  const classifyRuns = classifySteps.map(yamlStepRun).filter(Boolean);
+  requireContract(
+    "앱 경로 classifier 구문 검사",
+    hasExactShellLine(
+      classifyRuns,
+      /^node --check \.github\/workflows\/validate-app-paths\.mjs$/m,
+    ),
+  );
+  requireContract(
+    "앱 경로 classifier 테스트 구문 검사",
+    hasExactShellLine(
+      classifyRuns,
+      /^node --check \.github\/workflows\/validate-app-paths\.test\.mjs$/m,
+    ),
+  );
+  requireContract(
+    "앱 경로 classifier 회귀 테스트",
+    hasExactShellLine(
+      classifyRuns,
+      /^node --test \.github\/workflows\/validate-app-paths\.test\.mjs$/m,
+    ),
+  );
+  const classifierRun =
+    'node .github/workflows/validate-app-paths.mjs \\\n' +
+    '  --event "$EVENT_NAME" \\\n' +
+    '  --base "$BASE_SHA" \\\n' +
+    '  --head "$HEAD_SHA" \\\n' +
+    '  --output "$GITHUB_OUTPUT"';
+  const classifierSteps = classifySteps.filter(
+    (step) => yamlStepRun(step) === classifierRun,
+  );
+  const classifierStep =
+    classifierSteps.length === 1 ? classifierSteps[0] : "";
+  requireContract(
+    "앱 base/head 경로 분류 실행",
+    Boolean(classifierStep),
+  );
+  const pathIdSteps = classifySteps.filter(
+    (step) => directYamlScalar(step, "id", 8) === "paths",
+  );
+  requireContract(
+    "classifier output producer step id",
+    Boolean(classifierStep) &&
+      directYamlScalar(classifierStep, "id", 8) === "paths" &&
+      pathIdSteps.length === 1,
+  );
+  const classifierEnv = activeYamlMappingBlock(
+    classifierStep,
+    "env",
+    8,
+  );
+  for (const [name, target] of [
+    ["EVENT_NAME", "${{ github.event_name }}"],
+    [
+      "BASE_SHA",
+      "${{ github.event.pull_request.base.sha || github.event.before || '' }}",
+    ],
+    [
+      "HEAD_SHA",
+      "${{ github.event.pull_request.head.sha || github.sha || '' }}",
+    ],
+  ]) {
+    requireContract(
+      `classifier producer env 결속: ${name}`,
+      directYamlScalar(classifierEnv, name, 10) === target,
+    );
+  }
+
+  requireContract(
+    "app-build classifier direct needs",
+    directYamlScalar(appBuildBlock, "needs", 4) === "classify",
+  );
+  requireContract(
+    "app-build 조건부 실행",
+    directYamlScalar(appBuildBlock, "if", 4) ===
+      "${{ needs.classify.outputs.app == 'true' }}",
+  );
+  requireContract(
+    "app-build macOS runner",
+    directYamlScalar(appBuildBlock, "runs-on", 4) === "macos-15",
+  );
+
+  const appBuildRuns = activeYamlStepBlocks(appBuildBlock)
+    .map(yamlStepRun)
+    .filter(Boolean);
+  requireContract(
+    "app-build Debug build 명령",
+    appBuildRuns.some((script) =>
+      /^xcodebuild build \\\n\s+-project LunchTime\.xcodeproj \\\n\s+-scheme LunchTime \\\n\s+-destination 'platform=macOS'$/m.test(
+        script,
+      ),
+    ),
+  );
+  requireContract(
+    "app-build 앱 테스트",
+    appBuildRuns.some((script) =>
+      /^xcodebuild test \\\n\s+-project LunchTime\.xcodeproj \\\n\s+-scheme LunchTime \\\n\s+-destination 'platform=macOS' \\\n\s+-skip-testing:LunchTimeUITests \\\n\s+-resultBundlePath "\$\{\{ runner\.temp \}\}\/LunchTime\.xcresult"$/m.test(
+        script,
+      ),
+    ),
+  );
+  requireContract(
+    "app-build Release 구성",
+    appBuildRuns.some((script) =>
+      /^xcodebuild build \\\n\s+-project LunchTime\.xcodeproj \\\n\s+-scheme LunchTime \\\n\s+-configuration Release \\\n\s+-destination 'platform=macOS'$/m.test(
+        script,
+      ),
+    ),
+  );
+  requireContract(
+    "app-build Debug·Release build 두 명령",
+    appBuildRuns.filter((script) =>
+      /^xcodebuild build \\\s*$/m.test(script),
+    ).length === 2,
+  );
+
+  const appTestNames = directYamlScalarValues(
+    appTestBlock,
+    "name",
+    4,
+  );
+  requireContract(
+    "required check context app-test",
+    appTestNames.length === 0 ||
+      (appTestNames.length === 1 && appTestNames[0] === "app-test"),
+  );
+  requireContract(
+    "required app-test always 실행",
+    directYamlScalar(appTestBlock, "if", 4) === "${{ always() }}",
+  );
+  const appTestNeeds = directYamlListValues(
+    activeYamlMappingBlock(appTestBlock, "needs", 4),
+    6,
+  );
+  requireContract(
+    "required app-test direct needs: classify",
+    exactStringSet(appTestNeeds, ["classify", "app-build"]) &&
+      appTestNeeds.includes("classify"),
+  );
+  requireContract(
+    "required app-test direct needs: app-build",
+    exactStringSet(appTestNeeds, ["classify", "app-build"]) &&
+      appTestNeeds.includes("app-build"),
+  );
+  requireContract(
+    "required app-test 빠른 runner",
+    directYamlScalar(appTestBlock, "runs-on", 4) === "ubuntu-latest",
+  );
+
+  const aggregateStep = stepWithExactRun(
+    appTestBlock,
+    "node .github/workflows/validate-app-paths.mjs --verify-results",
+  );
+  requireContract(
+    "required app-test 선택 결과 aggregate",
+    Boolean(aggregateStep),
+  );
+  const aggregateEnv = activeYamlMappingBlock(
+    aggregateStep ?? "",
+    "env",
+    8,
+  );
+  for (const [name, target, label] of [
+    [
+      "APP_SELECTED",
+      "${{ needs.classify.outputs.app }}",
+      "required app-test 선택값 결속: APP_SELECTED",
+    ],
+    [
+      "FULL_SELECTED",
+      "${{ needs.classify.outputs.full }}",
+      "required app-test 선택값 결속: FULL_SELECTED",
+    ],
+    [
+      "CLASSIFY_RESULT",
+      "${{ needs.classify.result }}",
+      "required app-test job 결과 결속: CLASSIFY_RESULT",
+    ],
+    [
+      "APP_BUILD_RESULT",
+      "${{ needs.app-build.result }}",
+      "required app-test job 결과 결속: APP_BUILD_RESULT",
+    ],
+  ]) {
+    requireContract(
+      label,
+      directYamlScalar(aggregateEnv, name, 10) === target,
+    );
+  }
+}
+
 function validateHarnessSkillContracts() {
   const requiredFiles = [
+    ".github/workflows/app-ci.yml",
     ".github/workflows/validate-harness-paths.mjs",
     ".github/workflows/validate-harness-paths.test.mjs",
+    ".github/workflows/validate-app-paths.mjs",
+    ".github/workflows/validate-app-paths.test.mjs",
     ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
     ".agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
     ".agents/skills/open-pull-request/scripts/validate-finalize.mjs",
@@ -4173,6 +4596,8 @@ function validateHarnessSkillContracts() {
       }
     }
   }
+
+  validateAppCiContract();
 
   const contracts = [
     {
