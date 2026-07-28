@@ -9,6 +9,9 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+  schedule:
+    - cron: "17 18 * * 0"
 
 permissions:
   contents: read
@@ -18,9 +21,44 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.paths.outputs.full }}
+      product_docs: ${{ steps.paths.outputs.product_docs }}
+      work_item: ${{ steps.paths.outputs.work_item }}
+      commit_pr: ${{ steps.paths.outputs.commit_pr }}
+      finalize: ${{ steps.paths.outputs.finalize }}
+      reason: ${{ steps.paths.outputs.reason }}
+      changed_paths_json: ${{ steps.paths.outputs.changed_paths_json }}
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: 변경 경로별 회귀군 선택
+        id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node .github/workflows/validate-harness-paths.mjs \
+            --event "$GITHUB_EVENT_NAME" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --output "$GITHUB_OUTPUT"
+
   harness:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v6
@@ -35,6 +73,8 @@ jobs:
 
       - name: 결정적 스크립트 구문 검사
         run: |
+          node --check .github/workflows/validate-harness-paths.mjs
+          node --check .github/workflows/validate-harness-paths.test.mjs
           node --check .agents/skills/update-product-docs/scripts/validate-product-docs.mjs
           node --check .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
           node --check .agents/skills/update-product-docs/scripts/product-contract-ids.mjs
@@ -58,19 +98,8 @@ jobs:
           node --check .agents/skills/open-pull-request/scripts/finalize-local-cleanup.mjs
           node --check .agents/skills/open-pull-request/scripts/finalize-local-cleanup.test.mjs
 
-      - name: 작업 도구 회귀 테스트 실행
-        run: |
-          node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs
-          node --test .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
-          node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs
-          node --test .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
-          node --test .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
-          node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
-          node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
-          node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs
-          node --test .agents/skills/open-pull-request/scripts/finalize-merge.test.mjs
-          node --test .agents/skills/open-pull-request/scripts/finalize-remote-branch.test.mjs
-          node --test .agents/skills/open-pull-request/scripts/finalize-local-cleanup.test.mjs
+      - name: 경로 분류 회귀 테스트
+        run: node --test .github/workflows/validate-harness-paths.test.mjs
 
       - name: 커밋 경로 검증
         run: |
@@ -89,6 +118,7 @@ jobs:
             --event "$GITHUB_EVENT_PATH"
 
       - name: 커밋 메시지 검증
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -127,35 +157,151 @@ jobs:
       - name: 패치 공백 검사
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: git diff --check "${BASE_SHA}...${HEAD_SHA}"
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              git diff --check "${BASE_SHA}...${HEAD_SHA}"
+              ;;
+            push)
+              if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+                git show --check --format= "$HEAD_SHA"
+              else
+                git diff --check "${BASE_SHA}..${HEAD_SHA}"
+              fi
+              ;;
+            schedule|workflow_dispatch)
+              git show --check --format= "$HEAD_SHA"
+              ;;
+            *)
+              echo "지원하지 않는 event입니다: $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+  product-docs-regression:
+    needs: classify
+    if: ${{ needs.classify.outputs.product_docs == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: 제품 문서 도구 회귀 테스트
+        run: |
+          node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs
+          node --test .agents/skills/update-product-docs/scripts/validate-product-docs.test.mjs
+
+  work-item-regression:
+    needs: classify
+    if: ${{ needs.classify.outputs.work_item == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: 작업 이슈 도구 회귀 테스트
+        run: |
+          node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs
+          node --test .agents/skills/run-github-work-item/scripts/bootstrap-mvp.test.mjs
+
+  commit-pr-regression:
+    needs: classify
+    if: ${{ needs.classify.outputs.commit_pr == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: 커밋·PR 도구 회귀 테스트
+        run: |
+          node --test .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
+          node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
+          node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
+
+  finalize-regression:
+    needs: classify
+    if: ${{ needs.classify.outputs.finalize == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: 병합·정리 도구 회귀 테스트
+        run: |
+          node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs
+          node --test .agents/skills/open-pull-request/scripts/finalize-merge.test.mjs
+          node --test .agents/skills/open-pull-request/scripts/finalize-remote-branch.test.mjs
+          node --test .agents/skills/open-pull-request/scripts/finalize-local-cleanup.test.mjs
 
   # 이 job id는 GitHub ruleset의 required check 이름이다. 선행 job이
-  # 실패해도 항상 실행해 세 결과를 하나의 fail-closed 결론으로 묶는다.
+  # 실패해도 항상 실행해 선택 결과와 실제 job 결과를 fail-closed로 묶는다.
   validate:
     if: ${{ always() }}
     needs:
+      - classify
       - harness
       - product-docs
       - patch-whitespace
+      - product-docs-regression
+      - work-item-regression
+      - commit-pr-regression
+      - finalize-regression
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v6
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
       - name: 검증 결과 결속
         env:
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
           HARNESS_RESULT: ${{ needs.harness.result }}
           PRODUCT_DOCS_RESULT: ${{ needs.product-docs.result }}
           PATCH_WHITESPACE_RESULT: ${{ needs.patch-whitespace.result }}
+          FULL_SELECTED: ${{ needs.classify.outputs.full }}
+          PRODUCT_DOCS_SELECTED: ${{ needs.classify.outputs.product_docs }}
+          WORK_ITEM_SELECTED: ${{ needs.classify.outputs.work_item }}
+          COMMIT_PR_SELECTED: ${{ needs.classify.outputs.commit_pr }}
+          FINALIZE_SELECTED: ${{ needs.classify.outputs.finalize }}
+          PRODUCT_DOCS_REGRESSION_RESULT: ${{ needs.product-docs-regression.result }}
+          WORK_ITEM_REGRESSION_RESULT: ${{ needs.work-item-regression.result }}
+          COMMIT_PR_REGRESSION_RESULT: ${{ needs.commit-pr-regression.result }}
+          FINALIZE_REGRESSION_RESULT: ${{ needs.finalize-regression.result }}
         run: |
-          if [ "$HARNESS_RESULT" != "success" ]; then
-            echo "harness job 결과: $HARNESS_RESULT"
-            exit 1
-          fi
-          if [ "$PRODUCT_DOCS_RESULT" != "success" ]; then
-            echo "product-docs job 결과: $PRODUCT_DOCS_RESULT"
-            exit 1
-          fi
-          if [ "$PATCH_WHITESPACE_RESULT" != "success" ]; then
-            echo "patch-whitespace job 결과: $PATCH_WHITESPACE_RESULT"
-            exit 1
-          fi
+          node .github/workflows/validate-harness-paths.mjs \
+            --verify-results

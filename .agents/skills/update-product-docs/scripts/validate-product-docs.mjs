@@ -4059,8 +4059,41 @@ function validateFinalSnapshotOwnerContracts() {
   }
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function activeYamlJobBlock(source, jobId) {
+  const lines = source.split("\n");
+  const header = `  ${jobId}:`;
+  const starts = lines.flatMap((line, index) =>
+    line === header ? [index] : [],
+  );
+  if (starts.length !== 1) return "";
+
+  const start = starts[0];
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (
+      !line.trimStart().startsWith("#") &&
+      /^  [A-Za-z_][A-Za-z0-9_-]*:\s*$/.test(line)
+    ) {
+      end = index;
+      break;
+    }
+  }
+
+  return lines
+    .slice(start, end)
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+}
+
 function validateHarnessSkillContracts() {
   const requiredFiles = [
+    ".github/workflows/validate-harness-paths.mjs",
+    ".github/workflows/validate-harness-paths.test.mjs",
     ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
     ".agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
     ".agents/skills/open-pull-request/scripts/validate-finalize.mjs",
@@ -4071,6 +4104,73 @@ function validateHarnessSkillContracts() {
   for (const file of requiredFiles) {
     if (!isFile(file)) {
       errors.push(`필수 하네스 검증 파일이 없습니다: ${file}`);
+    }
+  }
+
+  const workflowFile = ".github/workflows/validate-harness.yml";
+  if (isFile(workflowFile)) {
+    const workflowSource = fs
+      .readFileSync(path.join(root, workflowFile), "utf8")
+      .replaceAll("\r\n", "\n");
+    const validateBlock = activeYamlJobBlock(workflowSource, "validate");
+    const aggregateTerms = [
+      [
+        "CI aggregate always 실행",
+        /^    if:\s*\$\{\{\s*always\(\)\s*\}\}\s*$/m,
+      ],
+      ...[
+        "classify",
+        "harness",
+        "product-docs",
+        "patch-whitespace",
+        "product-docs-regression",
+        "work-item-regression",
+        "commit-pr-regression",
+        "finalize-regression",
+      ].map((job) => [
+        `CI aggregate direct needs: ${job}`,
+        new RegExp(`^      - ${escapeRegExp(job)}\\s*$`, "m"),
+      ]),
+      ...[
+        ["FULL_SELECTED", "classify.outputs.full"],
+        ["PRODUCT_DOCS_SELECTED", "classify.outputs.product_docs"],
+        ["WORK_ITEM_SELECTED", "classify.outputs.work_item"],
+        ["COMMIT_PR_SELECTED", "classify.outputs.commit_pr"],
+        ["FINALIZE_SELECTED", "classify.outputs.finalize"],
+      ].map(([name, target]) => [
+        `CI aggregate 선택값 결속: ${name}`,
+        new RegExp(
+          `^\\s+${name}:\\s*\\$\\{\\{\\s*needs\\.${escapeRegExp(target)}\\s*\\}\\}\\s*$`,
+          "m",
+        ),
+      ]),
+      ...[
+        ["CLASSIFY_RESULT", "classify.result"],
+        ["HARNESS_RESULT", "harness.result"],
+        ["PRODUCT_DOCS_RESULT", "product-docs.result"],
+        ["PATCH_WHITESPACE_RESULT", "patch-whitespace.result"],
+        [
+          "PRODUCT_DOCS_REGRESSION_RESULT",
+          "product-docs-regression.result",
+        ],
+        ["WORK_ITEM_REGRESSION_RESULT", "work-item-regression.result"],
+        ["COMMIT_PR_REGRESSION_RESULT", "commit-pr-regression.result"],
+        ["FINALIZE_REGRESSION_RESULT", "finalize-regression.result"],
+      ].map(([name, target]) => [
+        `CI aggregate job 결과 결속: ${name}`,
+        new RegExp(
+          `^\\s+${name}:\\s*\\$\\{\\{\\s*needs\\.${escapeRegExp(target)}\\s*\\}\\}\\s*$`,
+          "m",
+        ),
+      ]),
+    ];
+
+    for (const [label, pattern] of aggregateTerms) {
+      if (!pattern.test(validateBlock)) {
+        errors.push(
+          `${workflowFile}: 하네스 수명주기 계약이 없습니다: ${label}`,
+        );
+      }
     }
   }
 
@@ -4305,6 +4405,54 @@ function validateHarnessSkillContracts() {
     {
       file: ".github/workflows/validate-harness.yml",
       terms: [
+        [
+          "CI 경로 classifier 구문 검사",
+          /node --check \.github\/workflows\/validate-harness-paths\.mjs/,
+        ],
+        [
+          "CI 경로 classifier 테스트 구문 검사",
+          /node --check \.github\/workflows\/validate-harness-paths\.test\.mjs/,
+        ],
+        [
+          "CI 경로 classifier 회귀 테스트",
+          /node --test \.github\/workflows\/validate-harness-paths\.test\.mjs/,
+        ],
+        [
+          "CI base/head 경로 분류 실행",
+          /node \.github\/workflows\/validate-harness-paths\.mjs\s+\\?\s*--event[\s\S]{0,240}--base[\s\S]{0,240}--head[\s\S]{0,240}--output/,
+        ],
+        [
+          "CI schedule 전체 회귀 trigger",
+          /\bschedule\s*:/,
+        ],
+        [
+          "CI workflow_dispatch 전체 회귀 trigger",
+          /\bworkflow_dispatch\s*:/,
+        ],
+        [
+          "CI classifier full 선택 출력",
+          /classify\s*:[\s\S]{0,240}outputs\s*:[\s\S]{0,240}full:\s*\$\{\{\s*steps\.paths\.outputs\.full\s*\}\}/,
+        ],
+        [
+          "CI product docs 조건부 회귀군",
+          /product-docs-regression\s*:[\s\S]{0,420}if:\s*\$\{\{\s*needs\.classify\.outputs\.product_docs\s*==\s*['"]true['"]\s*\}\}/,
+        ],
+        [
+          "CI work item 조건부 회귀군",
+          /work-item-regression\s*:[\s\S]{0,420}if:\s*\$\{\{\s*needs\.classify\.outputs\.work_item\s*==\s*['"]true['"]\s*\}\}/,
+        ],
+        [
+          "CI commit PR 조건부 회귀군",
+          /commit-pr-regression\s*:[\s\S]{0,420}if:\s*\$\{\{\s*needs\.classify\.outputs\.commit_pr\s*==\s*['"]true['"]\s*\}\}/,
+        ],
+        [
+          "CI finalize 조건부 회귀군",
+          /finalize-regression\s*:[\s\S]{0,420}if:\s*\$\{\{\s*needs\.classify\.outputs\.finalize\s*==\s*['"]true['"]\s*\}\}/,
+        ],
+        [
+          "CI 선택 결과 aggregate",
+          /node \.github\/workflows\/validate-harness-paths\.mjs\s+\\?\s*--verify-results/,
+        ],
         [
           "CI product contract ID 구문 검사",
           /node --check \.agents\/skills\/update-product-docs\/scripts\/product-contract-ids\.mjs/,

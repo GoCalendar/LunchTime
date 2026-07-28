@@ -79,6 +79,18 @@ flowchart TD
 둔다. 이 가이드와 세부 계약이 어긋나면 한쪽을 우회하지 말고 같은 변경에서
 정렬한다.
 
+## 변경 경로별 CI 회귀 선택
+
+`validate` workflow는 작은 Markdown·Skill 설명 변경에는 구문·계약·diff 같은
+빠른 공통 gate만 실행한다. owner의 `scripts/` 변경은 해당 owner 회귀군만
+추가하고, 서로 다른 owner 변경은 필요한 회귀군의 합집합을 병렬 실행한다.
+
+workflow·경로 classifier·공유 하네스 계약 변경, 확정할 수 없는 base/head diff,
+`schedule`과 `workflow_dispatch`는 네 회귀군을 모두 선택해 fail-closed한다.
+required check `validate`는 classifier가 선택한 회귀군(`true`)의 `success`와
+선택하지 않은 회귀군(`false`)의 `skipped`를 각각 요구하므로, 생략과 실패를
+혼동하지 않는다.
+
 ## 최종 snapshot 검증 순서
 
 | 순서 | 단계 | 필수 계약 |
