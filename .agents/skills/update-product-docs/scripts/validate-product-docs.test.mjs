@@ -7,6 +7,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import {
+  EVIDENCE_SCHEMA,
+  EVIDENCE_VERSION,
+  GROUP_COMMAND_MANIFESTS,
+} from "../../commit-work-item/scripts/validate-gate-evidence.mjs";
 
 const validatorPath = fileURLToPath(
   new URL("./validate-product-docs.mjs", import.meta.url),
@@ -145,6 +150,24 @@ const harnessFields = [
   "완료 조건",
   "대표 실패·중단 조건",
 ];
+const heavyRegressionGroups = Object.freeze([
+  ["productDocsRegression", "product-docs-regression"],
+  ["workItemRegression", "work-item-regression"],
+  ["commitPrRegression", "commit-pr-regression"],
+  ["finalizeRegression", "finalize-regression"],
+]);
+const localGateEvidenceMarker =
+  '<!-- local-gate-evidence-contract {"version":1,"d0":"pre-review","selection":"base-to-candidate","invalidation":"previous-to-candidate","unchangedPass":"retain","changedSelected":"rerun","notSelected":"drop","pending":"continue","ambiguous":"fail-closed"} -->';
+const heavyRegressionContractFixture = heavyRegressionGroups.flatMap(
+  ([groupId, jobId]) => [
+    `- \`${jobId}\` (\`${groupId}\`)`,
+    "",
+    "  ```bash",
+    ...GROUP_COMMAND_MANIFESTS[groupId].map((command) => `  ${command}`),
+    "  ```",
+    "",
+  ],
+);
 const finalSnapshotOrderFixture = [
   "## 최종 snapshot 검증 순서",
   "",
@@ -153,10 +176,11 @@ const finalSnapshotOrderFixture = [
   "| 1 | 빠른 행동 검증 | 구현 중에는 이슈별 행동 테스트만 빠르게 반복하며 저장소 고정 게이트 전체를 실행하지 않는다. |",
   "| 2 | 정본 의미 영향 | 독립 리뷰 전에 PRD·Policy·Architecture 의미 영향과 이슈 경로를 판정하고 필요한 정본의 누락·충돌·금지 경로가 있으면 중단한다. |",
   "| 3 | candidate 고정 | clean 독립 worktree에서 검토한 경로만 명시적으로 stage하고 cached diff·candidate tree를 고정하며 unstaged tracked 변경과 예상하지 않은 untracked 입력이 없어야 한다. |",
-  "| 4 | 독립 리뷰 | 위험도별 reviewer가 같은 cached diff·candidate tree를 병렬 검토하고 발견 사항을 합쳐 일괄 수정하며, 수정하면 행동 테스트·정본 의미 영향 판정 뒤 새 snapshot만 다시 리뷰한다. |",
-  "| 5 | 최종 저장소 게이트 | 계획된 수정이 없을 때 같은 filesystem에서 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다. 독립된 읽기 전용·격리 명령만 병렬 실행하고 같은 index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은 순차 실행한 뒤 모든 결과를 join한다. 검증 전후 candidate tree와 gate input은 같아야 한다. |",
-  "| 6 | commit | candidate tree와 commit tree가 같고 증거가 완전하면 로컬 게이트를 반복하지 않고 기존 증거를 인계한다. |",
-  "| 7 | PR·필수 CI | commit tree와 PR head tree가 같을 때 로컬 증거를 재사용하되 원격 required CI는 생략하지 않는다. |",
+  "| 4 | 빠른 공통 gate | candidate를 고정한 직후 index·clean 상태에 결속해 다섯 D0 gate를 실행한다. D0만의 수정은 다시 stage·고정·D0한 뒤 review pass를 소비하지 않고 진행한다. tree가 유지되면 이 증거가 최종 증거다. |",
+  "| 5 | 독립 리뷰 | D0를 통과한 최초 cached diff·candidate tree를 위험도별 reviewer가 검토한다. 수정하면 stage→D0 뒤 행동 테스트·정본 의미 영향 판정과 이전·현재 tree, staged delta·현재 전체 diff의 delta review를 수행한다. 범위·요구사항·보안 경계 확대나 chain 공백·모호함에는 새 전체 리뷰가 필요하다. |",
+  "| 6 | 선택된 무거운 회귀군 | 현재 base→candidate의 `selectedGroups`만 실행한다. 수정 뒤에는 이전 evidence JSON을 delta 입력으로 사용해 `selectedGroups ∩ invalidatedGroups`만 재실행하고, 선택된 unchanged PASS는 유지하며 pending은 계속하고 unselected는 버린다. |",
+  "| 7 | commit | candidate tree와 commit tree가 같고 증거가 완전하면 로컬 게이트를 반복하지 않고 기존 증거를 인계한다. |",
+  "| 8 | PR·필수 CI | commit tree와 PR head tree가 같을 때 로컬 증거를 재사용하되 원격 required CI는 생략하지 않는다. |",
   "",
 ];
 const finalSnapshotRecoveryFixture = [
@@ -164,11 +188,14 @@ const finalSnapshotRecoveryFixture = [
   "",
   "| 상황 | 기존 증거 | 재진입 |",
   "|---|---|---|",
-  "| tracked content 변경 | review·gate 증거 모두 무효 | 새 candidate에서 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정 뒤 독립 리뷰부터 다시 시작한다. |",
+  "| review 전 D0 실패 수정 | review pass 없음, 이전 D0 폐기 | 즉시 명시적으로 stage해 새 candidate를 고정하고 D0부터 다시 실행한다. |",
+  "| review·heavy gate 뒤 tracked content 변경 | 이전 전체 리뷰와 선택된 unchanged PASS는 조건부 유지 | 즉시 stage·D0한 뒤 필요한 행동 테스트·의미 영향 판정과 delta review를 수행한다. 선택·무효화된 완료 회귀군만 재실행하고 선택된 pending을 계속한다. |",
   "| 환경 전용 실패·동일 tree·input | review 증거 유지, 실패 gate 미완료 | 원인과 동일 tree·input 근거를 기록하고 새 명령을 한 번만 실행한다. 자동 반복하지 않는다. |",
-  "| 의미 영향·리뷰 증거 불완전·동일 tree·input | review·gate 증거 재사용 거부 | 같은 candidate·input에서 PRD·Policy·Architecture 의미 영향 판정과 새 독립 리뷰를 수행한 뒤 최종 게이트로 진행한다. |",
-  "| 최종 gate 증거 불완전·동일 tree·input | 로컬 gate 증거 재사용 거부 | exact candidate·input을 동일한 clean snapshot에 재구성하고 현재 `AGENTS.md` 고정 게이트 전체를 새로 실행한다. |",
-  "| candidate tree·input 불일치 | review·gate 증거 모두 무효 | 다른 tree나 input에 gate만 실행하지 않고 새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다. |",
+  "| 의미 영향·review chain 불완전 | review 증거 재사용 거부 | 필요한 의미 영향 판정과 delta review부터 복구하며, 범위 확대나 chain 공백·모호함이면 새 전체 리뷰를 수행한다. |",
+  "| 개별 회귀군 증거 불완전 | 해당 회귀군 증거만 재사용 거부 | exact candidate의 기존 D0가 유효하면 helper가 선택한 해당 회귀군만 실행한다. |",
+  "| strict previous evidence 거부 | previous evidence와 이전 heavy PASS를 폐기하되, candidate 범위가 넓어지지 않은 완전한 raw tree·delta review chain은 유지 가능 | 같은 delta를 반복하지 않는다. replace-disabled current HEAD commit을 current base로 검증하고 candidate base가 같을 때만 기존 `initial`로 re-root한다. current HEAD 또는 candidate base가 unknown·stale이면 중단하며, 이전 evidence의 base 대신 current base→candidate selection만 사용해 새 evidence와 D0를 만든다. |",
+  "| current candidate가 base로 완전 revert | 이전 무거운 회귀군 증거 drop | `selectedGroups`가 비므로 D0 뒤 무거운 회귀군 없이 진행한다. |",
+  "| 공유 계약·classifier·입력 manifest, 환경·미선언 입력 변경 또는 영향 불명 | 로컬 무거운 회귀군 증거 모두 무효 | D0 뒤 current selection이 전체인 fail-closed 결과에서는 네 군을 모두 실행한다. helper 자체 변경은 로컬 네 군을 invalidated 처리하되 owning current selection과의 교집합만 실행하고, 원격 CI도 owning 회귀군만 실행한다. |",
   "",
 ];
 const updateProductDocsFixtureContract = [
@@ -195,13 +222,13 @@ const updateProductDocsFixtureContract = [
   "",
   "## 품질 게이트 실행",
   "",
-  "좁은 행동 테스트는 최종 저장소 게이트를 대신하지 않는다.",
-  "PRD·Policy·Architecture 의미 영향 판정은 독립 리뷰 전에 끝내고 cached diff·candidate tree를 검토한다.",
-  "review-fix 사이에는 고정 게이트 전체를 실행하지 않는다.",
-  "계획된 수정이 없으면 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다.",
-  "tracked content가 바뀌면 행동·의미 영향·리뷰·게이트 증거를 무효화하고 빠른 행동 테스트와 의미 영향 판정부터 다시 시작한다.",
-  "tree·input이 같은 환경 전용 실패는 한 번만 복구한다.",
-  "의미 영향·독립 리뷰 증거가 불완전하면 새 리뷰부터 복구하고 최종 gate 증거만 불완전하면 gate를 새로 실행한다. candidate tree나 input이 다르면 빠른 행동 테스트와 의미 영향 판정부터 다시 시작한다.",
+  "candidate 고정 직후 빠른 공통 gate가 먼저 통과해야 최초 candidate 전체를 의미 검토한다.",
+  "수정하면 즉시 명시적으로 stage하고 빠른 공통 gate를 먼저 통과시킨다. D0만의 추가 수정은 review 전에 끝내고 이전·현재 tree, staged delta와 현재 전체 cached diff를 다음 pass에 제공한다.",
+  "범위·요구사항·보안 경계가 넓어지거나 review chain에 공백·모호함이 있으면 새 전체 리뷰가 필요하다.",
+  "모든 staged candidate를 고정한 직후 독립 리뷰 전에 빠른 공통 gate를 실행한다.",
+  "현재 base→candidate의 product-docs-regression은 독립 리뷰가 끝난 뒤에만 실행한다.",
+  "selectedGroups ∩ invalidatedGroups만 재실행하고 선택된 unchanged PASS는 유지하며 pending은 계속하고 unselected 증거는 버린다.",
+  "공유 계약·classifier·입력 manifest가 바뀌면 로컬 무거운 회귀군 전체를 무효화한다. helper 자체 변경은 invalidatedGroups 전체에 포함하지만 current selection 밖은 버리고 원격 CI는 owning commit-pr-regression만 실행한다.",
 ];
 const runGithubWorkItemFixtureContract = [
   "요청·파생 label의 정확한 집합을 요구하며 요청하지 않은 label은 보존한다.",
@@ -209,37 +236,62 @@ const runGithubWorkItemFixtureContract = [
   "",
   "## 구현 snapshot 검증",
   "",
-  "빠른 행동 테스트 뒤 PRD·Policy·Architecture를 확인한다.",
-  "cached diff·candidate tree를 같은 snapshot으로 검토한다.",
-  "발견 사항을 한 번에 수정하고 새 candidate를 다시 검토한다.",
-  "계획된 수정이 없으면 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다.",
+  "cached diff·candidate tree를 고정하고 빠른 공통 gate를 먼저 통과시킨 뒤 검토자들에게 같은 snapshot을 넘긴다.",
+  "수정은 즉시 stage하고 빠른 공통 gate를 먼저 통과시킨 뒤 이전·현재 tree, staged delta와 현재 전체 cached diff를 함께 검토한다.",
+  "최초 전체 리뷰와 delta review chain이 최종 candidate를 덮으며 공백·모호함에는 새 전체 리뷰가 필요하다.",
+  "모든 candidate에서 빠른 공통 gate를 리뷰 전에 실행하고 리뷰 뒤에는 현재 base→candidate에 선택된 무거운 회귀군만 실행한다.",
+  "selectedGroups ∩ invalidatedGroups만 다시 실행하고 선택된 unchanged PASS는 유지하며 pending은 계속하고 unselected는 버린다.",
+  "base까지 완전히 되돌리면 무거운 회귀군을 실행하지 않는다.",
+  "공유 계약·classifier·입력 manifest가 바뀌면 로컬 회귀군 전체를 무효화한다. helper 자체 변경은 전체 invalidation이지만 current selection 밖은 버리고 원격 CI는 owning 회귀군만 실행한다.",
 ];
 const commitWorkItemFixtureContract = [
   "## 3. Candidate staging과 독립 리뷰",
   "",
-  "빠른 행동 테스트 동안 고정 게이트 전체를 실행하지 않는다.",
-  "PRD·Policy·Architecture를 대조하고 candidate tree를 독립 리뷰한 뒤 발견 사항을 일괄 수정한다.",
-  "review-fix 사이에는 고정 게이트 전체를 실행하지 않는다.",
+  "candidate 고정 직후 evidence helper의 `initial` 또는 `delta` 모드로 candidate index·clean 상태를 검증하고 빠른 공통 gate를 실행한다.",
+  "이전 evidence JSON을 정확히 소비하는 `delta` evidence와 D0를 먼저 갱신한다. D0만의 추가 수정은 delta review 전에 끝내고 이전·현재 candidate identity, staged delta와 현재 전체 cached diff를 제공한다.",
+  "최초 전체 리뷰와 delta review chain이 최종 candidate를 덮어야 한다.",
+  "범위·요구사항·보안 경계가 넓어지거나 chain에 공백·모호함이 있으면 새 전체 리뷰를 수행한다.",
   "",
   "## 4. 최종 게이트와 snapshot 결속",
   "",
-  "계획된 수정이 없으면 현재 `AGENTS.md` 고정 게이트를 한 번 실행한다.",
-  "tracked content가 바뀌면 행동·의미 영향·리뷰·게이트 증거를 모두 무효화하고 빠른 행동 테스트부터 새 candidate를 만든다. tree·input이 같은 환경 전용 실패는 한 번 복구한다.",
-  "의미 영향·독립 리뷰 증거가 불완전하면 새 리뷰부터, 최종 gate 증거만 불완전하면 gate부터 복구한다. candidate tree나 input이 다르면 모든 로컬 증거를 버리고 빠른 행동 테스트부터 새 candidate를 만든다.",
+  "`initial`은 base tree를 파생하고 `delta`는 strict previous evidence의 candidate tree를 이전 tree로 사용한다. 두 모드 모두 현재 `git write-tree`에서 candidate tree를 파생하고 unstaged tracked·unmerged·untracked 입력이 있으면 거부한다.",
+  "strict previous evidence가 schema·version, helper decision, command manifest 또는 base identity 불일치로 거부되면 같은 `delta`를 반복하지 않는다. replace-disabled current HEAD commit을 current base로 검증하며 candidate base가 그 commit과 같을 때만 기존 `initial`로 re-root한다. current HEAD 또는 candidate base가 unknown·stale이면 중단한다. 검증된 current base가 이전 evidence의 base보다 우선하며, 새 initial evidence에서는 이전 heavy PASS를 모두 폐기하고 current base→candidate selection만 사용한다.",
+  "raw tree·staged delta를 잇는 review chain은 evidence lineage와 별개이므로 candidate 범위가 넓어지지 않았고 chain이 완전하면 유지할 수 있으며 re-root만으로 새 전체 리뷰를 강제하지 않는다.",
+  "evidence JSON을 만든 직후 독립 리뷰보다 먼저 빠른 공통 gate를 실행한다. 독립 리뷰와 의미 영향 판정이 현재 candidate를 덮으면 selectedGroups에 있는 무거운 회귀군만 실행한다.",
+  "helper는 현재 base→candidate의 selectedGroups와 이전→candidate의 invalidatedGroups를 계산한다. 완료한 회귀군은 교집합만 재실행하고 입력이 같은 PASS는 유지하며 선택된 pending은 계속한다. 선택되지 않은 회귀군은 버리고 `not-required`로 기록한다.",
+  "공유 계약·경로 classifier·입력 manifest가 바뀌면 로컬 무거운 회귀군 네 개의 증거를 모두 무효화한다. helper 자체 변경은 전체 invalidated지만 current selection과의 교집합만 실행하고 원격 CI는 owning 회귀군만 실행한다.",
   "",
   "## 6. 커밋 후 검증과 보고",
   "",
-  "`HEAD^{tree}`와 candidate tree가 같으면 commit path gate 증거를 재사용하고 반복하지 않는다.",
+  "base·cached diff·candidate·commit tree 결속, 최초 전체 리뷰와 delta review chain, initial·delta evidence JSON의 selected·invalidated·rerun·retain·drop 회귀군과 digest를 보고한다.",
 ];
 const commitContractFixture = [
   "# 커밋 계약",
   "",
   "## 5. 검증 증거",
   "",
-  "이슈별 행동 테스트 뒤 PRD·Policy·Architecture를 판정하고 cached diff digest와 candidate tree를 고정해 독립 리뷰한다.",
-  "고정 게이트 전체를 한 번 실행하고 commit tree와 PR head tree를 결속하며 원격 required CI는 생략하지 않는다.",
-  "tracked content가 바뀌면 행동 테스트·의미 영향·리뷰·게이트 증거를 무효화하고 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시 시작한다.",
-  "의미 영향·독립 리뷰 증거가 불완전하면 새 리뷰부터, 최종 gate 증거만 불완전하면 gate부터 복구하고 candidate tree나 input이 다르면 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 새 candidate로 돌아간다.",
+  localGateEvidenceMarker,
+  "",
+  "### 5.1 Candidate와 review chain",
+  "",
+  "candidate identity와 D0, 독립 review chain을 결속한다.",
+  "",
+  "### 5.2 빠른 공통 gate",
+  "",
+  "빠른 공통 gate는 독립 리뷰 전에 실행한다.",
+  "",
+  "### 5.3 무거운 회귀군",
+  "",
+  ...heavyRegressionContractFixture,
+  "### 5.4 Gate evidence helper",
+  "",
+  "최초 candidate는 `initial`, 이후 candidate는 exact previous evidence JSON을 입력으로 하는 `delta` 모드를 사용한다. legacy base/tree 인자는 허용하지 않는다.",
+  "helper는 candidate tree 인자를 받지 않고 current `git write-tree`에서 파생한다. unstaged tracked 변경, unmerged entry 또는 예상하지 않은 untracked 입력이 있으면 JSON을 만들지 않는다.",
+  "`delta`는 `--previous-evidence`의 schema, base/candidate identity, command manifest와 base·previous·candidate projection digest를 다시 계산해 검증한 뒤 그 evidence의 `candidate.tree`를 previous tree로 사용한다.",
+  "strict previous evidence가 schema·version, helper decision, command manifest 또는 base identity 불일치로 거부되면 같은 `delta`를 반복하지 않는다. re-root는 새 mode가 아니라 기존 `initial`만 사용한다. replace-disabled current HEAD commit을 current base로 검증하고 candidate base가 그 commit과 같을 때만 re-root한다. current HEAD 또는 candidate base가 unknown·stale이면 중단한다. 검증된 current base가 이전 evidence의 base보다 우선하며, 새 initial evidence에서는 이전 heavy PASS를 모두 폐기하고 current base→candidate selection만 사용한다.",
+  "이 re-root는 gate evidence lineage만 새로 시작한다. raw tree·staged delta를 잇는 review chain은 별도 계약이므로 candidate 범위가 넓어지지 않았고 chain이 완전하면 유지할 수 있으며 re-root 자체만으로 새 전체 리뷰를 강제하지 않는다.",
+  `JSON에는 \`schema: "${EVIDENCE_SCHEMA}"\`, \`version: ${EVIDENCE_VERSION}\`, \`mode\`, \`base\`, \`previous\`, \`candidate\`, \`full\`, \`failClosed\`, \`reason\`, \`diagnostic\`, \`selectionPaths\`, \`invalidationPaths\`, \`selectedGroups\`, \`invalidatedGroups\`, \`rerunGroups\`, \`retainGroups\`, \`dropGroups\`와 \`groups\`를 기록한다.`,
+  "각 `groups.<camelGroup>`에는 `decision`, `required`, `invalidated`, `commandManifestDigest`, `baseInputDigest`, `previousInputDigest`, `candidateInputDigest`, `baseEntryCount`, `previousEntryCount`, `candidateEntryCount`가 있어야 한다.",
   "",
   "## 9. 커밋 후 검증",
   "",
@@ -295,21 +347,26 @@ const openPullRequestFixtureContract = [
   "",
   "## 2. 중복 PR과 문서 영향 확인",
   "",
-  "commit tree와 candidate를 대조하고 tree나 입력이 다르면 새 candidate의 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰로 돌아간다.",
-  "의미 영향·독립 리뷰 증거가 불완전하면 새 독립 리뷰를 수행하고, 최종 gate 결과 증거만 불완전하면 recovery worktree에서 고정 게이트 전체를 한 번 실행한다.",
+  "최종 tree나 base/tree·digest chain이 모호하면 commit-work-item으로 돌아간다.",
+  "범위·요구사항·보안 경계 확대 또는 delta review chain의 공백·모호함에는 새 전체 리뷰가 필요하다.",
+  "gate 결과만 불완전하면 current index·clean 상태에 결속한 initial 또는 exact previous evidence 기반 delta JSON을 만들고 빠른 공통 gate를 먼저 복구한다.",
+  "selectedGroups ∩ invalidatedGroups만 재실행하고 selected unchanged PASS는 유지하며 selected pending은 계속하고 unselected는 drop한다.",
+  "helper 자체 변경은 local invalidation 전체지만 current selection 밖은 drop하고 원격 CI는 owning 회귀군만 실행한다.",
   "",
   "## 3. 제목과 본문 작성",
   "",
-  "`review-tree=<40자리 tree OID>`, `verification-tree=<40자리 tree OID>`, `commit-tree=<40자리 tree OID>`, `pr-head-tree=<40자리 tree OID>`의 네 tree는 같아야 한다.",
-  "고정 게이트 전체를 한 번 실행하고 required CI는 항상 통과해야 한다.",
+  "Ready에는 pre-review D0와 최초 전체 리뷰부터 최종 candidate까지의 review chain이 필요하다.",
+  "`review-tree=<40자리 tree OID>`에는 빠른 공통 gate와 실행·유지한 회귀군을 합친 `verification-tree=<40자리 tree OID>`, `commit-tree=<40자리 tree OID>`, push 뒤 `pr-head-tree=<40자리 tree OID>`를 결속하며 네 tree는 모두 같아야 한다.",
+  "빠른 공통 gate와 선택 회귀군의 현재 실행 또는 유효하게 유지한 증거가 완전해야 하며 GitHub required CI는 항상 통과한다.",
 ];
 const prBodyContractFixture = [
   "# PR 본문 계약",
   "",
   "## 4. 검증",
   "",
-  "`review-tree=<40자리 tree OID>`, `verification-tree=<40자리 tree OID>`, `commit-tree=<40자리 tree OID>`, `pr-head-tree=<40자리 tree OID>`를 기록한다.",
-  "candidate tree와 input의 의미 영향·독립 리뷰 증거가 불완전하면 새 독립 리뷰를 수행하고, 최종 gate 결과 증거만 불완전하면 고정 게이트 전체를 실행한다. candidate tree·input이 다르면 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 새 candidate로 돌아간다.",
+  "최초 전체 리뷰부터 최종 candidate까지 delta review chain을 기록하고 각 review 전에 통과한 D0, 각 staged delta와 현재 전체 diff를 남긴다.",
+  "`review-tree=<40자리 tree OID>`, `verification-tree=<40자리 tree OID>`, `commit-tree=<40자리 tree OID>`, `pr-head-tree=<40자리 tree OID>`를 기록한다. verification-tree는 빠른 공통 gate와 실행했거나 유효하게 유지한 무거운 회귀군 증거를 합친다.",
+  "gate 결과만 불완전하면 current index·clean 상태에 결속한 evidence JSON과 빠른 공통 gate를 먼저 복구한다. selectedGroups ∩ invalidatedGroups만 재실행하고 selected unchanged PASS는 유지하며 pending은 계속하고 unselected는 drop한다.",
   "로컬 증거 재사용은 GitHub required CI를 대신하지 않는다.",
 ];
 
@@ -472,6 +529,7 @@ function createFixture() {
     "| 작업 범위·경로·행동 시나리오·검증 계획 | [run-github-work-item 이슈 계약](../../.agents/skills/run-github-work-item/references/issue-contract.md) | 이슈 양식·제품 추적 적용 경계·구현·리뷰 입력을 단일 계약으로 라우팅 |",
     "| PRD·Policy planned ID 수명주기 | [update-product-docs](../../.agents/skills/update-product-docs/SKILL.md) | 새 ID 요청을 단일 owner로 라우팅 |",
     "| 이슈·Project 상태 전이·재조회·복구 | [run-github-work-item](../../.agents/skills/run-github-work-item/SKILL.md) | 이슈·Project 요청을 단일 owner로 라우팅 |",
+    "| 로컬 gate 선택·증거 유지·무효화·delta review chain | [commit-work-item 계약](../../.agents/skills/commit-work-item/references/commit-contract.md) | STEP 08~10의 검증 증거를 단일 owner로 라우팅 |",
     "| PR 쓰기·exact-head finalize·원격·로컬 정리 | [open-pull-request](../../.agents/skills/open-pull-request/SKILL.md) | PR 수명주기 요청을 단일 owner로 라우팅 |",
     "| PR의 고정 필드 | PR 템플릿과 본문 계약 | STEP 10·11 입력으로 연결 |",
     "| CI의 결정적 증거 | validate workflow | 현재 head gate로 연결 |",
@@ -494,15 +552,16 @@ function createFixture() {
       "",
       "## 행동 시나리오와 독립 리뷰",
       "",
-      "- 이슈별 빠른 테스트만 수행하고 고정 게이트 전체는 실행하지 않는다.",
-      "- 리뷰 전에 PRD·Policy·Architecture를 확인하고 cached diff·candidate tree를 독립 리뷰해 발견 사항을 일괄 수정한다.",
-      "- review-fix 사이에는 고정 게이트 전체를 실행하지 않는다.",
+      "- cached diff·candidate tree를 고정하고 고정 직후 빠른 공통 gate를 먼저 실행해 같은 tree만 독립 리뷰에 넘긴다.",
+      "- 수정은 명시적으로 stage하고 빠른 공통 gate를 먼저 통과시킨 뒤 행동 테스트와 정본 영향 판정을 갱신해 이전·현재 tree, staged delta와 현재 전체 cached diff를 별도 pass로 검토한다.",
+      "- 최초 전체 리뷰와 delta review chain이 최종 candidate를 덮어야 한다. 범위·요구사항·보안 경계가 넓어지거나 chain에 공백·모호함이 있으면 새 전체 리뷰를 수행한다.",
       "",
       "## 문서와 검증",
       "",
-      "- 계획된 변경이 없는 staged candidate에서 고정 게이트 전체를 한 번 실행한다.",
-      "- tracked content가 바뀌면 행동·리뷰·게이트 증거를 모두 무효화하고 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시 시작한다. tree·input이 같은 환경 전용 실패는 한 번 복구한다.",
-      "- 의미 영향·독립 리뷰 증거가 불완전하면 새 리뷰부터, 최종 gate 증거만 불완전하면 gate부터 복구한다. candidate tree나 input이 다르면 모든 로컬 증거를 무효화하고 빠른 행동 테스트, 영향 판정과 독립 리뷰부터 다시 시작한다.",
+      "- 빠른 공통 gate 뒤 현재 base→candidate의 selectedGroups가 필요한 군을 고르고, 독립 리뷰가 끝난 같은 tree에서 그 군만 실행한다.",
+      "- 현재 base→candidate의 selectedGroups와 이전→candidate의 invalidatedGroups를 분리해 selectedGroups ∩ invalidatedGroups만 재실행한다.",
+      "- 입력이 그대로인 PASS는 유지하고 선택된 pending은 계속하며 현재 선택되지 않은 군은 버리고 `not-required`로 처리한다.",
+      "- helper 자체 변경은 로컬 네 군을 전체 invalidated 처리하되 current selection과의 교집합인 commit-pr-regression만 실행한다. 원격 CI도 owning `commit-pr-regression`만 실행한다.",
       "",
     ].join("\n"),
   );
@@ -524,11 +583,11 @@ function createFixture() {
       "",
       "## 5. 테스트와 독립 리뷰",
       "",
-      "- PRD·Policy·Architecture를 독립 리뷰 전에 확인하고 cached diff·candidate tree를 검토한다.",
-      "- review-fix 사이에는 고정 게이트 전체를 실행하지 않는다. 계획된 수정이 없으면 현재 `AGENTS.md` 고정 게이트 전체를 한 번 실행한다.",
-      "- tracked content가 바뀌면 행동·리뷰·게이트 증거를 폐기하고 빠른 행동 테스트, 의미 영향 판정과 독립 리뷰부터 다시 시작한다.",
-      "- 동일 tree·input의 환경 전용 실패는 한 번만 복구한다.",
-      "- 의미 영향·리뷰 증거가 불완전하면 새 리뷰부터, 최종 gate 증거만 불완전하면 gate부터 복구하고 candidate tree나 input이 다르면 모든 증거를 무효화하고 빠른 행동 테스트, 영향 판정과 독립 리뷰부터 다시 시작한다.",
+      "- candidate를 명시적으로 stage한 뒤 독립 리뷰보다 먼저 빠른 공통 gate를 실행한다. gate 중 실패는 delta review보다 먼저 stage와 빠른 공통 gate를 완료한다.",
+      "- 최초 전체 리뷰와 delta review chain이 최종 candidate를 덮어야 한다.",
+      "- 현재 base→candidate의 selectedGroups와 이전→candidate의 invalidatedGroups를 분리해 선택·무효화된 완료 회귀군만 재실행한다.",
+      "- 입력이 같은 PASS는 유지하고 pending은 계속하며 현재 선택되지 않은 군은 `not-required`로 버린다.",
+      "- helper 자체 변경은 전체 invalidated 처리하되 current selection과의 교집합인 commit-pr-regression만 실행하고 원격 CI도 owning 회귀군만 실행한다.",
       "",
     ].join("\n"),
   );
@@ -665,6 +724,16 @@ function createFixture() {
   );
   write(
     root,
+    ".agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs",
+    "#!/usr/bin/env node\n",
+  );
+  write(
+    root,
+    ".agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
+    "import test from \"node:test\";\ntest(\"fixture\", () => {});\n",
+  );
+  write(
+    root,
     ".agents/skills/open-pull-request/scripts/validate-finalize.mjs",
     "#!/usr/bin/env node\n",
   );
@@ -717,6 +786,8 @@ function createFixture() {
       "          node --check .agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
       "          node --check .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
       "          node --check .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs",
+      "          node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs",
+      "          node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
       "          node .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs \\",
       "            --index",
       "          node --check .agents/skills/open-pull-request/scripts/validate-finalize.mjs",
@@ -725,24 +796,34 @@ function createFixture() {
       "    needs: classify",
       "    if: ${{ needs.classify.outputs.product_docs == 'true' }}",
       "    steps:",
-      "      - run: node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
+      "      - run: |",
+      ...GROUP_COMMAND_MANIFESTS.productDocsRegression.map(
+        (command) => `          ${command}`,
+      ),
       "  work-item-regression:",
       "    needs: classify",
       "    if: ${{ needs.classify.outputs.work_item == 'true' }}",
       "    steps:",
-      "      - run: node --test .agents/skills/run-github-work-item/scripts/work-item.test.mjs",
+      "      - run: |",
+      ...GROUP_COMMAND_MANIFESTS.workItemRegression.map(
+        (command) => `          ${command}`,
+      ),
       "  commit-pr-regression:",
       "    needs: classify",
       "    if: ${{ needs.classify.outputs.commit_pr == 'true' }}",
       "    steps:",
-      "      - run: node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs",
+      "      - run: |",
+      ...GROUP_COMMAND_MANIFESTS.commitPrRegression.map(
+        (command) => `          ${command}`,
+      ),
       "  finalize-regression:",
       "    needs: classify",
       "    if: ${{ needs.classify.outputs.finalize == 'true' }}",
       "    steps:",
       "      - run: |",
-      "          node --test .agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
-      "          node --test .agents/skills/open-pull-request/scripts/finalize-merge.test.mjs",
+      ...GROUP_COMMAND_MANIFESTS.finalizeRegression.map(
+        (command) => `          ${command}`,
+      ),
       "  validate:",
       "    if: ${{ always() }}",
       "    needs:",
@@ -1271,7 +1352,193 @@ test("최종 snapshot 검증 순서와 recovery 표의 정상 fixture를 허용�
   });
 });
 
-test("최종 저장소 게이트는 정본 영향과 독립 리뷰 뒤에만 올 수 있다", () => {
+test("workflow heavy job 명령의 추가·삭제·재정렬을 거부한다", () => {
+  const [first, second] = GROUP_COMMAND_MANIFESTS.productDocsRegression;
+  const cases = [
+    {
+      mutate: (source) =>
+        source.replace(
+          `          ${first}`,
+          `          ${first}\n          node --test extra-regression.test.mjs`,
+        ),
+    },
+    {
+      mutate: (source) => source.replace(`          ${second}\n`, ""),
+    },
+    {
+      mutate: (source) =>
+        source.replace(
+          `          ${first}\n          ${second}`,
+          `          ${second}\n          ${first}`,
+        ),
+    },
+  ];
+
+  for (const { mutate } of cases) {
+    withFixture((root) => {
+      const target = path.join(root, ".github/workflows/validate-harness.yml");
+      const source = fs.readFileSync(target, "utf8");
+      const mutated = mutate(source);
+      assert.notEqual(mutated, source);
+      fs.writeFileSync(target, mutated);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /product-docs-regression.*GROUP_COMMAND_MANIFESTS\.productDocsRegression/,
+      );
+    });
+  }
+});
+
+test("commit-contract heavy 명령의 추가·삭제·재정렬을 거부한다", () => {
+  const [first, second] = GROUP_COMMAND_MANIFESTS.productDocsRegression;
+  const cases = [
+    {
+      mutate: (source) =>
+        source.replace(
+          `  ${first}`,
+          `  ${first}\n  node --test extra-regression.test.mjs`,
+        ),
+    },
+    {
+      mutate: (source) => source.replace(`  ${second}\n`, ""),
+    },
+    {
+      mutate: (source) =>
+        source.replace(
+          `  ${first}\n  ${second}`,
+          `  ${second}\n  ${first}`,
+        ),
+    },
+  ];
+
+  for (const { mutate } of cases) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/commit-work-item/references/commit-contract.md",
+      );
+      const source = fs.readFileSync(target, "utf8");
+      const mutated = mutate(source);
+      assert.notEqual(mutated, source);
+      fs.writeFileSync(target, mutated);
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /5\.3 무거운 회귀군.*GROUP_COMMAND_MANIFESTS/,
+      );
+    });
+  }
+});
+
+test("gate evidence marker·schema·mode·index 결속 변경을 거부한다", () => {
+  const cases = [
+    {
+      source: localGateEvidenceMarker,
+      replacement: localGateEvidenceMarker.replace(
+        '"pending":"continue"',
+        '"pending":"restart"',
+      ),
+      message: /exact local-gate-evidence-contract JSON marker/,
+    },
+    {
+      source: `\`version: ${EVIDENCE_VERSION}\``,
+      replacement: `\`version: ${EVIDENCE_VERSION + 1}\``,
+      message: /evidence JSON top-level schema/,
+    },
+    {
+      source: "`previousInputDigest`, `candidateInputDigest`",
+      replacement: "`candidateInputDigest`, `previousInputDigest`",
+      message: /groups\.<camelGroup> schema/,
+    },
+    {
+      source: "최초 candidate는 `initial`",
+      replacement: "최초 candidate는 legacy mode",
+      message: /initial·delta mode와 legacy 인자 거부/,
+    },
+    {
+      source: "exact previous evidence JSON",
+      replacement: "previous summary JSON",
+      message: /initial·delta mode와 legacy 인자 거부/,
+    },
+    {
+      source: "current `git write-tree`",
+      replacement: "candidate tree 인자",
+      message: /current index tree 결속/,
+    },
+    {
+      source: "base/candidate identity",
+      replacement: "candidate summary",
+      message: /strict previous evidence 재검증/,
+    },
+    {
+      source: "같은 `delta`를 반복하지 않는다",
+      replacement: "같은 `delta`를 계속 반복한다",
+      message: /strict previous 거부의 existing initial re-root/,
+    },
+    {
+      source:
+        "schema·version, helper decision, command manifest 또는 base identity 불일치",
+      replacement: "schema 불일치",
+      message: /strict previous 거부의 existing initial re-root/,
+    },
+    {
+      source: "새 mode가 아니라 기존 `initial`만 사용한다",
+      replacement: "새 re-root mode를 사용한다",
+      message: /strict previous 거부의 existing initial re-root/,
+    },
+    {
+      source:
+        "replace-disabled current HEAD commit을 current base로 검증",
+      replacement: "stale base를 그대로 사용",
+      message: /strict previous 거부의 existing initial re-root/,
+    },
+    {
+      source: "current HEAD 또는 candidate base가 unknown·stale이면 중단",
+      replacement: "unknown base도 계속 사용",
+      message: /strict previous 거부의 existing initial re-root/,
+    },
+    {
+      source: "검증된 current base가 이전 evidence의 base보다 우선",
+      replacement: "이전 evidence의 base가 current base보다 우선",
+      message: /strict previous 거부의 existing initial re-root/,
+    },
+    {
+      source: "이전 heavy PASS를 모두 폐기",
+      replacement: "이전 heavy PASS를 유지",
+      message: /strict previous 거부의 existing initial re-root/,
+    },
+    {
+      source: "gate evidence lineage만 새로 시작",
+      replacement: "review chain도 새로 시작",
+      message: /evidence re-root와 review chain 분리/,
+    },
+    {
+      source: "re-root 자체만으로 새 전체 리뷰를 강제하지 않는다",
+      replacement: "re-root마다 새 전체 리뷰를 강제한다",
+      message: /evidence re-root와 review chain 분리/,
+    },
+  ];
+
+  for (const { source, replacement, message } of cases) {
+    withFixture((root) => {
+      const target = path.join(
+        root,
+        ".agents/skills/commit-work-item/references/commit-contract.md",
+      );
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(source), source);
+      fs.writeFileSync(target, content.replace(source, replacement));
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+    });
+  }
+});
+
+test("최종 snapshot은 D0→독립 리뷰→선택 회귀군 순서를 고정한다", () => {
   const cases = [
     {
       first: finalSnapshotOrderFixture.find((line) =>
@@ -1283,10 +1550,10 @@ test("최종 저장소 게이트는 정본 영향과 독립 리뷰 뒤에만 올
     },
     {
       first: finalSnapshotOrderFixture.find((line) =>
-        line.startsWith("| 2 |"),
+        line.startsWith("| 5 |"),
       ),
       second: finalSnapshotOrderFixture.find((line) =>
-        line.startsWith("| 5 |"),
+        line.startsWith("| 6 |"),
       ),
     },
   ];
@@ -1306,44 +1573,68 @@ test("최종 저장소 게이트는 정본 영향과 독립 리뷰 뒤에만 올
       );
       const result = runValidator(root);
       assert.equal(result.status, 1);
-      assert.match(result.stderr, /exact 7행/);
+      assert.match(result.stderr, /exact 8행/);
     });
   }
 });
 
-test("최종 게이트는 병렬·공유 자원 순차·join·전후 동일성 계약을 모두 요구한다", () => {
+test("최종 snapshot 표는 D0 선행과 evidence partition을 요구한다", () => {
   const cases = [
     {
-      source: "독립된 읽기 전용·격리 명령만 병렬 실행하고",
-      replacement: "모든 명령을 실행하고",
-      message: /격리 명령만 병렬/,
+      source: "candidate를 고정한 직후 index·clean 상태에 결속해 다섯 D0 gate",
+      replacement: "candidate를 고정한 뒤 리뷰를 시작",
+      message: /candidate 고정 직후 index·clean 결속 D0/,
     },
     {
-      source:
-        "같은 index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은 순차 실행한 뒤",
-      replacement: "공유 명령도 동시에 실행한 뒤",
-      message: /공유 명령은 순차·join/,
+      source: "D0만의 수정은 다시 stage·고정·D0한 뒤 review pass를 소비하지 않고",
+      replacement: "D0 수정도 review pass를 소비하고",
+      message: /D0-only 수정은 review pass 미소비/,
     },
     {
-      source: "모든 결과를 join한다.",
-      replacement: "먼저 끝난 결과만 확인한다.",
-      message: /공유 명령은 순차·join/,
+      source: "D0를 통과한 최초 cached diff·candidate tree",
+      replacement: "D0 전 최초 cached diff·candidate tree",
+      message: /D0 뒤 최초 candidate 리뷰/,
     },
     {
-      source:
-        "검증 전후 candidate tree와 gate input은 같아야 한다.",
-      replacement: "검증 뒤 결과만 확인한다.",
-      message: /검증 전후 candidate tree·input 동일/,
+      source: "stage→D0 뒤 행동 테스트·정본 의미 영향 판정과 이전·현재 tree, staged delta·현재 전체 diff",
+      replacement: "현재 tree와 수정 요약",
+      message: /수정 뒤 stage→D0와 delta review/,
+    },
+    {
+      source: "범위·요구사항·보안 경계 확대나 chain 공백·모호함",
+      replacement: "작은 수정",
+      message: /delta review chain의 전체 리뷰 fallback/,
+    },
+    {
+      source: "현재 base→candidate의 `selectedGroups`만 실행",
+      replacement: "이전 선택 결과를 실행",
+      message: /current base→candidate selectedGroups/,
+    },
+    {
+      source: "이전 evidence JSON을 delta 입력",
+      replacement: "현재 요약을 입력",
+      message: /delta selected·invalidated 교집합 재실행/,
+    },
+    {
+      source: "`selectedGroups ∩ invalidatedGroups`만 재실행",
+      replacement: "모든 완료 회귀군을 재실행",
+      message: /delta selected·invalidated 교집합 재실행/,
+    },
+    {
+      source: "선택된 unchanged PASS는 유지하며 pending은 계속하고 unselected는 버린다",
+      replacement: "모든 증거를 폐기하고 처음부터 실행",
+      message: /unchanged PASS 유지·pending 계속·unselected drop/,
     },
   ];
 
   for (const { source, replacement, message } of cases) {
     withFixture((root) => {
       const target = path.join(root, developmentFiles[0]);
-      fs.writeFileSync(
-        target,
-        fs.readFileSync(target, "utf8").replace(source, replacement),
-      );
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(source), source);
+      const mutated = content.replace(source, replacement);
+      assert.notEqual(mutated, content);
+      fs.writeFileSync(target, mutated);
       const result = runValidator(root);
       assert.equal(result.status, 1);
       assert.match(result.stderr, message);
@@ -1414,7 +1705,7 @@ test("최종 snapshot 표는 숨긴 H2와 비가시 계약 cell을 거부한다"
       assert.equal(result.status, 1);
       assert.match(
         result.stderr,
-        /(?:정본 의미 영향.*필수 계약이 없습니다|exact 7행|raw HTML)/,
+        /(?:정본 의미 영향.*필수 계약이 없습니다|exact 8행|raw HTML)/,
       );
     });
   }
@@ -1423,7 +1714,7 @@ test("최종 snapshot 표는 숨긴 H2와 비가시 계약 cell을 거부한다"
     const target = path.join(root, developmentFiles[0]);
     const content = fs.readFileSync(target, "utf8");
     const recoveryContract =
-      "새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다.";
+      "D0 뒤 current selection이 전체인 fail-closed 결과에서는 네 군을 모두 실행한다.";
     assert.ok(content.includes(recoveryContract));
     fs.writeFileSync(
       target,
@@ -1437,18 +1728,26 @@ test("최종 snapshot 표는 숨긴 H2와 비가시 계약 cell을 거부한다"
     assert.equal(result.status, 1);
     assert.match(
       result.stderr,
-      /candidate tree·input 불일치.*재진입 계약이 불완전/,
+      /공유 계약·classifier·입력 manifest.*재진입 계약이 불완전/,
     );
   });
 });
 
-test("content 변경과 동일 tree·input 환경 실패는 서로 다른 recovery를 요구한다", () => {
+test("D0·review 이후 content 변경과 환경 실패는 서로 다른 recovery를 요구한다", () => {
   const cases = [
     {
       source:
-        "새 candidate에서 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정 뒤 독립 리뷰부터 다시 시작한다.",
+        "즉시 명시적으로 stage해 새 candidate를 고정하고 D0부터 다시 실행한다.",
+      replacement: "첫 review를 그대로 시작한다.",
+      message:
+        /review 전 D0 실패 수정.*재진입 계약이 불완전/,
+    },
+    {
+      source:
+        "즉시 stage·D0한 뒤 필요한 행동 테스트·의미 영향 판정과 delta review를 수행한다. 선택·무효화된 완료 회귀군만 재실행하고 선택된 pending을 계속한다.",
       replacement: "실패한 gate만 다시 실행한다.",
-      message: /tracked content 변경.*재진입 계약이 불완전/,
+      message:
+        /review·heavy gate 뒤 tracked content 변경.*재진입 계약이 불완전/,
     },
     {
       source:
@@ -1461,10 +1760,11 @@ test("content 변경과 동일 tree·input 환경 실패는 서로 다른 recove
   for (const { source, replacement, message } of cases) {
     withFixture((root) => {
       const target = path.join(root, developmentFiles[0]);
-      fs.writeFileSync(
-        target,
-        fs.readFileSync(target, "utf8").replace(source, replacement),
-      );
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(source), source);
+      const mutated = content.replace(source, replacement);
+      assert.notEqual(mutated, content);
+      fs.writeFileSync(target, mutated);
       const result = runValidator(root);
       assert.equal(result.status, 1);
       assert.match(result.stderr, message);
@@ -1472,7 +1772,7 @@ test("content 변경과 동일 tree·input 환경 실패는 서로 다른 recove
   }
 });
 
-test("local evidence 재사용은 연속 tree 결속과 remote required CI를 요구한다", () => {
+test("local evidence 재사용은 연속 tree 결속과 증분 recovery 경계를 요구한다", () => {
   const cases = [
     {
       source: "candidate tree와 commit tree가 같고 증거가 완전하면",
@@ -1486,32 +1786,45 @@ test("local evidence 재사용은 연속 tree 결속과 remote required CI를 �
     },
     {
       source:
-        "같은 candidate·input에서 PRD·Policy·Architecture 의미 영향 판정과 새 독립 리뷰를 수행한 뒤 최종 게이트로 진행한다.",
-      replacement: "gate만 다시 실행한다.",
-      message: /의미 영향·리뷰 증거 불완전·동일 tree·input.*재진입 계약이 불완전/,
+        "필요한 의미 영향 판정과 delta review부터 복구하며, 범위 확대나 chain 공백·모호함이면 새 전체 리뷰를 수행한다.",
+      replacement: "기존 review 증거를 그대로 사용한다.",
+      message: /의미 영향·review chain 불완전.*재진입 계약이 불완전/,
     },
     {
       source:
-        "exact candidate·input을 동일한 clean snapshot에 재구성하고 현재 `AGENTS.md` 고정 게이트 전체를 새로 실행한다.",
+        "exact candidate의 기존 D0가 유효하면 helper가 선택한 해당 회귀군만 실행한다.",
       replacement: "이전 gate 증거를 사용한다.",
-      message: /최종 gate 증거 불완전·동일 tree·input.*재진입 계약이 불완전/,
+      message: /개별 회귀군 증거 불완전.*재진입 계약이 불완전/,
     },
     {
       source:
-        "다른 tree나 input에 gate만 실행하지 않고 새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다.",
-      replacement:
-        "다른 tree에만 gate를 실행하지 않고 새 candidate의 행동 테스트·의미 영향 판정·독립 리뷰부터 다시 시작한다.",
-      message: /candidate tree·input 불일치.*재진입 계약이 불완전/,
+        "previous evidence와 이전 heavy PASS를 폐기하되, candidate 범위가 넓어지지 않은 완전한 raw tree·delta review chain은 유지 가능",
+      replacement: "previous evidence와 review chain을 모두 폐기",
+      message: /strict previous evidence 거부.*기존 증거 계약이 불완전/,
+    },
+    {
+      source:
+        "같은 delta를 반복하지 않는다. replace-disabled current HEAD commit을 current base로 검증하고 candidate base가 같을 때만 기존 `initial`로 re-root한다. current HEAD 또는 candidate base가 unknown·stale이면 중단하며, 이전 evidence의 base 대신 current base→candidate selection만 사용해 새 evidence와 D0를 만든다.",
+      replacement: "같은 delta를 반복한다.",
+      message: /strict previous evidence 거부.*재진입 계약이 불완전/,
+    },
+    {
+      source:
+        "D0 뒤 current selection이 전체인 fail-closed 결과에서는 네 군을 모두 실행한다. helper 자체 변경은 로컬 네 군을 invalidated 처리하되 owning current selection과의 교집합만 실행하고, 원격 CI도 owning 회귀군만 실행한다.",
+      replacement: "D0 뒤 영향받은 한 회귀군만 실행한다.",
+      message:
+        /공유 계약·classifier·입력 manifest.*재진입 계약이 불완전/,
     },
   ];
 
   for (const { source, replacement, message } of cases) {
     withFixture((root) => {
       const target = path.join(root, developmentFiles[0]);
-      fs.writeFileSync(
-        target,
-        fs.readFileSync(target, "utf8").replace(source, replacement),
-      );
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(source), source);
+      const mutated = content.replace(source, replacement);
+      assert.notEqual(mutated, content);
+      fs.writeFileSync(target, mutated);
       const result = runValidator(root);
       assert.equal(result.status, 1);
       assert.match(result.stderr, message);
@@ -1523,81 +1836,78 @@ test("관련 owner 문서는 최종 snapshot 실행·복구·재사용 경계를
   const cases = [
     {
       file: "AGENTS.md",
-      source: "tracked content",
-      replacement: "tracked 변경",
+      source: "staged delta",
+      replacement: "수정 요약",
     },
     {
       file: "AGENTS.md",
-      source: "빠른 행동 테스트",
-      replacement: "이전 행동 증거",
+      source: "selectedGroups ∩ invalidatedGroups",
+      replacement: "all groups",
     },
     {
       file: "CONTRIBUTING.md",
-      source: "review-fix 사이",
-      replacement: "수정 사이",
+      source: "delta review보다 먼저 stage와 빠른 공통 gate",
+      replacement: "delta review 뒤에 gate",
     },
     {
       file: "CONTRIBUTING.md",
-      source: "빠른 행동 테스트",
-      replacement: "이전 행동 증거",
+      source: "입력이 같은 PASS는 유지",
+      replacement: "PASS를 모두 폐기",
     },
     {
       file: ".agents/skills/update-product-docs/SKILL.md",
-      source: "PRD·Policy·Architecture 의미 영향 판정",
-      replacement: "정본 영향 판정",
+      source: "candidate 고정 직후 빠른 공통 gate가 먼저 통과",
+      replacement: "리뷰 뒤 gate가 통과",
     },
     {
       file: ".agents/skills/update-product-docs/SKILL.md",
-      source: "빠른 행동 테스트와 의미 영향 판정",
-      replacement: "이전 행동 증거와 의미 영향 판정",
+      source: "selectedGroups ∩ invalidatedGroups만 재실행",
+      replacement: "모든 회귀군을 재실행",
     },
     {
       file: ".agents/skills/run-github-work-item/SKILL.md",
-      source: "빠른 행동 테스트",
-      replacement: "일반 작업",
+      source: "이전·현재 tree",
+      replacement: "현재 tree",
+    },
+    {
+      file: ".agents/skills/run-github-work-item/SKILL.md",
+      source: "selectedGroups ∩ invalidatedGroups만 다시 실행",
+      replacement: "현재 gate에서 중단",
     },
     {
       file: ".agents/skills/commit-work-item/SKILL.md",
-      source: "빠른 행동 테스트",
-      replacement: "일반 테스트",
+      source: "이전·현재 candidate identity",
+      replacement: "현재 candidate identity",
     },
     {
       file: ".agents/skills/commit-work-item/SKILL.md",
-      source: "commit path gate 증거",
-      replacement: "path 증거",
+      source: "현재 `git write-tree`에서 candidate tree를 파생",
+      replacement: "입력 요약",
     },
     {
       file: ".agents/skills/commit-work-item/SKILL.md",
-      source: "빠른 행동 테스트부터 새 candidate",
-      replacement: "이전 행동 증거로 새 candidate",
+      source: "같은 `delta`를 반복하지",
+      replacement: "같은 delta를 반복",
     },
     {
-      file:
-        ".agents/skills/commit-work-item/references/commit-contract.md",
-      source: "PR head tree",
-      replacement: "PR 상태",
+      file: ".agents/skills/commit-work-item/SKILL.md",
+      source: "review chain은 evidence lineage와 별개",
+      replacement: "review chain도 항상 폐기",
     },
     {
-      file:
-        ".agents/skills/commit-work-item/references/commit-contract.md",
-      source: "commit path gate 증거",
-      replacement: "path 증거",
-    },
-    {
-      file:
-        ".agents/skills/commit-work-item/references/commit-contract.md",
-      source: "빠른 행동 테스트, 의미 영향 판정",
-      replacement: "이전 행동 증거, 의미 영향 판정",
+      file: ".agents/skills/commit-work-item/SKILL.md",
+      source: "initial·delta evidence JSON",
+      replacement: "실행한 회귀군",
     },
     {
       file: ".agents/skills/open-pull-request/SKILL.md",
-      source: "required CI는 항상 통과해야 한다",
-      replacement: "remote check",
+      source: "current index·clean 상태",
+      replacement: "모든 회귀군을 복구",
     },
     {
       file: ".agents/skills/open-pull-request/SKILL.md",
-      source: "새 candidate의 빠른 행동 테스트",
-      replacement: "새 candidate의 이전 행동 증거",
+      source: "selectedGroups ∩ invalidatedGroups",
+      replacement: "현재 실행 증거",
     },
     {
       file:
@@ -1608,8 +1918,8 @@ test("관련 owner 문서는 최종 snapshot 실행·복구·재사용 경계를
     {
       file:
         ".agents/skills/open-pull-request/references/pr-body-contract.md",
-      source: "빠른 행동 테스트, 의미 영향 판정",
-      replacement: "이전 행동 증거, 의미 영향 판정",
+      source: "current index·clean 상태",
+      replacement: "모든 회귀군을 실행",
     },
   ];
 
@@ -1627,7 +1937,8 @@ test("관련 owner 문서는 최종 snapshot 실행·복구·재사용 경계를
 });
 
 test("최종 snapshot owner 계약은 비가시·비규범 source로 대체할 수 없다", () => {
-  const visibleContract = commitContractFixture.slice(4, 8).join("\n");
+  const visibleContract =
+    "- cached diff·candidate tree를 고정하고 고정 직후 빠른 공통 gate를 먼저 실행해 같은 tree만 독립 리뷰에 넘긴다.";
   const compactContract = visibleContract.replaceAll("\n", " ");
   for (const [opening, closing] of [
     ["<details>\n\n", "</details>\n"],
@@ -1642,16 +1953,13 @@ test("최종 snapshot owner 계약은 비가시·비규범 source로 대체할 �
     ["<x-contract hidden>\n\n", ""],
   ]) {
     withFixture((root) => {
-      const target = path.join(
-        root,
-        ".agents/skills/commit-work-item/references/commit-contract.md",
-      );
+      const target = path.join(root, "AGENTS.md");
       const content = fs.readFileSync(target, "utf8");
       fs.writeFileSync(
         target,
         mutateH2Section(
           content,
-          "5. 검증 증거",
+          "행동 시나리오와 독립 리뷰",
           (section) => `${opening}${section}${closing}`,
         ),
       );
@@ -1660,7 +1968,7 @@ test("최종 snapshot owner 계약은 비가시·비규범 source로 대체할 �
       assert.equal(result.status, 1);
       assert.match(
         result.stderr,
-        /commit-contract\.md: 최종 snapshot 계약 owner 구역은 exact plain-text top-level H2/,
+        /AGENTS\.md: 최종 snapshot 계약 owner 구역은 exact plain-text top-level H2/,
       );
     });
   }
@@ -1732,10 +2040,7 @@ test("최종 snapshot owner 계약은 비가시·비규범 source로 대체할 �
 
   for (const replacement of replacements) {
     withFixture((root) => {
-      const target = path.join(
-        root,
-        ".agents/skills/commit-work-item/references/commit-contract.md",
-      );
+      const target = path.join(root, "AGENTS.md");
       const content = fs.readFileSync(target, "utf8");
       assert.ok(content.includes(visibleContract));
       fs.writeFileSync(
@@ -1747,7 +2052,7 @@ test("최종 snapshot owner 계약은 비가시·비규범 source로 대체할 �
       assert.equal(result.status, 1);
       assert.match(
         result.stderr,
-        /commit-contract\.md: '5\. 검증 증거'에 최종 snapshot 검증 계약이 없습니다/,
+        /AGENTS\.md: '행동 시나리오와 독립 리뷰'에 최종 snapshot 검증 계약이 없습니다/,
       );
     });
   }
@@ -2797,6 +3102,32 @@ test("하네스 소유 표는 planned ID 수명주기 owner 행을 정확히 하
       assert.match(
         result.stderr,
         /규칙 소유와 링크 표에 'PRD·Policy planned ID 수명주기' 행이 정확히 하나/,
+      );
+    });
+  }
+});
+
+test("하네스 소유 표는 로컬 gate evidence owner를 commit 계약에 결속한다", () => {
+  const row =
+    "| 로컬 gate 선택·증거 유지·무효화·delta review chain | [commit-work-item 계약](../../.agents/skills/commit-work-item/references/commit-contract.md) | STEP 08~10의 검증 증거를 단일 owner로 라우팅 |";
+  for (const replacement of [
+    "",
+    row.replace(
+      "[commit-work-item 계약](../../.agents/skills/commit-work-item/references/commit-contract.md)",
+      "AGENTS.md",
+    ),
+  ]) {
+    withFixture((root) => {
+      const target = path.join(root, developmentFiles[0]);
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.includes(row), "fixture gate evidence owner row missing");
+      fs.writeFileSync(target, content.replace(row, replacement));
+
+      const result = runValidator(root);
+      assert.equal(result.status, 1);
+      assert.match(
+        result.stderr,
+        /로컬 gate 선택·증거 유지·무효화·delta review chain/,
       );
     });
   }
@@ -4614,6 +4945,30 @@ test("변경 경로별 하네스 workflow 정적 계약을 요구한다", () => 
       replacement: "--report-results",
       message: /하네스 수명주기 계약이 없습니다: CI 선택 결과 aggregate/,
     },
+    {
+      source:
+        "node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs",
+      replacement:
+        "# node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs",
+      message:
+        /활성 workflow 명령 계약이 없습니다: gate evidence helper 구문 검사/,
+    },
+    {
+      source:
+        "node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
+      replacement:
+        "# node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
+      message:
+        /활성 workflow 명령 계약이 없습니다: gate evidence helper 테스트 구문 검사/,
+    },
+    {
+      source:
+        "node --test .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
+      replacement:
+        "# node --test .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
+      message:
+        /활성 workflow 명령 계약이 없습니다: commit PR 회귀군의 gate evidence helper 테스트/,
+    },
   ];
 
   for (const { source, replacement, message } of cases) {
@@ -4632,6 +4987,8 @@ test("변경 경로별 하네스 workflow 정적 계약을 요구한다", () => 
   for (const file of [
     ".github/workflows/validate-harness-paths.mjs",
     ".github/workflows/validate-harness-paths.test.mjs",
+    ".agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs",
+    ".agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
   ]) {
     withFixture((root) => {
       fs.unlinkSync(path.join(root, file));
@@ -4643,6 +5000,34 @@ test("변경 경로별 하네스 workflow 정적 계약을 요구한다", () => 
       );
     });
   }
+
+  withFixture((root) => {
+    const target = path.join(root, ".github/workflows/validate-harness.yml");
+    const source =
+      "          node --test .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs";
+    const content = fs.readFileSync(target, "utf8");
+    assert.ok(content.includes(source));
+    const withoutCommitPrCommand = content.replace(
+      source,
+      "          echo gate-evidence-regression",
+    );
+    const movedToHarness = withoutCommitPrCommand.replace(
+      "          node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
+      [
+        "          node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
+        source,
+      ].join("\n"),
+    );
+    assert.notEqual(movedToHarness, content);
+    fs.writeFileSync(target, movedToHarness);
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /활성 workflow 명령 계약이 없습니다: commit PR 회귀군의 gate evidence helper 테스트/,
+    );
+  });
 });
 
 test("aggregate wiring 검증은 주석을 거부하고 의미 없는 순서에는 독립적이다", () => {

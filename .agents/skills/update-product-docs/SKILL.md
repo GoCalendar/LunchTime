@@ -62,7 +62,9 @@ description: 사람이 읽기 쉬운 템플릿, 전역 추적 가능한 요구�
 
 구현 중, 독립 리뷰 전, 리뷰 변경 후와 풀 리퀘스트를 생성하거나 갱신하기 전에
 사용한다. 독립 리뷰 전에 의미 영향과 이슈 경로를 먼저 판정하고, 리뷰 수정으로
-tracked content가 바뀌면 새 snapshot에서 다시 판정한다.
+tracked content가 바뀌면 이전 판정과 staged delta를 대조해 영향받은 의미를
+새 candidate에서 다시 판정한다. 범위·요구사항·보안 경계가 넓어지거나
+영향을 확정할 수 없으면 전체 diff를 다시 판정한다.
 
 1. 비교 기준을 결정한다.
    - 사용자나 환경이 제공한 PR 기준 브랜치를 우선 사용한다.
@@ -113,8 +115,9 @@ tracked content가 바뀌면 새 snapshot에서 다시 판정한다.
 3. 구현 이슈의 commit 흐름에서는 `commit-work-item`이 clean 독립
    worktree에서 검토할 경로만 명시적으로 stage해 cached diff·candidate
    tree를 고정한다. 이 스킬은 영향 판정만 인계하고 독자적으로 index를
-   변경하지 않는다. 작성 컨텍스트와 분리된 읽기 전용 검토자가 그 candidate를
-   의미 검토하며, 작성자 자기 검토는 독립 검토가 아니므로 작성·수정자와 최종
+   변경하지 않는다. candidate 고정 직후 빠른 공통 gate가 먼저 통과해야
+   작성 컨텍스트와 분리된 읽기 전용 검토자가 최초 candidate 전체를 의미
+   검토한다. 작성자 자기 검토는 독립 검토가 아니므로 작성·수정자와 최종
    승인자를 분리한다.
    - 의도한 답이나 예상 결론 없이 원본 요구사항, 같은 cached diff와 행동
      테스트·정본 영향 결과를 제공한다.
@@ -123,36 +126,42 @@ tracked content가 바뀌면 새 snapshot에서 다시 판정한다.
    - 낮은 위험의 단순 문서 변경은 최소 1명, 계약·validator·workflow 변경은
      최소 2명, 분산 통신·정합성·보안 같은 고위험 변경은 필요한 전문 관점별
      검토자를 사용한다.
-   - 수정하면 좁은 테스트와 의미 영향 판정을 갱신한 새 snapshot을 별도 독립
-     검토 패스에 넘긴다. review-fix 사이에는 저장소 고정 게이트 전체를
+   - 수정하면 즉시 명시적으로 stage하고 빠른 공통 gate를 먼저 통과시킨다.
+     D0만의 추가 수정은 review 전에 끝내므로 pass를 소비하지 않는다. 그 뒤
+     좁은 테스트와 의미 영향 판정을 갱신하고 다음 독립 검토 pass에
+     이전·현재 tree, staged delta와 현재 전체 cached diff를 제공한다.
+     범위·요구사항·보안 경계가 넓어지거나 review chain에 공백·모호함이
+     있으면 새 전체 리뷰가 필요하다. review-fix 사이에는 무거운 회귀군을
      실행하지 않는다. 최초 리뷰를 1회로 세어 최대 3회이며, 3회 뒤에도
      P0/P1이 남으면 승인하지 않고 blocker로 보고한다.
-4. 더 이상 계획된 수정이 없는 같은 staged candidate에서 현재 `AGENTS.md`의
-   고정 게이트 전체를 한 번 실행한다. 이 스킬의 결정적 검증은 그 목록 안의
-   다음 명령으로 충족한다.
+4. 최종 gate의 선택·증거 유지·무효화는
+   [`commit-work-item` 계약](../commit-work-item/references/commit-contract.md)이
+   소유한다. 모든 staged candidate를 고정한 직후, 독립 리뷰 전에 제품 문서
+   실제 validator를 포함한 빠른 공통 gate를 실행한다. staged patch 공백
+   검사는 working tree가 아닌 index를 검사해야 한다. 리뷰 뒤 tree가
+   그대로면 이 D0 증거를 최종 증거로 유지한다.
 
    ```bash
-   node --test .agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs
    node .agents/skills/update-product-docs/scripts/validate-product-docs.mjs
-   git diff --check
+   git diff --cached --check
    ```
 
-5. 사용자가 명시적으로 범위에서 제외한 경로에만 `--exclude <relative-path>`를
-   사용하고, 보고서에 모든 제외 항목을 적는다. 현재 `AGENTS.md`가 고정한
-   게이트 자체를 삭제·조건부 축소하지 않는다.
-6. 독립된 읽기 전용·격리 명령만 같은 candidate에서 병렬 실행한다. 같은
-   index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은 순차 실행하고
-   모든 결과를 join한다. 검증 전후 candidate tree와 input이 같아야 한다.
-7. tracked content가 바뀌면 행동·의미 영향·리뷰·게이트 증거를 모두
-   무효화하고 새 candidate의 필요한 빠른 행동 테스트를 다시 수행한 뒤
-   2단계의 의미 영향 판정부터 다시 시작한다. tree·input이 같은 환경 전용
-   실패만 원인과 동일성 근거를 남긴 새 명령으로 한 번 재실행하며 자동
-   반복하지 않는다. 의미
-   영향·독립 리뷰 증거가 불완전하면 같은 candidate·input의 2~3단계부터
-   복구하고, 최종 gate 증거만 불완전하면 동일한 clean snapshot에서 고정
-   게이트 전체를 새로 실행한다. candidate tree나 input이 다르면 새
-   candidate의 필요한 빠른 행동 테스트를 다시 수행하고 2단계의 의미 영향
-   판정부터 다시 시작한다.
+5. 제품 문서 계약 ID·validator 회귀 테스트는 helper가
+   현재 base→candidate의 `product-docs-regression`을 선택하고 독립 리뷰가
+   끝난 뒤에만 실행한다. 단순 Markdown 수정도 빠른 공통 gate는 생략하지
+   않는다.
+6. gate 실패를 고쳐 tracked content가 바뀌면 즉시 명시적으로 stage하고
+   빠른 공통 gate를 먼저 통과시킨 뒤 필요한 좁은 행동 테스트와 이 절의 의미
+   영향 판정, delta review를 갱신한다. `commit-work-item`은 현재
+   `selectedGroups ∩ invalidatedGroups`만 재실행하고 선택된 unchanged PASS는
+   유지하며 pending은 계속하고 unselected 증거는 버린다.
+7. 공유 계약·classifier·입력 manifest, base·환경 또는 선언하지 않은 입력이
+   바뀌거나 영향 범위를 확정할 수 없으면 로컬 무거운 회귀군 전체를
+   무효화한다. helper 자체 변경은 로컬 `invalidatedGroups` 전체에 포함하지만
+   current selection에 없는 군은 `not-required`로 버리고, 원격 CI는 owning
+   `commit-pr-regression`만 실행한다. tree·input이 같은 환경 전용 실패만
+   원인과 동일성 근거를 남긴 새 명령으로 한 번 재실행하며 자동 반복하지
+   않는다.
 8. 독립 검토는 기존 작업·문서 Skill 안에서 조정한다. 독립 역할이 반복적으로
    필요하다는 별도 근거 없이 리뷰 전용 Skill을 만들지 않는다.
 9. 의미 검토에서 다음을 확인한다.

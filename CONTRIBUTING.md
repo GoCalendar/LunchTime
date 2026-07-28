@@ -30,9 +30,10 @@
 6. 실패 테스트에서 시작해 구현하고 이슈별 빠른 행동 테스트를 통과합니다.
 7. `update-product-docs`로 PRD·Policy·Architecture 의미 영향과 경로 계약을
    독립 리뷰 전에 확인합니다.
-8. `commit-work-item`으로 의도한 경로만 stage한 candidate tree를 읽기 전용
-   독립 리뷰에 넘기고 발견 사항을 일괄 수정합니다. 계획된 수정이 없는 같은
-   snapshot에서 저장소 고정 게이트 전체를 한 번 통과합니다.
+8. `commit-work-item`으로 의도한 경로만 stage한 candidate tree에 빠른 공통
+   gate를 먼저 실행한 뒤 읽기 전용 독립 리뷰에 넘깁니다. 최초 전체 리뷰 뒤
+   수정도 stage→빠른 공통 gate→행동 테스트·의미 영향 판정→delta review
+   순서로 진행하고, 리뷰가 끝난 tree에서 선택된 무거운 회귀군만 통과합니다.
 9. 같은 Skill이 검토·검증된 candidate와 같은 tree의 원자적 commit을
    만듭니다.
 10. `open-pull-request`로 같은 PR head tree의 로컬 증거를 인계한 본문을
@@ -117,8 +118,8 @@ planned ID 계약을 따릅니다.
 비적용은 [run-github-work-item](.agents/skills/run-github-work-item/SKILL.md)의
 이슈 계약을 따릅니다. 모든 단위 테스트에 Gherkin을 강제하지 않으며 결정적인
 단위·구성요소·통합·계약 테스트를 선택합니다. 구현 중에는 이슈별 빠른 행동
-테스트만 반복하고 저장소 고정 게이트 전체는 리뷰 뒤 최종 snapshot까지
-미룹니다. 상세 축과 흐름은
+테스트만 반복하고 빠른 공통 gate와 영향 회귀군 선택은 staged candidate가
+고정될 때까지 미룹니다. 상세 축과 흐름은
 [BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)을 따릅니다.
 
 독립 리뷰 전에 전체 diff와 변경 경로를 PRD·Policy·Architecture 정본에
@@ -132,9 +133,14 @@ worktree에서 검토한 경로만 명시적으로 stage하고 unstaged tracked 
 예상하지 않은 untracked 입력이 없는 cached diff·candidate tree를 모든
 reviewer에게 동일하게 제공합니다. 기대 답을 주입하지 않고 작성·수정자와 승인
 역할을 분리합니다. 같은 snapshot의 P0~P2에는 `file:line`과 재현 근거를
-남기며 발견 사항을 모아 일괄 수정합니다. 수정 뒤 필요한 행동 테스트와 정본
-영향 판정을 갱신하고 새 snapshot을 별도 pass로 확인하되, review-fix 사이에는
-저장소 고정 게이트 전체를 실행하지 않습니다.
+남기며 발견 사항을 모아 일괄 수정합니다. 수정은 발견 즉시 명시적으로
+stage하고 빠른 공통 gate를 먼저 통과시킨 뒤 필요한 행동 테스트와 정본 영향
+판정을 갱신합니다. 다음 pass는 이전·현재 tree, 그 사이 staged delta와 현재
+전체 cached diff를 함께 검토합니다. 빠른 공통 gate만의 수정은 review 전에
+끝내므로 pass를 소비하지 않습니다. 최초 전체 리뷰부터 끊기지 않은 delta
+review chain이 최종 candidate를 모두 덮으면 최종 review tree로 인정합니다.
+범위·요구사항·보안 경계가 넓어지거나 chain에 공백·모호함이 있으면 새 전체
+리뷰를 수행합니다. review-fix 사이에는 무거운 회귀군을 실행하지 않습니다.
 
 - 단순 문서·국소 변경은 최소 1명, 계약·validator·workflow 변경은 최소 2명,
   분산 통신·정합성·보안은 전문 관점별 reviewer를 사용합니다.
@@ -144,19 +150,25 @@ reviewer에게 동일하게 제공합니다. 기대 답을 주입하지 않고 �
   기록합니다. Ready PR에서는 이 행이 통과해야 합니다.
 - 현재 계약에는 기존 네 Skill이면 충분하며 새 리뷰 전용 Skill을 추가하지
   않습니다.
-- 더 이상 계획된 수정이 없으면 같은 filesystem에서 현재 `AGENTS.md`의 고정
-  게이트 전체를 한 번 실행합니다. 서로 독립된 읽기 전용·격리 명령만 병렬로
-  실행하고 같은 index·working tree·외부 상태·공유 cache·자원을 쓰는 명령은
-  순차 실행한 뒤 모든 결과를 모읍니다.
-- 검증 전후 candidate tree와 input이 같아야 합니다. tracked content가
-  바뀌면 행동·리뷰·게이트 증거를 모두 폐기하고 필요한 빠른 행동 테스트, 의미
-  영향 판정과 새 독립 리뷰부터 시작합니다. 동일 tree·input의 환경 전용 실패는
-  원인과 동일성 근거를 기록한 새 명령 한 번만 허용하며 자동 반복하지
-  않습니다. 의미 영향·리뷰 증거가
-  불완전하면 같은 candidate·input에서 그 판정과 새 리뷰부터 복구하고, 최종
-  gate 증거만 불완전하면 exact candidate의 고정 게이트 전체를 새로
-  실행합니다. candidate tree나 input이 다르면 모든 로컬 증거를 무효화하고
-  필요한 빠른 행동 테스트, 영향 판정과 새 독립 리뷰부터 다시 시작합니다.
+- candidate를 명시적으로 stage해 고정할 때마다 독립 리뷰보다 먼저 현재
+  `AGENTS.md`의 빠른 공통 gate를 실행합니다. tree가 그대로면 이 증거를 최종
+  증거로 유지합니다. 최초 base→candidate 선택 결과에 따라 독립 리뷰 뒤 네
+  무거운 회귀군 중 필요한 군만 실행하며, 서로 독립된 읽기 전용·격리 명령만
+  병렬로 실행합니다.
+- gate 중 실패를 수정했다면 필요한 행동 테스트·의미 영향 판정과 delta
+  review보다 먼저 stage와 빠른 공통 gate를 완료합니다. `commit-work-item`은
+  현재 base→candidate의 `selectedGroups`와 이전→candidate의
+  `invalidatedGroups`를 분리해 선택·무효화된 완료 회귀군만 재실행합니다.
+  선택됐지만 입력이 같은 PASS는 유지하고 pending은 계속하며, 현재 선택되지
+  않은 군은 `not-required`로 버립니다. 변경을 base까지 완전히 되돌리면
+  무거운 회귀군을 다시 실행하지 않습니다. 공유 계약·classifier·입력
+  manifest, 환경 또는 선언하지 않은 입력이 바뀌거나 영향을 확정할 수
+  없으면 로컬 무거운 회귀군 전체를 다시 실행합니다. helper 자체 변경은
+  로컬에서는 전체 invalidated 처리하되 current selection과의 교집합인
+  `commit-pr-regression`만 실행하고, 원격 CI도 owning 회귀군만 실행합니다.
+  상세 분류와 증거 재사용 계약은
+  [`commit-work-item`](.agents/skills/commit-work-item/references/commit-contract.md)이
+  소유합니다.
 
 ## 6. 커밋 컨벤션
 

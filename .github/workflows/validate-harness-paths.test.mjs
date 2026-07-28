@@ -4,12 +4,16 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  LOCAL_EVIDENCE_CONTROL_PATHS,
+  REGRESSION_GROUP_INPUT_RULES,
   aggregateInputFromEnvironment,
   classifyChangedPaths,
   classifyEvent,
   parseArguments,
   parseNulDelimitedPaths,
   readChangedPaths,
+  regressionGroupsForPath,
+  regressionInputRuleForPath,
   renderGitHubOutputs,
   validateAggregateResults,
 } from "./validate-harness-paths.mjs";
@@ -82,20 +86,54 @@ test("owner 입력 파일도 관련 회귀군을 선택한다", () => {
   );
 });
 
-test("일반 문서와 Skill 설명 변경은 대형 회귀군을 선택하지 않는다", () => {
+test("일반 문서와 회귀 명령이 직접 읽지 않는 Skill 설명은 대형 회귀군을 선택하지 않는다", () => {
   const result = classifyChangedPaths([
     "README.md",
     "docs/meetings/2026-07-29-harness.md",
     ".agents/skills/open-pull-request/SKILL.md",
-    ".agents/skills/run-github-work-item/references/issue-contract.md",
+    ".agents/skills/open-pull-request/references/cleanup-notes.md",
   ]);
   falseGroups(result);
   assert.deepEqual(result.changedPaths, [
     "README.md",
     "docs/meetings/2026-07-29-harness.md",
     ".agents/skills/open-pull-request/SKILL.md",
-    ".agents/skills/run-github-work-item/references/issue-contract.md",
+    ".agents/skills/open-pull-request/references/cleanup-notes.md",
   ]);
+});
+
+test("work-item test가 직접 읽는 Skill·issue contract·interface는 work-item 회귀를 선택한다", () => {
+  for (const path of [
+    ".agents/skills/run-github-work-item/SKILL.md",
+    ".agents/skills/run-github-work-item/references/issue-contract.md",
+    ".agents/skills/run-github-work-item/agents/openai.yaml",
+  ]) {
+    const result = classifyChangedPaths([path]);
+    assert.equal(result.full, false, path);
+    assert.deepEqual(result.groups, ["workItemRegression"], path);
+    assert.deepEqual(regressionGroupsForPath(path), [
+      "workItemRegression",
+    ]);
+    assert.equal(
+      regressionInputRuleForPath(path)?.id,
+      "work-item-owner-and-live-contract",
+    );
+  }
+});
+
+test("공용 input manifest는 remote selection과 local evidence control 경계를 분리한다", () => {
+  assert.equal(
+    REGRESSION_GROUP_INPUT_RULES.some(
+      (rule) => rule.id === "work-item-owner-and-live-contract",
+    ),
+    true,
+  );
+  for (const path of LOCAL_EVIDENCE_CONTROL_PATHS) {
+    assert.deepEqual(regressionGroupsForPath(path), [
+      "commitPrRegression",
+    ]);
+    assert.equal(classifyChangedPaths([path]).full, false);
+  }
 });
 
 test("workflow, classifier, 공유 루트 계약은 전체 회귀로 fail-closed한다", () => {

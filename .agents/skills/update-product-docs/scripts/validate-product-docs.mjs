@@ -8,6 +8,11 @@ import {
   definedProductContractIds,
   visibleContractMarkdown,
 } from "./product-contract-ids.mjs";
+import {
+  EVIDENCE_SCHEMA,
+  EVIDENCE_VERSION,
+  GROUP_COMMAND_MANIFESTS,
+} from "../../commit-work-item/scripts/validate-gate-evidence.mjs";
 
 const root = process.cwd();
 const errors = [];
@@ -1519,6 +1524,58 @@ const harnessDetailOwners = [
     file: ".agents/skills/open-pull-request/SKILL.md",
   },
 ];
+const heavyRegressionGroups = Object.freeze([
+  ["productDocsRegression", "product-docs-regression"],
+  ["workItemRegression", "work-item-regression"],
+  ["commitPrRegression", "commit-pr-regression"],
+  ["finalizeRegression", "finalize-regression"],
+]);
+const localGateEvidenceContract = Object.freeze({
+  version: 1,
+  d0: "pre-review",
+  selection: "base-to-candidate",
+  invalidation: "previous-to-candidate",
+  unchangedPass: "retain",
+  changedSelected: "rerun",
+  notSelected: "drop",
+  pending: "continue",
+  ambiguous: "fail-closed",
+});
+const localGateEvidenceMarker = `<!-- local-gate-evidence-contract ${JSON.stringify(
+  localGateEvidenceContract,
+)} -->`;
+const gateEvidenceTopLevelFields = Object.freeze([
+  `schema: "${EVIDENCE_SCHEMA}"`,
+  `version: ${EVIDENCE_VERSION}`,
+  "mode",
+  "base",
+  "previous",
+  "candidate",
+  "full",
+  "failClosed",
+  "reason",
+  "diagnostic",
+  "selectionPaths",
+  "invalidationPaths",
+  "selectedGroups",
+  "invalidatedGroups",
+  "rerunGroups",
+  "retainGroups",
+  "dropGroups",
+  "groups",
+]);
+const gateEvidenceGroupFields = Object.freeze([
+  "decision",
+  "required",
+  "invalidated",
+  "commandManifestDigest",
+  "baseInputDigest",
+  "previousInputDigest",
+  "candidateInputDigest",
+  "baseEntryCount",
+  "previousEntryCount",
+  "candidateEntryCount",
+]);
 const finalSnapshotGateOrder = [
   {
     order: "1",
@@ -1552,34 +1609,60 @@ const finalSnapshotGateOrder = [
   },
   {
     order: "4",
-    stage: "독립 리뷰",
+    stage: "빠른 공통 gate",
     contracts: [
       [
-        "동일 candidate 병렬 리뷰와 일괄 수정",
-        /같은 cached diff·candidate tree[\s\S]*병렬[\s\S]*발견 사항[\s\S]*(?:합쳐|모아)[\s\S]*일괄 수정[\s\S]*새 snapshot[\s\S]*다시 리뷰/,
+        "candidate 고정 직후 index·clean 결속 D0",
+        /candidate를 고정한 직후[\s\S]{0,100}index·clean 상태[\s\S]{0,100}다섯 D0 gate/,
+      ],
+      [
+        "D0-only 수정은 review pass 미소비",
+        /D0만의 수정[\s\S]{0,100}stage·고정·D0[\s\S]{0,100}review pass를 소비하지 않고/,
+      ],
+      [
+        "동일 tree D0 최종 증거 유지",
+        /tree가 유지되면[\s\S]{0,80}증거가 최종 증거/,
       ],
     ],
   },
   {
     order: "5",
-    stage: "최종 저장소 게이트",
+    stage: "독립 리뷰",
     contracts: [
       [
-        "수정 종료 뒤 고정 게이트 전체 1회",
-        /계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정 게이트 전체[\s\S]*(?:한 번|1회)/,
+        "D0 뒤 최초 candidate 리뷰",
+        /D0를 통과한 최초 cached diff·candidate tree[\s\S]{0,160}reviewer가 검토/,
       ],
       [
-        "격리 명령만 병렬, 공유 명령은 순차·join",
-        /독립[\s\S]*격리[\s\S]*병렬[\s\S]*index·working tree·외부 상태·공유 cache·자원[\s\S]*순차[\s\S]*모든 결과[\s\S]*join/,
+        "수정 뒤 stage→D0와 delta review",
+        /수정하면 stage→D0[\s\S]{0,160}행동 테스트·정본 의미 영향 판정[\s\S]{0,120}이전·현재 tree[\s\S]{0,100}staged delta·현재 전체 diff[\s\S]{0,80}delta review/,
       ],
       [
-        "검증 전후 candidate tree·input 동일",
-        /검증 전후 candidate tree[\s\S]*gate input[\s\S]*같/,
+        "delta review chain의 전체 리뷰 fallback",
+        /범위·요구사항·보안 경계 확대[\s\S]{0,120}chain 공백·모호함[\s\S]{0,120}새 전체 리뷰/,
       ],
     ],
   },
   {
     order: "6",
+    stage: "선택된 무거운 회귀군",
+    contracts: [
+      [
+        "current base→candidate selectedGroups",
+        /현재 base→candidate[\s\S]{0,100}selectedGroups`?만 실행/,
+      ],
+      [
+        "delta selected·invalidated 교집합 재실행",
+        /이전 evidence JSON[\s\S]{0,100}delta 입력[\s\S]{0,120}selectedGroups ∩ invalidatedGroups`?만 재실행/,
+      ],
+      [
+        "unchanged PASS 유지·pending 계속·unselected drop",
+        /선택된 unchanged PASS는 유지[\s\S]{0,80}pending은 계속[\s\S]{0,80}unselected는 버린다/,
+      ],
+    ],
+  },
+  {
+    order: "7",
     stage: "commit",
     contracts: [
       [
@@ -1589,7 +1672,7 @@ const finalSnapshotGateOrder = [
     ],
   },
   {
-    order: "7",
+    order: "8",
     stage: "PR·필수 CI",
     contracts: [
       [
@@ -1601,10 +1684,17 @@ const finalSnapshotGateOrder = [
 ];
 const finalSnapshotRecoveryOrder = [
   {
-    situation: "tracked content 변경",
-    evidence: /review·gate 증거 모두 무효/,
+    situation: "review 전 D0 실패 수정",
+    evidence: /review pass 없음[\s\S]{0,40}이전 D0 폐기/,
     reentry:
-      /새 candidate[\s\S]*행동 테스트[\s\S]*PRD·Policy·Architecture 의미 영향 판정[\s\S]*독립 리뷰[\s\S]*다시 시작/,
+      /명시적으로 stage[\s\S]{0,80}새 candidate를 고정[\s\S]{0,80}D0부터 다시 실행/,
+  },
+  {
+    situation: "review·heavy gate 뒤 tracked content 변경",
+    evidence:
+      /이전 전체 리뷰[\s\S]{0,80}선택된 unchanged PASS[\s\S]{0,40}조건부 유지/,
+    reentry:
+      /stage·D0[\s\S]{0,120}행동 테스트·의미 영향 판정[\s\S]{0,100}delta review[\s\S]{0,100}선택·무효화된 완료 회귀군만 재실행[\s\S]{0,80}선택된 pending을 계속/,
   },
   {
     situation: "환경 전용 실패·동일 tree·input",
@@ -1613,87 +1703,295 @@ const finalSnapshotRecoveryOrder = [
       /원인[\s\S]*동일 tree·input 근거[\s\S]*기록[\s\S]*새 명령[\s\S]*한 번[\s\S]*자동 반복하지/,
   },
   {
-    situation: "의미 영향·리뷰 증거 불완전·동일 tree·input",
-    evidence: /review·gate 증거 재사용 거부/,
+    situation: "의미 영향·review chain 불완전",
+    evidence: /review 증거 재사용 거부/,
     reentry:
-      /같은 candidate·input[\s\S]*PRD·Policy·Architecture 의미 영향 판정[\s\S]*새 독립 리뷰[\s\S]*최종 게이트/,
+      /의미 영향 판정[\s\S]{0,100}delta review[\s\S]{0,160}범위 확대[\s\S]{0,80}chain 공백·모호함[\s\S]{0,100}새 전체 리뷰/,
   },
   {
-    situation: "최종 gate 증거 불완전·동일 tree·input",
-    evidence: /gate 증거 재사용 거부/,
+    situation: "개별 회귀군 증거 불완전",
+    evidence: /해당 회귀군 증거만 재사용 거부/,
     reentry:
-      /exact candidate·input[\s\S]*동일한 clean snapshot[\s\S]*AGENTS\.md[\s\S]*고정 게이트 전체[\s\S]*새로 실행/,
+      /exact candidate[\s\S]{0,100}기존 D0가 유효[\s\S]{0,100}helper가 선택한 해당 회귀군만 실행/,
   },
   {
-    situation: "candidate tree·input 불일치",
-    evidence: /review·gate 증거 모두 무효/,
+    situation: "strict previous evidence 거부",
+    evidence:
+      /previous evidence[\s\S]{0,80}이전 heavy PASS를 폐기[\s\S]{0,120}candidate 범위가 넓어지지 않은[\s\S]{0,100}raw tree·delta review chain은 유지 가능/,
     reentry:
-      /다른 tree나 input[\s\S]*gate만 실행하지 않고[\s\S]*새 candidate[\s\S]*행동 테스트·의미 영향 판정·독립 리뷰[\s\S]*다시 시작/,
+      /같은 delta를 반복하지[\s\S]{0,100}replace-disabled current HEAD commit을 current base로 검증[\s\S]{0,100}candidate base가 같을 때만 기존 `initial`로 re-root[\s\S]{0,120}unknown·stale이면 중단[\s\S]{0,120}이전 evidence의 base 대신 current base→candidate selection만 사용[\s\S]{0,100}새 evidence와 D0/,
+  },
+  {
+    situation: "current candidate가 base로 완전 revert",
+    evidence: /이전 무거운 회귀군 증거 drop/,
+    reentry:
+      /selectedGroups`?가 비므로[\s\S]{0,80}D0 뒤[\s\S]{0,80}무거운 회귀군 없이 진행/,
+  },
+  {
+    situation:
+      "공유 계약·classifier·입력 manifest, 환경·미선언 입력 변경 또는 영향 불명",
+    evidence: /로컬 무거운 회귀군 증거 모두 무효/,
+    reentry:
+      /D0 뒤[\s\S]{0,120}current selection이 전체[\s\S]{0,80}fail-closed[\s\S]{0,100}네 군을 모두 실행[\s\S]{0,160}helper 자체 변경[\s\S]{0,120}로컬 네 군을 invalidated[\s\S]{0,160}owning current selection과의 교집합만 실행[\s\S]{0,160}원격 CI도 owning 회귀군만 실행/,
   },
 ];
 const finalSnapshotOwnerContracts = [
   {
     file: "AGENTS.md",
     section: "행동 시나리오와 독립 리뷰",
-    label: "행동 테스트→정본 guard→staged candidate 리뷰·일괄 수정",
+    label: "최초 전체 리뷰와 연속 delta review chain",
     pattern:
-      /이슈별 빠른 테스트[\s\S]*고정 게이트 전체[\s\S]*리뷰 전에[\s\S]*PRD·Policy·Architecture[\s\S]*cached diff·candidate tree[\s\S]*독립 리뷰[\s\S]*일괄 수정[\s\S]*review-fix 사이[\s\S]*고정 게이트 전체[\s\S]*실행하지/,
+      /최초 candidate[\s\S]{0,480}이전·현재 tree[\s\S]{0,160}staged delta[\s\S]{0,160}전체 cached diff[\s\S]{0,220}최초\s+전체\s+리뷰[\s\S]{0,120}delta review chain[\s\S]{0,160}최종\s+candidate/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "행동 시나리오와 독립 리뷰",
+    label: "delta review의 full review fail-closed 경계",
+    pattern:
+      /범위·요구사항·보안 경계[\s\S]{0,120}(?:넓|확대)[\s\S]{0,180}chain[\s\S]{0,100}(?:공백|모호)[\s\S]{0,120}(?:새 )?전체 리뷰/,
   },
   {
     file: "AGENTS.md",
     section: "문서와 검증",
-    label: "최종 gate 1회와 분리된 증거 복구",
+    label: "모든 candidate의 빠른 공통 gate",
     pattern:
-      /계획된 변경[\s\S]*없는 staged\s+candidate[\s\S]*고정 게이트 전체[\s\S]*한 번[\s\S]*tracked\s+content[\s\S]*행동·리뷰·게이트 증거[\s\S]*모두 무효화[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*독립 리뷰[\s\S]*tree·input[\s\S]*환경 전용 실패[\s\S]*의미\s+영향·독립 리뷰 증거[\s\S]*최종 gate\s+증거만[\s\S]*candidate tree나 input[\s\S]*모든 로컬\s+증거[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*영향 판정[\s\S]*독립 리뷰/,
+      /(?:모든 candidate|staged candidate마다|최초 candidate와 수정 candidate)[\s\S]{0,120}빠른\s+공통 gate/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "문서와 검증",
+    label: "회귀군별 command·input projection digest",
+    pattern:
+      /이전·현재 base\/tree[\s\S]{0,120}회귀군별 명령 digest·tracked input projection\s+digest/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "문서와 검증",
+    label: "affected 재실행·unaffected PASS 유지·pending 계속",
+    pattern:
+      /영향받은 군만\s+다시\s+실행[\s\S]{0,120}입력이 같은 통과 증거[\s\S]{0,80}유지[\s\S]{0,120}아직 실행하지 않은 군부터\s+이어/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "문서와 검증",
+    label: "공유·base·입력 경계의 네 회귀군 fail-closed",
+    pattern:
+      /공유 계약·경로 classifier·helper·manifest[\s\S]{0,160}base·환경[\s\S]{0,120}선언하지 않은\s+입력[\s\S]{0,180}무거운 회귀군 네 개[\s\S]{0,100}모두\s+무효/,
   },
   {
     file: "CONTRIBUTING.md",
     section: "5. 테스트와 독립 리뷰",
-    label: "review-fix 중 전체 gate 금지와 마지막 1회 실행",
+    label: "최초 전체 리뷰와 delta review chain",
     pattern:
-      /(?:독립 리뷰 전에[\s\S]*PRD·Policy·Architecture|PRD·Policy·Architecture[\s\S]*독립 리뷰 전에)[\s\S]*cached diff·candidate tree[\s\S]*review-fix 사이[\s\S]*고정 게이트 전체[\s\S]*실행하지[\s\S]*계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정\s+게이트 전체[\s\S]*한 번[\s\S]*tracked content[\s\S]*행동·리뷰·게이트 증거[\s\S]*폐기[\s\S]*빠른 행동 테스트[\s\S]*의미\s+영향 판정[\s\S]*독립 리뷰[\s\S]*tree·input[\s\S]*환경 전용 실패[\s\S]*의미 영향·리뷰 증거[\s\S]*최종\s+gate 증거만[\s\S]*candidate tree나 input[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*영향 판정[\s\S]*독립 리뷰/,
+      /최초\s+전체\s+리뷰[\s\S]{0,120}delta review chain[\s\S]{0,160}최종\s+candidate/,
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "5. 테스트와 독립 리뷰",
+    label: "모든 candidate D0와 선택적 heavy 회귀군",
+    pattern:
+      /모든 candidate[\s\S]{0,100}빠른\s+공통 gate[\s\S]{0,180}영향받은 군/,
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "5. 테스트와 독립 리뷰",
+    label: "회귀군별 command·input projection digest",
+    pattern:
+      /이전·현재 base\/tree[\s\S]{0,140}회귀군별 명령·tracked input projection digest/,
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "5. 테스트와 독립 리뷰",
+    label: "affected 재실행·unaffected PASS 유지·pending 계속",
+    pattern:
+      /영향받은 완료 회귀군만 재실행[\s\S]{0,120}입력이 같은 통과 증거[\s\S]{0,80}유지[\s\S]{0,100}남은 gate를 이어/,
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "5. 테스트와 독립 리뷰",
+    label: "공유·base·입력 경계의 heavy fail-closed",
+    pattern:
+      /공유 계약·classifier·helper·manifest[\s\S]{0,160}base·환경[\s\S]{0,120}선언하지 않은 입력[\s\S]{0,180}무거운 회귀군\s+전체[\s\S]{0,80}다시 실행/,
   },
   {
     file: ".agents/skills/update-product-docs/SKILL.md",
     section: "품질 게이트 실행",
-    label: "정본 의미 영향 판정 뒤 리뷰·최종 gate",
+    label: "최초 전체 의미 리뷰와 delta review fallback",
     pattern:
-      /좁은 행동 테스트[\s\S]*최종 저장소 게이트[\s\S]*대신하지[\s\S]*PRD·Policy·Architecture[\s\S]*독립 리뷰 전에[\s\S]*candidate\s+tree[\s\S]*review-fix 사이[\s\S]*고정 게이트 전체[\s\S]*실행하지[\s\S]*계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정 게이트 전체[\s\S]*한 번[\s\S]*tracked content[\s\S]*행동·의미 영향·리뷰·게이트 증거[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*tree·input[\s\S]*환경 전용\s+실패[\s\S]*의미\s+영향·독립 리뷰 증거[\s\S]*최종 gate 증거만[\s\S]*candidate tree나 input[\s\S]*다르면[\s\S]*빠른 행동 테스트[\s\S]*의미 영향/,
+      /최초 candidate[\s\S]{0,160}전체[\s\S]{0,500}이전·현재 tree[\s\S]{0,120}staged delta[\s\S]{0,120}전체 cached diff[\s\S]{0,220}범위·요구사항·보안 경계[\s\S]{0,180}새 전체 리뷰/,
+  },
+  {
+    file: ".agents/skills/update-product-docs/SKILL.md",
+    section: "품질 게이트 실행",
+    label: "모든 staged candidate의 빠른 공통 gate",
+    pattern: /모든 staged candidate[\s\S]{0,180}빠른 공통 gate/,
+  },
+  {
+    file: ".agents/skills/update-product-docs/SKILL.md",
+    section: "품질 게이트 실행",
+    label: "affected 재실행·unaffected PASS 유지·pending 계속",
+    pattern:
+      /영향받은 완료 회귀군만 재실행[\s\S]{0,120}입력이\s+같은 통과 증거[\s\S]{0,80}유지[\s\S]{0,100}남은 gate를 계속/,
+  },
+  {
+    file: ".agents/skills/update-product-docs/SKILL.md",
+    section: "품질 게이트 실행",
+    label: "공유·base·입력 경계의 heavy fail-closed",
+    pattern:
+      /공유 계약·classifier·helper·manifest[\s\S]{0,160}base·환경[\s\S]{0,120}선언하지 않은\s+입력[\s\S]{0,180}무거운 회귀군\s+전체[\s\S]{0,80}무효/,
   },
   {
     file: ".agents/skills/run-github-work-item/SKILL.md",
     section: "구현 snapshot 검증",
-    label: "행동 테스트→정본 영향→candidate 리뷰→최종 gate",
+    label: "최초 전체 리뷰와 delta review fallback",
     pattern:
-      /빠른 행동 테스트[\s\S]*PRD·Policy·Architecture[\s\S]*cached diff·candidate tree[\s\S]*같은 snapshot[\s\S]*발견 사항[\s\S]*한 번에 수정[\s\S]*새 candidate[\s\S]*계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정 게이트 전체[\s\S]*한 번/,
+      /최초 snapshot[\s\S]{0,360}이전·현재 tree[\s\S]{0,120}staged delta[\s\S]{0,120}전체 cached diff[\s\S]{0,220}최초\s+전체\s+리뷰[\s\S]{0,120}delta review[\s\S]{0,220}새\s+전체\s+리뷰/,
+  },
+  {
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+    section: "구현 snapshot 검증",
+    label: "모든 candidate D0와 선택적 heavy 회귀군",
+    pattern:
+      /모든\s+candidate[\s\S]{0,100}빠른 공통 gate[\s\S]{0,180}영향받은[\s\S]{0,80}무거운\s+회귀군/,
+  },
+  {
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+    section: "구현 snapshot 검증",
+    label: "affected 재실행·unaffected PASS 유지·pending 계속",
+    pattern:
+      /영향받은 완료 회귀군만\s+다시 실행[\s\S]{0,120}입력이 같은 통과\s+증거[\s\S]{0,80}유지[\s\S]{0,100}남은 gate를 계속/,
+  },
+  {
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+    section: "구현 snapshot 검증",
+    label: "공유·base·입력 경계의 heavy fail-closed",
+    pattern:
+      /공유 계약·classifier·helper·manifest[\s\S]{0,160}base·환경[\s\S]{0,120}선언하지 않은 입력[\s\S]{0,180}무거운\s+회귀군 전체[\s\S]{0,80}무효/,
   },
   {
     file: ".agents/skills/commit-work-item/SKILL.md",
     section: "3. Candidate staging과 독립 리뷰",
-    label: "빠른 증거→정본 영향→staged candidate 리뷰",
+    label: "최초 전체 리뷰와 delta review chain",
     pattern:
-      /빠른 행동 테스트[\s\S]*고정\s+게이트 전체[\s\S]*실행하지[\s\S]*PRD·Policy·Architecture[\s\S]*candidate tree[\s\S]*독립 리뷰[\s\S]*(?:일괄 수정|한 번에 수정)[\s\S]*review-fix 사이[\s\S]*고정 게이트 전체[\s\S]*실행하지/,
+      /이전·현재 candidate identity[\s\S]{0,120}staged delta[\s\S]{0,120}전체\s+cached diff[\s\S]{0,180}최초 전체 리뷰[\s\S]{0,120}delta review chain[\s\S]{0,160}최종 candidate/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "3. Candidate staging과 독립 리뷰",
+    label: "delta review의 full review fail-closed 경계",
+    pattern:
+      /범위·요구사항·보안 경계[\s\S]{0,120}(?:넓|확대)[\s\S]{0,180}chain[\s\S]{0,100}(?:공백|모호)[\s\S]{0,120}새\s+전체\s+리뷰/,
   },
   {
     file: ".agents/skills/commit-work-item/SKILL.md",
     section: "4. 최종 게이트와 snapshot 결속",
-    label: "최종 gate 1회와 증거 유형별 복구",
+    label: "모든 candidate의 빠른 공통 gate",
+    pattern: /모든 candidate[\s\S]{0,180}빠른 공통 gate/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "회귀군별 command·input projection digest",
     pattern:
-      /계획된 수정[\s\S]*없[\s\S]*AGENTS\.md[\s\S]*고정\s+게이트[\s\S]*한 번[\s\S]*tracked content[\s\S]*행동·의미 영향·리뷰·게이트 증거[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*새 candidate[\s\S]*tree·input[\s\S]*환경 전용 실패[\s\S]*의미 영향·독립 리뷰 증거[\s\S]*최종 gate 증거만[\s\S]*candidate tree나 input[\s\S]*모든 로컬 증거[\s\S]*빠른 행동 테스트[\s\S]*새 candidate/,
+      /이전·현재\s+base\/tree[\s\S]{0,140}회귀군별 명령 digest·tracked input projection digest/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "affected 재실행·unaffected PASS 유지·pending 계속",
+    pattern:
+      /영향받은 군만 다시 실행[\s\S]{0,120}입력이 같은\s+통과 증거[\s\S]{0,80}유지[\s\S]{0,140}아직 실행하지 않은 선택 회귀군부터 이어/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "공유·base·입력 경계의 네 회귀군 fail-closed",
+    pattern:
+      /공유 계약·경로 classifier·helper·manifest[\s\S]{0,160}base·환경[\s\S]{0,120}선언하지 않은\s+입력[\s\S]{0,180}무거운 회귀군 네 개[\s\S]{0,120}모두\s+무효/,
   },
   {
     file: ".agents/skills/commit-work-item/SKILL.md",
     section: "6. 커밋 후 검증과 보고",
-    label: "commit 뒤 path gate 증거 재사용",
+    label: "commit에 full·delta review와 회귀군 digest 인계",
     pattern:
-      /HEAD\^\{tree\}[\s\S]*candidate tree[\s\S]*commit path gate 증거[\s\S]*재사용[\s\S]*반복하지/,
+      /base·cached diff·candidate·commit[\s\S]{0,120}tree 결속[\s\S]{0,220}최초 전체 리뷰[\s\S]{0,100}delta\s+review chain[\s\S]{0,180}실행·유지·무효화한 회귀군[\s\S]{0,80}digest/,
   },
   {
     file: ".agents/skills/commit-work-item/references/commit-contract.md",
     section: "5. 검증 증거",
-    label: "candidate→commit→PR tree 결속과 원격 CI",
+    label: "candidate identity와 previous→current delta",
     pattern:
-      /이슈별 행동 테스트[\s\S]*PRD·Policy·Architecture[\s\S]*cached diff digest[\s\S]*candidate tree[\s\S]*독립 리뷰[\s\S]*고정 게이트 전체[\s\S]*한 번[\s\S]*commit tree[\s\S]*PR head tree[\s\S]*원격 required CI[\s\S]*생략하지[\s\S]*tracked content[\s\S]*행동 테스트·의미 영향·리뷰·게이트 증거[\s\S]*무효화[\s\S]*빠른 행동 테스트[\s\S]*의미\s+영향 판정[\s\S]*독립 리뷰[\s\S]*의미 영향·독립 리뷰 증거[\s\S]*최종 gate 증거만[\s\S]*candidate tree나 input[\s\S]*다르면[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*독립 리뷰/,
+      /base commit OID[\s\S]{0,100}전체 cached diff digest[\s\S]{0,100}candidate tree OID[\s\S]{0,180}이전 identity[\s\S]{0,100}이전→현재 staged delta digest/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "최초 full review와 연속 delta review chain",
+    pattern:
+      /최초 candidate[\s\S]{0,240}전체 cached diff·candidate tree[\s\S]{0,500}이전·현재 base OID와 candidate tree OID[\s\S]{0,100}이전→현재 staged delta[\s\S]{0,100}현재 candidate의 전체 cached diff[\s\S]{0,300}최초 전체 리뷰[\s\S]{0,100}delta review chain[\s\S]{0,100}최종 candidate/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "delta review의 full review fail-closed 경계",
+    pattern:
+      /delta review만으로 승인하지 않고 현재 전체 candidate를 새로 리뷰/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "모든 candidate의 빠른 공통 gate",
+    pattern:
+      /빠른 공통 gate[\s\S]{0,100}최초 candidate와 모든 수정 candidate에서 항상\s+실행/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "고정된 네 heavy 회귀군 ID",
+    pattern:
+      /productDocsRegression[\s\S]{0,600}workItemRegression[\s\S]{0,600}commitPrRegression[\s\S]{0,700}finalizeRegression/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "command manifest와 tracked input projection digest",
+    pattern:
+      /tracked input projection[\s\S]{0,600}command manifest\s+digest[\s\S]{0,100}명령과 순서/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "unaffected PASS 유지 조건",
+    pattern:
+      /candidate base[\s\S]{0,180}command manifest digest[\s\S]{0,180}input projection digest[\s\S]{0,180}환경[\s\S]{0,100}미선언 입력[\s\S]{0,140}failClosed[\s\S]{0,100}retainGroups/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "affected rerun·unaffected retain·pending 계속",
+    pattern:
+      /rerunGroups[\s\S]{0,100}완료한 회귀군만 다시 실행[\s\S]{0,120}retainGroups[\s\S]{0,100}통과 증거[\s\S]{0,180}아직 실행하지 않은 선택 회귀군부터 계속/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "공유·base·입력 경계의 네 회귀군 fail-closed",
+    pattern:
+      /공유 하네스 계약[\s\S]{0,80}경로 classifier[\s\S]{0,80}evidence helper[\s\S]{0,80}gate manifest[\s\S]{0,180}base OID[\s\S]{0,180}환경[\s\S]{0,100}미선언 입력[\s\S]{0,180}failClosed/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "fail-closed의 네 회귀군 전체 무효화",
+    pattern:
+      /영향 범위를 국소화할 수 없으므로 무거운 회귀군 네[\s\S]{0,40}개의 증거를 모두 무효화/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/references/commit-contract.md",
+    section: "5. 검증 증거",
+    label: "최종 review·gate 증거와 commit·PR tree·원격 CI",
+    pattern:
+      /최종 candidate[\s\S]{0,100}빠른 공통 gate[\s\S]{0,140}review chain[\s\S]{0,180}현재 실행 또는[\s\S]{0,100}유효하게 유지한 통과 증거[\s\S]{0,260}실제 실행 tree[\s\S]{0,100}command manifest[\s\S]{0,100}input projection digest[\s\S]{0,180}commit tree[\s\S]{0,100}PR head tree[\s\S]{0,180}원격 required CI/,
   },
   {
     file: ".agents/skills/commit-work-item/references/commit-contract.md",
@@ -1705,23 +2003,303 @@ const finalSnapshotOwnerContracts = [
   {
     file: ".agents/skills/open-pull-request/SKILL.md",
     section: "2. 중복 PR과 문서 영향 확인",
-    label: "증거 유형별 PR 복구",
+    label: "모호한 tree·digest chain은 commit owner로 반환",
     pattern:
-      /commit tree[\s\S]*candidate[\s\S]*tree나 입력[\s\S]*새 candidate[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*독립 리뷰[\s\S]*의미 영향·독립 리뷰 증거[\s\S]*새 독립 리뷰[\s\S]*최종 gate\s+결과 증거만[\s\S]*recovery worktree[\s\S]*고정 게이트 전체[\s\S]*한 번/,
+      /최종 tree[\s\S]{0,120}base\/tree·digest chain[\s\S]{0,100}모호[\s\S]{0,120}commit-work-item/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "2. 중복 PR과 문서 영향 확인",
+    label: "delta review chain의 full review fallback",
+    pattern:
+      /범위·요구사항·보안 경계 확대[\s\S]{0,100}delta\s+review chain[\s\S]{0,80}공백·모호함[\s\S]{0,80}새 전체 리뷰/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "2. 중복 PR과 문서 영향 확인",
+    label: "gate-only recovery의 D0와 affected 회귀군",
+    pattern:
+      /빠른 공통 gate[\s\S]{0,120}helper가 선택한 영향 회귀군만 복구/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "2. 중복 PR과 문서 영향 확인",
+    label: "일치하는 실행 tree·command·input evidence 유지",
+    pattern:
+      /실행[\s\S]{0,30}tree·명령 digest·input projection digest[\s\S]{0,120}일치[\s\S]{0,80}증거는 유지/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "2. 중복 PR과 문서 영향 확인",
+    label: "공유·base·입력 경계의 heavy fail-closed",
+    pattern:
+      /공유 계약·classifier·helper·manifest[\s\S]{0,120}base·환경·미선언 입력[\s\S]{0,120}영향 불명[\s\S]{0,100}무거운 회귀군 전체를 무효/,
   },
   {
     file: ".agents/skills/open-pull-request/SKILL.md",
     section: "3. 제목과 본문 작성",
-    label: "review→verification→commit→PR tree와 required CI",
+    label: "review→verification→commit→PR tree 결속",
     pattern:
-      /review-tree=<40자리 tree OID>[\s\S]*verification-tree=<40자리 tree OID>[\s\S]*commit-tree=<40자리 tree OID>[\s\S]*pr-head-tree=<40자리 tree OID>[\s\S]*네 tree[\s\S]*같[\s\S]*고정 게이트 전체[\s\S]*한 번[\s\S]*required CI[\s\S]*항상 통과/,
+      /review-tree=<40자리 tree OID>[\s\S]{0,180}빠른 공통 gate[\s\S]{0,120}실행·유지한 회귀군[\s\S]{0,120}verification-tree=<40자리 tree OID>[\s\S]{0,100}commit-tree=<40자리 tree OID>[\s\S]{0,160}pr-head-tree=<40자리 tree OID>[\s\S]{0,120}네 tree는 모두 같/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "3. 제목과 본문 작성",
+    label: "최초 full review와 delta review chain",
+    pattern:
+      /최초 staged candidate[\s\S]{0,220}이전·현재 tree[\s\S]{0,100}staged delta[\s\S]{0,100}전체 cached diff[\s\S]{0,180}최초\s+전체\s+리뷰[\s\S]{0,100}delta review chain[\s\S]{0,100}최종\s+candidate/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "3. 제목과 본문 작성",
+    label: "local evidence와 remote required CI 분리",
+    pattern:
+      /빠른 공통 gate[\s\S]{0,180}현재 실행 또는 유효하게[\s\S]{0,40}유지한 증거[\s\S]{0,260}GitHub required CI[\s\S]{0,120}항상 통과/,
   },
   {
     file: ".agents/skills/open-pull-request/references/pr-body-contract.md",
     section: "4. 검증",
-    label: "로컬 증거 재사용과 원격 required CI 분리",
+    label: "full·delta review chain과 final candidate",
     pattern:
-      /review-tree=<40자리 tree OID>[\s\S]*verification-tree=<40자리 tree OID>[\s\S]*commit-tree=<40자리 tree OID>[\s\S]*pr-head-tree=<40자리 tree OID>[\s\S]*candidate tree와 input[\s\S]*의미 영향·독립 리뷰\s+증거[\s\S]*새 독립 리뷰[\s\S]*최종 gate 결과 증거만[\s\S]*고정 게이트 전체[\s\S]*candidate\s+tree·input[\s\S]*다르면[\s\S]*빠른 행동 테스트[\s\S]*의미 영향 판정[\s\S]*독립 리뷰[\s\S]*GitHub required CI[\s\S]*대신하지/,
+      /최초 전체 리뷰[\s\S]{0,120}최종 candidate[\s\S]{0,140}delta review chain[\s\S]{0,300}staged delta[\s\S]{0,100}현재 전체 diff/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/references/pr-body-contract.md",
+    section: "4. 검증",
+    label: "review→verification→commit→PR tree 결속",
+    pattern:
+      /review-tree=<40자리 tree OID>[\s\S]{0,100}verification-tree=<40자리 tree OID>[\s\S]{0,100}commit-tree=<40자리 tree OID>[\s\S]{0,100}pr-head-tree=<40자리 tree OID>[\s\S]{0,220}verification-tree[\s\S]{0,140}빠른 공통 gate[\s\S]{0,140}(?:실행했거나|유효하게 유지한) 무거운 회귀군/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/references/pr-body-contract.md",
+    section: "4. 검증",
+    label: "gate-only recovery와 full fail-closed boundary",
+    pattern:
+      /빠른 공통 gate[\s\S]{0,120}helper가 선택한[\s\S]{0,40}영향 회귀군만 실행[\s\S]{0,160}입력이 같은 통과 회귀군 증거[\s\S]{0,100}유지[\s\S]{0,180}공유 계약·classifier·helper·manifest[\s\S]{0,120}base·환경·미선언 입력[\s\S]{0,120}무거운 회귀군 전체를 무효/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/references/pr-body-contract.md",
+    section: "4. 검증",
+    label: "local evidence와 remote required CI 분리",
+    pattern: /로컬 증거 재사용[\s\S]{0,80}GitHub required CI를 대신하지/,
+  },
+];
+const incrementalGateOwnerContracts = [
+  {
+    file: "AGENTS.md",
+    section: "행동 시나리오와 독립 리뷰",
+    label: "stage→D0→최초 독립 리뷰",
+    pattern:
+      /cached diff·candidate tree[\s\S]*고정 직후 빠른 공통 gate를 먼저 실행[\s\S]*같은 tree만 독립 리뷰/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "행동 시나리오와 독립 리뷰",
+    label: "수정 candidate의 D0 선행 delta review",
+    pattern:
+      /수정[\s\S]*명시적으로 stage[\s\S]*빠른 공통 gate를 먼저 통과[\s\S]*행동 테스트와 정본 영향 판정[\s\S]*이전·현재 tree[\s\S]*staged delta와 현재 전체 cached diff[\s\S]*별도 pass/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "행동 시나리오와 독립 리뷰",
+    label: "delta review chain의 full review fail-closed",
+    pattern:
+      /최초 전체 리뷰[\s\S]*delta review chain[\s\S]*최종 candidate[\s\S]*범위·요구사항·보안 경계[\s\S]*chain에 공백·모호함[\s\S]*새 전체 리뷰/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "문서와 검증",
+    label: "base 선택·delta 무효화·교집합 재실행",
+    pattern:
+      /현재 base→candidate[\s\S]{0,80}selectedGroups[\s\S]{0,200}이전→candidate[\s\S]{0,80}invalidatedGroups[\s\S]{0,120}selectedGroups ∩ invalidatedGroups[\s\S]{0,80}재실행/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "문서와 검증",
+    label: "retain·pending·drop partition",
+    pattern:
+      /입력이[\s\S]{0,40}그대로인 PASS는 유지[\s\S]{0,80}선택된 pending은 계속[\s\S]{0,100}선택되지 않은[\s\S]{0,80}버리고 `not-required`/,
+  },
+  {
+    file: "AGENTS.md",
+    section: "문서와 검증",
+    label: "helper 변경의 local invalidation과 owning intersection",
+    pattern:
+      /helper 자체 변경[\s\S]*전체 invalidated[\s\S]*current selection과의 교집합[\s\S]*commit-pr-regression[\s\S]*원격 CI[\s\S]*owning `commit-pr-regression`/,
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "5. 테스트와 독립 리뷰",
+    label: "D0 선행 full·delta review",
+    pattern:
+      /candidate를 명시적으로 stage[\s\S]*독립 리뷰보다 먼저[\s\S]*빠른 공통 gate[\s\S]*delta review보다 먼저 stage와 빠른 공통 gate/,
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "5. 테스트와 독립 리뷰",
+    label: "base 선택·delta 무효화·교집합 재실행",
+    pattern:
+      /현재 base→candidate[\s\S]{0,80}selectedGroups[\s\S]{0,100}이전→candidate[\s\S]{0,80}invalidatedGroups[\s\S]{0,100}선택·무효화된 완료 회귀군만 재실행/,
+  },
+  {
+    file: "CONTRIBUTING.md",
+    section: "5. 테스트와 독립 리뷰",
+    label: "retain·pending·drop partition",
+    pattern:
+      /입력이 같은 PASS는 유지[\s\S]*pending은 계속[\s\S]*선택되지 않은 군은 `not-required`로 버/,
+  },
+  {
+    file: ".agents/skills/update-product-docs/SKILL.md",
+    section: "품질 게이트 실행",
+    label: "stage→D0→최초 독립 리뷰",
+    pattern:
+      /candidate 고정 직후 빠른 공통 gate가 먼저 통과[\s\S]*최초 candidate 전체를 의미 검토/,
+  },
+  {
+    file: ".agents/skills/update-product-docs/SKILL.md",
+    section: "품질 게이트 실행",
+    label: "수정 candidate의 D0 선행 delta review",
+    pattern:
+      /수정하면[\s\S]*stage하고 빠른 공통 gate를 먼저 통과[\s\S]*D0만의 추가 수정[\s\S]*review 전에[\s\S]*이전·현재 tree[\s\S]*staged delta와 현재 전체 cached diff/,
+  },
+  {
+    file: ".agents/skills/update-product-docs/SKILL.md",
+    section: "품질 게이트 실행",
+    label: "교집합 rerun·retain·pending·drop",
+    pattern:
+      /selectedGroups ∩ invalidatedGroups[\s\S]*재실행[\s\S]*unchanged PASS는 유지[\s\S]*pending은 계속[\s\S]*unselected 증거는 버/,
+  },
+  {
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+    section: "구현 snapshot 검증",
+    label: "stage→D0→최초 독립 리뷰",
+    pattern:
+      /cached diff·candidate tree를 고정[\s\S]*빠른 공통 gate를 먼저 통과[\s\S]*검토자들에게 같은 snapshot/,
+  },
+  {
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+    section: "구현 snapshot 검증",
+    label: "수정 candidate의 D0 선행 delta review",
+    pattern:
+      /수정은[\s\S]*stage하고 빠른 공통 gate를 먼저 통과[\s\S]*이전·현재 tree[\s\S]*staged delta와 현재 전체 cached diff/,
+  },
+  {
+    file: ".agents/skills/run-github-work-item/SKILL.md",
+    section: "구현 snapshot 검증",
+    label: "base 선택·교집합 rerun·retain·pending·drop",
+    pattern:
+      /base→candidate[\s\S]*선택된 무거운 회귀군만 실행[\s\S]*selectedGroups ∩ invalidatedGroups[\s\S]*다시 실행[\s\S]*unchanged PASS는 유지[\s\S]*pending은 계속[\s\S]*unselected는 버/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "3. Candidate staging과 독립 리뷰",
+    label: "initial·delta evidence와 current index·clean 결속",
+    pattern:
+      /candidate 고정 직후 evidence helper의 `initial` 또는 `delta` 모드[\s\S]{0,120}candidate index·clean 상태[\s\S]{0,120}빠른 공통 gate를 실행/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "3. Candidate staging과 독립 리뷰",
+    label: "strict previous evidence→D0→delta review",
+    pattern:
+      /이전 evidence JSON을 정확히 소비하는 `delta`[\s\S]*evidence와 D0를 먼저 갱신[\s\S]*D0만의 추가 수정은 delta review 전에[\s\S]*이전·현재 candidate identity[\s\S]*staged delta와 현재 전체 cached diff/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "initial·delta mode와 strict previous evidence",
+    pattern:
+      /`initial`은 base tree를 파생[\s\S]*`delta`는 strict previous evidence/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "current git write-tree와 dirty input 거부",
+    pattern:
+      /현재[\s\S]{0,40}`git write-tree`에서 candidate tree를 파생[\s\S]{0,120}unstaged tracked·unmerged·[\s\S]{0,80}untracked 입력이 있으면 거부/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "strict previous 거부의 existing initial re-root",
+    pattern:
+      /schema·version[\s\S]*helper decision[\s\S]*command manifest[\s\S]*base identity 불일치[\s\S]*같은 `delta`를 반복하지[\s\S]*replace-disabled current HEAD commit을 current base로 검증[\s\S]*candidate base가 그 commit과 같을 때만 기존 `initial`로 re-root[\s\S]*current HEAD 또는 candidate base가 unknown·\s*stale이면 중단[\s\S]*검증된 current base가 이전 evidence의 base보다 우선[\s\S]*이전 heavy PASS를 모두 폐기[\s\S]*current base→candidate selection만 사용/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "evidence re-root와 review chain 분리",
+    pattern:
+      /raw tree·staged delta[\s\S]*review chain은 evidence lineage와 별개[\s\S]*candidate 범위가 넓어지지 않았고 chain이 완전[\s\S]*유지할 수[\s\S]*re-root만으로 새 전체 리뷰를 강제하지/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "review 전 D0와 review 뒤 selectedGroups",
+    pattern:
+      /evidence JSON을 만든 직후[\s\S]*독립 리뷰보다 먼저[\s\S]*빠른 공통 gate[\s\S]*독립 리뷰와 의미 영향 판정[\s\S]*selectedGroups[\s\S]*무거운 회귀군만 실행/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "4. 최종 게이트와 snapshot 결속",
+    label: "selected·invalidated partition",
+    pattern:
+      /현재 base→candidate[\s\S]{0,80}selectedGroups[\s\S]{0,100}이전→candidate[\s\S]{0,80}invalidatedGroups[\s\S]{0,120}교집합만 재실행[\s\S]{0,100}입력이 같은 PASS는 유지[\s\S]{0,80}pending은 계속[\s\S]{0,100}선택되지 않은[\s\S]{0,100}버리고 `not-required`/,
+  },
+  {
+    file: ".agents/skills/commit-work-item/SKILL.md",
+    section: "6. 커밋 후 검증과 보고",
+    label: "initial·delta evidence partition 보고",
+    pattern:
+      /initial·delta evidence JSON[\s\S]{0,120}selected·invalidated·rerun·retain·drop 회귀군과 digest/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "2. 중복 PR과 문서 영향 확인",
+    label: "recovery initial·delta current index·clean D0",
+    pattern:
+      /current index·clean 상태에 결속한[\s\S]*initial 또는 exact previous evidence 기반 delta JSON[\s\S]*빠른 공통 gate를 먼저 복구/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "2. 중복 PR과 문서 영향 확인",
+    label: "selected·invalidated partition과 helper owning scope",
+    pattern:
+      /selectedGroups ∩ invalidatedGroups[\s\S]*재실행[\s\S]*unchanged PASS는 유지[\s\S]*pending은 계속[\s\S]*unselected는 drop[\s\S]*helper 자체 변경[\s\S]*원격 CI는 owning 회귀군만 실행/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "3. 제목과 본문 작성",
+    label: "Ready pre-review D0와 review chain",
+    pattern:
+      /pre-review D0[\s\S]*최초 전체 리뷰부터 최종 candidate까지의 review chain/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/SKILL.md",
+    section: "3. 제목과 본문 작성",
+    label: "review·verification·commit·PR tree 결속",
+    pattern:
+      /review-tree=<40자리 tree OID>[\s\S]{0,180}verification-tree=<40자리 tree OID>[\s\S]{0,100}commit-tree=<40자리 tree OID>[\s\S]{0,160}pr-head-tree=<40자리 tree OID>[\s\S]{0,100}네 tree는 모두 같/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/references/pr-body-contract.md",
+    section: "4. 검증",
+    label: "각 review 전 D0와 delta inputs",
+    pattern:
+      /각 review 전에 통과한[\s\S]{0,40}D0[\s\S]{0,100}각 staged delta와 현재 전체 diff/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/references/pr-body-contract.md",
+    section: "4. 검증",
+    label: "recovery index evidence와 selected partition",
+    pattern:
+      /current index·clean 상태에 결속한[\s\S]*evidence JSON과 빠른 공통 gate를 먼저 복구[\s\S]*selectedGroups ∩ invalidatedGroups[\s\S]*unchanged PASS는 유지[\s\S]*pending은 계속[\s\S]*unselected는 drop/,
+  },
+  {
+    file: ".agents/skills/open-pull-request/references/pr-body-contract.md",
+    section: "4. 검증",
+    label: "local evidence와 remote required CI 분리",
+    pattern: /로컬 증거 재사용[\s\S]{0,80}GitHub required CI를 대신하지/,
   },
 ];
 const plannedIdDetailOwner = {
@@ -3840,6 +4418,7 @@ function validateHarnessOrchestration(file) {
       "작업 범위·경로·행동 시나리오·검증 계획",
       "PRD·Policy planned ID 수명주기",
       "이슈·Project 상태 전이·재조회·복구",
+      "로컬 gate 선택·증거 유지·무효화·delta review chain",
       "PR 쓰기·exact-head finalize·원격·로컬 정리",
       "PR의 고정 필드",
       "CI의 결정적 증거",
@@ -3858,6 +4437,10 @@ function validateHarnessOrchestration(file) {
     const issueContractOwnerRow = rows.find(
       (row) =>
         row[0] === "작업 범위·경로·행동 시나리오·검증 계획",
+    );
+    const gateEvidenceOwnerRow = rows.find(
+      (row) =>
+        row[0] === "로컬 gate 선택·증거 유지·무효화·delta review chain",
     );
     const plannedIdOwnerCell =
       "[update-product-docs](../../.agents/skills/update-product-docs/SKILL.md)";
@@ -3878,6 +4461,16 @@ function validateHarnessOrchestration(file) {
     ) {
       errors.push(
         `${file}: 작업 범위·경로·행동 시나리오·검증 계획 행은 canonical run-github-work-item 이슈 계약과 제품 추적 적용 경계에 결합되어야 합니다.`,
+      );
+    }
+    if (
+      gateEvidenceOwnerRow?.[1] !==
+        "[commit-work-item 계약](../../.agents/skills/commit-work-item/references/commit-contract.md)" ||
+      gateEvidenceOwnerRow?.[2] !==
+        "STEP 08~10의 검증 증거를 단일 owner로 라우팅"
+    ) {
+      errors.push(
+        `${file}: 로컬 gate 선택·증거 유지·무효화·delta review chain 행은 canonical commit-work-item 계약과 STEP 08~10 검증 증거 라우팅에 결합되어야 합니다.`,
       );
     }
     if (rows.length !== requiredOwners.length) {
@@ -3936,7 +4529,7 @@ function validateFinalSnapshotGateOrder(file) {
       )
     ) {
       errors.push(
-        `${file}: 최종 snapshot 검증 순서는 빠른 행동 검증→정본 의미 영향→candidate 고정→독립 리뷰→최종 저장소 게이트→commit→PR·필수 CI의 exact 7행이어야 합니다.`,
+        `${file}: 최종 snapshot 검증 순서는 빠른 행동 검증→정본 의미 영향→candidate 고정→빠른 공통 gate→독립 리뷰→선택된 무거운 회귀군→commit→PR·필수 CI의 exact 8행이어야 합니다.`,
       );
     }
 
@@ -3983,7 +4576,7 @@ function validateFinalSnapshotGateOrder(file) {
       )
     ) {
       errors.push(
-        `${file}: 실패와 증거 무효화는 tracked content 변경→환경 전용 실패·동일 tree·input→의미 영향·리뷰 증거 불완전·동일 tree·input→최종 gate 증거 불완전·동일 tree·input→candidate tree·input 불일치의 exact 5행이어야 합니다.`,
+        `${file}: 실패와 증거 무효화는 review 전 D0 실패 수정→review·heavy gate 뒤 tracked content 변경→동일 tree·input 환경 실패→의미 영향·review chain 불완전→개별 회귀군 증거 불완전→strict previous evidence 거부→base 완전 revert→공유·환경·입력 경계 변경의 exact 8행이어야 합니다.`,
       );
     }
 
@@ -4011,7 +4604,7 @@ function validateFinalSnapshotGateOrder(file) {
 function validateFinalSnapshotOwnerContracts() {
   const documents = new Map();
 
-  for (const { file, section, label, pattern } of finalSnapshotOwnerContracts) {
+  for (const { file, section, label, pattern } of incrementalGateOwnerContracts) {
     if (!isFile(file)) {
       errors.push(`최종 snapshot 계약 owner 파일이 없습니다: ${file}`);
       continue;
@@ -4049,7 +4642,7 @@ function validateFinalSnapshotOwnerContracts() {
 
     const content = maskIndentedCodeLines(
       visibleFinalSnapshotMarkdown(matchingSections[0].content),
-    );
+    ).replace(/\s+/g, " ");
     pattern.lastIndex = 0;
     if (!pattern.test(content)) {
       errors.push(
@@ -4235,6 +4828,210 @@ function stepWithExactRun(jobBlock, expectedRun) {
 
 function hasExactShellLine(runScripts, pattern) {
   return runScripts.some((script) => pattern.test(script));
+}
+
+function sameOrderedStrings(actual, expected) {
+  return (
+    actual.length === expected.length &&
+    actual.every((value, index) => value === expected[index])
+  );
+}
+
+function activeYamlJobCommands(workflowSource, jobId) {
+  return activeYamlStepBlocks(activeYamlJobBlock(workflowSource, jobId))
+    .map(yamlStepRun)
+    .filter(Boolean)
+    .flatMap((script) =>
+      script
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => line.trim()),
+    );
+}
+
+function exactMarkdownSubsection(source, heading, level) {
+  const prefix = `${"#".repeat(level)} ${heading}`;
+  const lines = source.split("\n");
+  const starts = lines.flatMap((line, index) =>
+    line === prefix ? [index] : [],
+  );
+  if (starts.length !== 1) return null;
+
+  const start = starts[0];
+  let end = lines.length;
+  const boundary = new RegExp(`^#{1,${level}}\\s+`);
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (boundary.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start + 1, end).join("\n");
+}
+
+function readCommitContractHeavyGroups(section) {
+  const lines = section.split("\n");
+  const groups = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const header = lines[index].match(
+      /^- `([^`]+)` \(`([A-Za-z][A-Za-z0-9]*)`\)$/,
+    );
+    if (!header) continue;
+
+    let cursor = index + 1;
+    while (lines[cursor] === "") cursor += 1;
+    if (lines[cursor] !== "  ```bash") {
+      groups.push({ jobId: header[1], groupId: header[2], commands: null });
+      continue;
+    }
+
+    cursor += 1;
+    const commands = [];
+    while (cursor < lines.length && lines[cursor] !== "  ```") {
+      if (!lines[cursor].startsWith("  ") || !lines[cursor].trim()) {
+        commands.push(null);
+      } else {
+        commands.push(lines[cursor].slice(2));
+      }
+      cursor += 1;
+    }
+    if (cursor >= lines.length) commands.push(null);
+    groups.push({ jobId: header[1], groupId: header[2], commands });
+    index = cursor;
+  }
+
+  return groups;
+}
+
+function validateLocalGateEvidenceContract() {
+  const file =
+    ".agents/skills/commit-work-item/references/commit-contract.md";
+  if (!isFile(file)) return;
+
+  const source = fs
+    .readFileSync(path.join(root, file), "utf8")
+    .replaceAll("\r\n", "\n");
+  const markerLines = source
+    .split("\n")
+    .filter((line) => line.includes("local-gate-evidence-contract"));
+  if (
+    markerLines.length !== 1 ||
+    markerLines[0] !== localGateEvidenceMarker
+  ) {
+    errors.push(
+      `${file}: exact local-gate-evidence-contract JSON marker가 정확히 하나 필요합니다.`,
+    );
+  }
+
+  const evidenceSection = exactMarkdownSubsection(source, "5. 검증 증거", 2);
+  if (evidenceSection === null) {
+    errors.push(`${file}: exact '## 5. 검증 증거' 구역이 필요합니다.`);
+    return;
+  }
+  if (
+    evidenceSection
+      .split("\n")
+      .filter((line) => line === localGateEvidenceMarker).length !== 1
+  ) {
+    errors.push(
+      `${file}: local-gate-evidence-contract marker는 5. 검증 증거 구역에 있어야 합니다.`,
+    );
+  }
+  const heavySection = exactMarkdownSubsection(
+    evidenceSection,
+    "5.3 무거운 회귀군",
+    3,
+  );
+  if (heavySection === null) {
+    errors.push(`${file}: exact '### 5.3 무거운 회귀군' 구역이 필요합니다.`);
+  } else {
+    const actualGroups = readCommitContractHeavyGroups(heavySection);
+    const expectedGroups = heavyRegressionGroups.map(([groupId, jobId]) => ({
+      jobId,
+      groupId,
+      commands: Array.isArray(GROUP_COMMAND_MANIFESTS[groupId])
+        ? [...GROUP_COMMAND_MANIFESTS[groupId]]
+        : [],
+    }));
+    const groupsMatch =
+      actualGroups.length === expectedGroups.length &&
+      actualGroups.every((actual, index) => {
+        const expected = expectedGroups[index];
+        return (
+          actual.jobId === expected.jobId &&
+          actual.groupId === expected.groupId &&
+          Array.isArray(actual.commands) &&
+          sameOrderedStrings(actual.commands, expected.commands)
+        );
+      });
+    if (!groupsMatch) {
+      errors.push(
+        `${file}: 5.3 무거운 회귀군의 job·group·명령 순서는 GROUP_COMMAND_MANIFESTS와 정확히 같아야 합니다.`,
+      );
+    }
+  }
+
+  const helperSection = exactMarkdownSubsection(
+    evidenceSection,
+    "5.4 Gate evidence helper",
+    3,
+  );
+  if (helperSection === null) {
+    errors.push(`${file}: exact '### 5.4 Gate evidence helper' 구역이 필요합니다.`);
+    return;
+  }
+
+  const normalized = helperSection.replace(/\s+/g, " ");
+  const schemaMatch = normalized.match(/JSON에는 (.*?)를 기록한다\./);
+  const topLevelFields = schemaMatch
+    ? [...schemaMatch[1].matchAll(/`([^`]+)`/g)].map((match) => match[1])
+    : [];
+  if (!sameOrderedStrings(topLevelFields, gateEvidenceTopLevelFields)) {
+    errors.push(
+      `${file}: evidence JSON top-level schema는 helper의 schema·version과 exact field 순서를 유지해야 합니다.`,
+    );
+  }
+
+  const groupSchemaMatch = normalized.match(
+    /각 `groups\.<camelGroup>`에는 (.*?)가 있어야 한다\./,
+  );
+  const groupFields = groupSchemaMatch
+    ? [...groupSchemaMatch[1].matchAll(/`([^`]+)`/g)].map((match) => match[1])
+    : [];
+  if (!sameOrderedStrings(groupFields, gateEvidenceGroupFields)) {
+    errors.push(
+      `${file}: evidence JSON groups.<camelGroup> schema가 불완전합니다.`,
+    );
+  }
+
+  const requiredSemantics = [
+    [
+      "initial·delta mode와 legacy 인자 거부",
+      /최초 candidate는 `initial`[\s\S]{0,100}exact previous evidence JSON[\s\S]{0,100}`delta` 모드[\s\S]{0,100}legacy base\/tree 인자는 허용하지/,
+    ],
+    [
+      "current index tree 결속",
+      /candidate tree 인자를 받지 않고 current `git write-tree`에서[\s\S]{0,80}파생[\s\S]{0,160}unstaged tracked 변경[\s\S]{0,100}unmerged entry[\s\S]{0,120}예상하지 않은 untracked[\s\S]{0,100}입력이 있으면 JSON을 만들지/,
+    ],
+    [
+      "strict previous evidence 재검증",
+      /`--previous-evidence`의 schema[\s\S]{0,120}base\/candidate identity[\s\S]{0,120}command manifest[\s\S]{0,120}base·previous·candidate projection digest[\s\S]{0,160}다시 계산해 검증[\s\S]{0,160}`candidate\.tree`를 previous tree/,
+    ],
+    [
+      "strict previous 거부의 existing initial re-root",
+      /schema·version[\s\S]{0,100}helper decision[\s\S]{0,100}command manifest[\s\S]{0,100}base identity 불일치[\s\S]{0,160}같은 `delta`를 반복하지[\s\S]{0,120}새 mode가 아니라 기존 `initial`만 사용[\s\S]{0,160}replace-disabled current HEAD commit을 current base로 검증[\s\S]{0,120}candidate base가 그 commit과 같을 때만 re-root[\s\S]{0,160}current HEAD 또는 candidate base가 unknown·\s*stale이면 중단[\s\S]{0,160}검증된 current base가 이전 evidence의 base보다 우선[\s\S]{0,160}새 initial evidence[\s\S]{0,160}이전 heavy PASS를 모두 폐기[\s\S]{0,160}current base→candidate selection만 사용/,
+    ],
+    [
+      "evidence re-root와 review chain 분리",
+      /gate evidence lineage만 새로 시작[\s\S]{0,160}raw tree·staged delta[\s\S]{0,100}review chain은 별도[\s\S]{0,160}candidate 범위가 넓어지지 않았고 chain이 완전[\s\S]{0,120}유지할 수[\s\S]{0,160}re-root 자체만으로 새 전체 리뷰를 강제하지/,
+    ],
+  ];
+  for (const [label, pattern] of requiredSemantics) {
+    if (!pattern.test(normalized)) {
+      errors.push(`${file}: local gate evidence 계약이 없습니다: ${label}`);
+    }
+  }
 }
 
 function validateAppCiContract() {
@@ -4519,6 +5316,8 @@ function validateHarnessSkillContracts() {
     ".github/workflows/validate-app-paths.test.mjs",
     ".agents/skills/update-product-docs/scripts/product-contract-ids.mjs",
     ".agents/skills/update-product-docs/scripts/product-contract-ids.test.mjs",
+    ".agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs",
+    ".agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs",
     ".agents/skills/open-pull-request/scripts/validate-finalize.mjs",
     ".agents/skills/open-pull-request/scripts/validate-finalize.test.mjs",
     ".agents/skills/open-pull-request/scripts/finalize-merge.mjs",
@@ -4535,6 +5334,53 @@ function validateHarnessSkillContracts() {
     const workflowSource = fs
       .readFileSync(path.join(root, workflowFile), "utf8")
       .replaceAll("\r\n", "\n");
+    const harnessRunScripts = activeYamlStepBlocks(
+      activeYamlJobBlock(workflowSource, "harness"),
+    )
+      .map(yamlStepRun)
+      .filter(Boolean);
+    const commitPrRunScripts = activeYamlStepBlocks(
+      activeYamlJobBlock(workflowSource, "commit-pr-regression"),
+    )
+      .map(yamlStepRun)
+      .filter(Boolean);
+    const workflowCommands = [
+      [
+        "gate evidence helper 구문 검사",
+        harnessRunScripts,
+        /^node --check \.agents\/skills\/commit-work-item\/scripts\/validate-gate-evidence\.mjs$/m,
+      ],
+      [
+        "gate evidence helper 테스트 구문 검사",
+        harnessRunScripts,
+        /^node --check \.agents\/skills\/commit-work-item\/scripts\/validate-gate-evidence\.test\.mjs$/m,
+      ],
+      [
+        "commit PR 회귀군의 gate evidence helper 테스트",
+        commitPrRunScripts,
+        /^node --test \.agents\/skills\/commit-work-item\/scripts\/validate-gate-evidence\.test\.mjs$/m,
+      ],
+    ];
+    for (const [label, runScripts, pattern] of workflowCommands) {
+      if (!hasExactShellLine(runScripts, pattern)) {
+        errors.push(
+          `${workflowFile}: 활성 workflow 명령 계약이 없습니다: ${label}`,
+        );
+      }
+    }
+    for (const [groupId, jobId] of heavyRegressionGroups) {
+      const expectedCommands = GROUP_COMMAND_MANIFESTS[groupId];
+      const actualCommands = activeYamlJobCommands(workflowSource, jobId);
+      if (
+        !Array.isArray(expectedCommands) ||
+        !sameOrderedStrings(actualCommands, expectedCommands)
+      ) {
+        errors.push(
+          `${workflowFile}: '${jobId}' 활성 run 명령은 GROUP_COMMAND_MANIFESTS.${groupId}와 정확한 순서로 같아야 합니다.`,
+        );
+      }
+    }
+
     const validateBlock = activeYamlJobBlock(workflowSource, "validate");
     const aggregateTerms = [
       [
@@ -4598,6 +5444,7 @@ function validateHarnessSkillContracts() {
   }
 
   validateAppCiContract();
+  validateLocalGateEvidenceContract();
 
   const contracts = [
     {

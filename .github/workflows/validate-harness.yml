@@ -87,6 +87,8 @@ jobs:
           node --check .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
           node --check .agents/skills/commit-work-item/scripts/validate-commit-paths.mjs
           node --check .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
+          node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.mjs
+          node --check .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs
           node --check .agents/skills/open-pull-request/scripts/validate-pr-body.mjs
           node --check .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
           node --check .agents/skills/open-pull-request/scripts/validate-finalize.mjs
@@ -238,6 +240,7 @@ jobs:
         run: |
           node --test .agents/skills/commit-work-item/scripts/validate-commit-message.test.mjs
           node --test .agents/skills/commit-work-item/scripts/validate-commit-paths.test.mjs
+          node --test .agents/skills/commit-work-item/scripts/validate-gate-evidence.test.mjs
           node --test .agents/skills/open-pull-request/scripts/validate-pr-body.test.mjs
 
   finalize-regression:
