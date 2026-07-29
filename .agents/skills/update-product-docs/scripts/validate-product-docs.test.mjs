@@ -25,9 +25,14 @@ const architectureFiles = [
   "docs/architecture/05_storage_and_security.md",
 ];
 const architectureDetailFiles = architectureFiles.slice(1);
+const harnessGuideFile = "docs/development/01_harness_guide.md";
+const testingStandardFile = "docs/development/02_testing_standard.md";
+const validationCiFlowFile =
+  "docs/development/03_validation_ci_flow.md";
 const developmentFiles = [
-  "docs/development/01_harness_guide.md",
-  "docs/development/02_testing_standard.md",
+  harnessGuideFile,
+  testingStandardFile,
+  validationCiFlowFile,
 ];
 const harnessRoutingDocuments = [
   {
@@ -39,7 +44,7 @@ const harnessRoutingDocuments = [
     section: "8. 병합과 정리",
   },
   {
-    file: developmentFiles[0],
+    file: harnessGuideFile,
     section: "규칙 소유와 링크",
   },
 ];
@@ -71,7 +76,7 @@ const plannedIdRoutingDocuments = [
     section: "4. 개발 템플릿",
   },
   {
-    file: developmentFiles[0],
+    file: harnessGuideFile,
     section: "규칙 소유와 링크",
   },
 ];
@@ -177,7 +182,7 @@ const finalSnapshotOrderFixture = [
   "| 2 | 정본 의미 영향 | 독립 리뷰 전에 PRD·Policy·Architecture 의미 영향과 이슈 경로를 판정하고 필요한 정본의 누락·충돌·금지 경로가 있으면 중단한다. |",
   "| 3 | candidate 고정 | clean 독립 worktree에서 검토한 경로만 명시적으로 stage하고 cached diff·candidate tree를 고정하며 unstaged tracked 변경과 예상하지 않은 untracked 입력이 없어야 한다. |",
   "| 4 | 빠른 공통 gate | candidate를 고정한 직후 index·clean 상태에 결속해 다섯 D0 gate를 실행한다. D0만의 수정은 다시 stage·고정·D0한 뒤 review pass를 소비하지 않고 진행한다. tree가 유지되면 이 증거가 최종 증거다. |",
-  "| 5 | 독립 리뷰 | D0를 통과한 최초 cached diff·candidate tree를 위험도별 reviewer가 검토한다. 수정하면 stage→D0 뒤 행동 테스트·정본 의미 영향 판정과 이전·현재 tree, staged delta·현재 전체 diff의 delta review를 수행한다. 범위·요구사항·보안 경계 확대나 chain 공백·모호함에는 새 전체 리뷰가 필요하다. |",
+  "| 5 | 독립 리뷰 | D0를 통과한 같은 cached diff·candidate tree를 [독립 리뷰 표준](./01_harness_guide.md#독립-리뷰-표준)에 넘긴다. 승인된 같은 candidate만 다음 gate로 인계한다. |",
   "| 6 | 선택된 무거운 회귀군 | 현재 base→candidate의 `selectedGroups`만 실행한다. 수정 뒤에는 이전 evidence JSON을 delta 입력으로 사용해 `selectedGroups ∩ invalidatedGroups`만 재실행하고, 선택된 unchanged PASS는 유지하며 pending은 계속하고 unselected는 버린다. |",
   "| 7 | commit | candidate tree와 commit tree가 같고 증거가 완전하면 로컬 게이트를 반복하지 않고 기존 증거를 인계한다. |",
   "| 8 | PR·필수 CI | commit tree와 PR head tree가 같을 때 로컬 증거를 재사용하되 원격 required CI는 생략하지 않는다. |",
@@ -191,11 +196,21 @@ const finalSnapshotRecoveryFixture = [
   "| review 전 D0 실패 수정 | review pass 없음, 이전 D0 폐기 | 즉시 명시적으로 stage해 새 candidate를 고정하고 D0부터 다시 실행한다. |",
   "| review·heavy gate 뒤 tracked content 변경 | 이전 전체 리뷰와 선택된 unchanged PASS는 조건부 유지 | 즉시 stage·D0한 뒤 필요한 행동 테스트·의미 영향 판정과 delta review를 수행한다. 선택·무효화된 완료 회귀군만 재실행하고 선택된 pending을 계속한다. |",
   "| 환경 전용 실패·동일 tree·input | review 증거 유지, 실패 gate 미완료 | 원인과 동일 tree·input 근거를 기록하고 새 명령을 한 번만 실행한다. 자동 반복하지 않는다. |",
-  "| 의미 영향·review chain 불완전 | review 증거 재사용 거부 | 필요한 의미 영향 판정과 delta review부터 복구하며, 범위 확대나 chain 공백·모호함이면 새 전체 리뷰를 수행한다. |",
+  "| 의미 영향·review chain 불완전 | review 증거 재사용 거부 | [독립 리뷰 표준](./01_harness_guide.md#독립-리뷰-표준)이 소유한 복구 판정을 완료하고 승인된 같은 candidate에서 gate 흐름을 재개한다. |",
   "| 개별 회귀군 증거 불완전 | 해당 회귀군 증거만 재사용 거부 | exact candidate의 기존 D0가 유효하면 helper가 선택한 해당 회귀군만 실행한다. |",
   "| strict previous evidence 거부 | previous evidence와 이전 heavy PASS를 폐기하되, candidate 범위가 넓어지지 않은 완전한 raw tree·delta review chain은 유지 가능 | 같은 delta를 반복하지 않는다. replace-disabled current HEAD commit을 current base로 검증하고 candidate base가 같을 때만 기존 `initial`로 re-root한다. current HEAD 또는 candidate base가 unknown·stale이면 중단하며, 이전 evidence의 base 대신 current base→candidate selection만 사용해 새 evidence와 D0를 만든다. |",
   "| current candidate가 base로 완전 revert | 이전 무거운 회귀군 증거 drop | `selectedGroups`가 비므로 D0 뒤 무거운 회귀군 없이 진행한다. |",
   "| 공유 계약·classifier·입력 manifest, 환경·미선언 입력 변경 또는 영향 불명 | 로컬 무거운 회귀군 증거 모두 무효 | D0 뒤 current selection이 전체인 fail-closed 결과에서는 네 군을 모두 실행한다. helper 자체 변경은 로컬 네 군을 invalidated 처리하되 owning current selection과의 교집합만 실행하고, 원격 CI도 owning 회귀군만 실행한다. |",
+  "",
+];
+const independentReviewOwnerFixture = [
+  "## 검증 게이트와 CI",
+  "",
+  "[검증 게이트와 CI 흐름](./03_validation_ci_flow.md)에서 설명한다.",
+  "",
+  "## 독립 리뷰 표준",
+  "",
+  "리뷰 역할과 반복 기준의 owner 구역이다.",
   "",
 ];
 const updateProductDocsFixtureContract = [
@@ -403,6 +418,7 @@ function createFixture() {
       "[시스템 아키텍처](docs/architecture/README.md)",
       "[개발 하네스 가이드](docs/development/01_harness_guide.md)",
       "[테스트 표준](docs/development/02_testing_standard.md)",
+      "[검증 게이트와 CI 흐름](docs/development/03_validation_ci_flow.md)",
       "AGENTS.md",
       "CONTRIBUTING.md",
       ".agents/skills/update-product-docs/SKILL.md",
@@ -593,7 +609,7 @@ function createFixture() {
   );
   write(
     root,
-    developmentFiles[0],
+    harnessGuideFile,
     [
       "# 개발 하네스 가이드",
       "",
@@ -602,8 +618,6 @@ function createFixture() {
       ...developmentOverview,
       ...harnessRouting,
       ...harnessOwnership,
-      ...finalSnapshotOrderFixture,
-      ...finalSnapshotRecoveryFixture,
       ...Array.from({ length: 11 }, (_, index) => {
         const number = String(index + 1).padStart(2, "0");
         const projectCondition =
@@ -622,11 +636,12 @@ function createFixture() {
           "",
         ].join("\n");
       }),
+      ...independentReviewOwnerFixture,
     ].join("\n"),
   );
   write(
     root,
-    developmentFiles[1],
+    testingStandardFile,
     [
       "# 테스트 표준",
       "",
@@ -634,6 +649,37 @@ function createFixture() {
       "## 테스트 계층",
       "",
       "요구사항에 맞는 가장 낮은 비용의 테스트 계층을 선택한다.",
+      "",
+    ].join("\n"),
+  );
+  write(
+    root,
+    validationCiFlowFile,
+    [
+      "# 검증 게이트와 CI 흐름",
+      "",
+      "고정된 candidate에 필요한 검증만 실행하는 사람용 안내다.",
+      "",
+      ...developmentOverview,
+      "## 문서 경계와 정본",
+      "",
+      "| 질문 | 보는 곳 |",
+      "|---|---|",
+      "| 전체 11단계 | [개발 하네스 가이드](./01_harness_guide.md) |",
+      "| 독립 리뷰 | [독립 리뷰 표준](./01_harness_guide.md#독립-리뷰-표준) |",
+      "| gate 계약 | [commit-work-item 계약](../../.agents/skills/commit-work-item/references/commit-contract.md) |",
+      "| 원격 실행 | [validate workflow](../../.github/workflows/validate-harness.yml), [app-test workflow](../../.github/workflows/app-ci.yml), [pr-metadata workflow](../../.github/workflows/validate-pr-metadata.yml) |",
+      "| 경로 선택 | [canonical classifier](../../.github/workflows/validate-harness-paths.mjs) |",
+      "",
+      "## 변경 경로별 CI 회귀 선택",
+      "",
+      "canonical classifier가 영향 경로만 선택한다.",
+      "",
+      ...finalSnapshotOrderFixture,
+      ...finalSnapshotRecoveryFixture,
+      "## 원격 required CI",
+      "",
+      "세 required check의 결정적 결론을 확인한다.",
       "",
     ].join("\n"),
   );
@@ -937,6 +983,11 @@ function createFixture() {
       "",
     ].join("\n"),
   );
+  write(
+    root,
+    ".github/workflows/validate-pr-metadata.yml",
+    "name: fixture PR metadata\n",
+  );
 
   write(
     root,
@@ -1109,7 +1160,7 @@ test("세 자리 문서·계약 ID를 허용한다", () => {
   });
 });
 
-test("필수 개발 표준 문서 두 개와 지정된 디렉터리 구성을 요구한다", () => {
+test("필수 개발 표준 문서와 지정된 디렉터리 구성을 요구한다", () => {
   for (const file of developmentFiles) {
     withFixture((root) => {
       fs.unlinkSync(path.join(root, file));
@@ -1128,7 +1179,7 @@ test("필수 개발 표준 문서 두 개와 지정된 디렉터리 구성을 �
     assert.equal(result.status, 1);
     assert.match(
       result.stderr,
-      /지정된 두 문서만.*docs\/development\/README\.md/,
+      /지정된 개발 표준 문서만.*docs\/development\/README\.md/,
     );
   });
 });
@@ -1171,7 +1222,7 @@ test("개발 표준 문서는 첫 H2의 첫 자료로 Mermaid flowchart를 요�
 
   for (const { replace, replacement, message } of cases) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[1]);
+      const target = path.join(root, testingStandardFile);
       fs.writeFileSync(
         target,
         fs.readFileSync(target, "utf8").replace(replace, replacement),
@@ -1201,7 +1252,7 @@ test("개발 표준 Mermaid 직후에는 direct bullet 요약 3~5개가 필요�
 
   for (const replacement of replacements) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[1]);
+      const target = path.join(root, testingStandardFile);
       fs.writeFileSync(
         target,
         fs
@@ -1242,7 +1293,7 @@ test("하네스 가이드는 STEP 01~11을 각각 한 번 정확한 순서로 �
 
   for (const { mutate, messages } of cases) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, harnessGuideFile);
       fs.writeFileSync(target, mutate(fs.readFileSync(target, "utf8")));
       const result = runValidator(root);
       assert.equal(result.status, 1);
@@ -1279,7 +1330,7 @@ test("각 STEP은 네 direct 필드를 하나씩 비어 있지 않게 요구한�
 
   for (const { replacement, message } of cases) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, harnessGuideFile);
       fs.writeFileSync(
         target,
         fs.readFileSync(target, "utf8").replace(field, replacement),
@@ -1293,7 +1344,7 @@ test("각 STEP은 네 direct 필드를 하나씩 비어 있지 않게 요구한�
 
   for (const fieldName of harnessFields) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, harnessGuideFile);
       const content = fs
         .readFileSync(target, "utf8")
         .replace(
@@ -1319,7 +1370,7 @@ test("STEP에는 지정된 네 direct item 외의 자료를 둘 수 없다", () 
     `${field}\n\n\`\`\`text\n별도 fenced 자료\n\`\`\``,
   ]) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, harnessGuideFile);
       fs.writeFileSync(
         target,
         fs.readFileSync(target, "utf8").replace(field, replacement),
@@ -1333,7 +1384,7 @@ test("STEP에는 지정된 네 direct item 외의 자료를 둘 수 없다", () 
 
 test("parent list가 없는 1~3칸 들여쓰기 STEP bullet은 top-level로 허용한다", () => {
   withFixture((root) => {
-    const target = path.join(root, developmentFiles[0]);
+    const target = path.join(root, harnessGuideFile);
     const content = fs.readFileSync(target, "utf8").replace(
       /(## STEP 01\.[^\n]*\n)([\s\S]*?)(?=## STEP 02\.)/,
       (_, heading, section) =>
@@ -1349,6 +1400,112 @@ test("최종 snapshot 검증 순서와 recovery 표의 정상 fixture를 허용�
   withFixture((root) => {
     const result = runValidator(root);
     assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("03/01 owner 경계를 보호한다", () => {
+  const requiredSections = [
+    "문서 경계와 정본",
+    "변경 경로별 CI 회귀 선택",
+    "최종 snapshot 검증 순서",
+    "실패와 증거 무효화",
+    "원격 required CI",
+  ];
+  withFixture((root) => {
+    const target = path.join(root, validationCiFlowFile);
+    let content = fs.readFileSync(target, "utf8");
+    for (const section of requiredSections) {
+      const source = `## ${section}`;
+      assert.ok(content.includes(source), source);
+      content = content.replace(source, `## 누락된 ${section}`);
+    }
+    fs.writeFileSync(target, content);
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    for (const section of requiredSections) {
+      assert.match(
+        result.stderr,
+        new RegExp(`검증·CI owner 구역.*${section}`),
+      );
+    }
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, validationCiFlowFile);
+    const content = fs.readFileSync(target, "utf8");
+    const source =
+      "[commit-work-item 계약](../../.agents/skills/commit-work-item/references/commit-contract.md)";
+    assert.ok(content.includes(source));
+    fs.writeFileSync(
+      target,
+      content.replace(
+        source,
+        "[commit-work-item](../../.agents/skills/commit-work-item/SKILL.md)",
+      ),
+    );
+
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /문서 경계와 정본.*canonical owner 링크.*commit-work-item 계약/,
+    );
+  });
+
+  const movedSections = [
+    "변경 경로별 CI 회귀 선택",
+    "최종 snapshot 검증 순서",
+    "실패와 증거 무효화",
+  ];
+  withFixture((root) => {
+    const target = path.join(root, harnessGuideFile);
+    fs.appendFileSync(
+      target,
+      movedSections
+        .map((section) => `\n## ${section}\n\n중복 계약\n`)
+        .join(""),
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    for (const section of movedSections) {
+      assert.match(
+        result.stderr,
+        new RegExp(`${section}.*03_validation_ci_flow\\.md.*다시 정의`),
+      );
+    }
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, harnessGuideFile);
+    const content = fs.readFileSync(target, "utf8");
+    fs.writeFileSync(
+      target,
+      content.replace("## 독립 리뷰 표준", "## 독립 검토"),
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /01 owner 구역.*독립 리뷰 표준/,
+    );
+  });
+
+  withFixture((root) => {
+    const target = path.join(root, harnessGuideFile);
+    const content = fs.readFileSync(target, "utf8");
+    const source =
+      "[검증 게이트와 CI 흐름](./03_validation_ci_flow.md)";
+    assert.ok(content.includes(source));
+    fs.writeFileSync(
+      target,
+      content.replace(source, "[검증 게이트와 CI 흐름](./02_testing_standard.md)"),
+    );
+    const result = runValidator(root);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /검증 게이트와 CI.*canonical owner 링크.*검증 게이트와 CI 흐름/,
+    );
   });
 });
 
@@ -1562,7 +1719,7 @@ test("최종 snapshot은 D0→독립 리뷰→선택 회귀군 순서를 고정�
     assert.ok(first);
     assert.ok(second);
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, validationCiFlowFile);
       const content = fs.readFileSync(target, "utf8");
       fs.writeFileSync(
         target,
@@ -1591,19 +1748,21 @@ test("최종 snapshot 표는 D0 선행과 evidence partition을 요구한다", (
       message: /D0-only 수정은 review pass 미소비/,
     },
     {
-      source: "D0를 통과한 최초 cached diff·candidate tree",
-      replacement: "D0 전 최초 cached diff·candidate tree",
-      message: /D0 뒤 최초 candidate 리뷰/,
+      source: "D0를 통과한 같은 cached diff·candidate tree",
+      replacement: "D0 전 다른 candidate 요약",
+      message: /동일 candidate의 독립 리뷰 owner 인계/,
     },
     {
-      source: "stage→D0 뒤 행동 테스트·정본 의미 영향 판정과 이전·현재 tree, staged delta·현재 전체 diff",
-      replacement: "현재 tree와 수정 요약",
-      message: /수정 뒤 stage→D0와 delta review/,
+      source:
+        "D0를 통과한 같은 cached diff·candidate tree를 [독립 리뷰 표준](./01_harness_guide.md#독립-리뷰-표준)",
+      replacement:
+        "D0를 통과한 같은 cached diff·candidate tree를 [독립 리뷰 표준](./01_harness_guide.md)",
+      message: /독립 리뷰.*canonical owner 링크|canonical owner 링크.*독립 리뷰/,
     },
     {
-      source: "범위·요구사항·보안 경계 확대나 chain 공백·모호함",
-      replacement: "작은 수정",
-      message: /delta review chain의 전체 리뷰 fallback/,
+      source: "승인된 같은 candidate만 다음 gate로 인계",
+      replacement: "리뷰 요약만 다음 gate로 인계",
+      message: /동일 candidate의 독립 리뷰 owner 인계/,
     },
     {
       source: "현재 base→candidate의 `selectedGroups`만 실행",
@@ -1629,7 +1788,7 @@ test("최종 snapshot 표는 D0 선행과 evidence partition을 요구한다", (
 
   for (const { source, replacement, message } of cases) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, validationCiFlowFile);
       const content = fs.readFileSync(target, "utf8");
       assert.ok(content.includes(source), source);
       const mutated = content.replace(source, replacement);
@@ -1659,7 +1818,7 @@ test("최종 snapshot 표는 숨긴 H2와 비가시 계약 cell을 거부한다"
 
   for (const [opening, closing] of hiddenSectionWrappers) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, validationCiFlowFile);
       const content = fs.readFileSync(target, "utf8");
       fs.writeFileSync(
         target,
@@ -1693,7 +1852,7 @@ test("최종 snapshot 표는 숨긴 H2와 비가시 계약 cell을 거부한다"
 
   for (const replacement of replacements) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, validationCiFlowFile);
       const content = fs.readFileSync(target, "utf8");
       assert.ok(content.includes(contract));
       fs.writeFileSync(
@@ -1711,7 +1870,7 @@ test("최종 snapshot 표는 숨긴 H2와 비가시 계약 cell을 거부한다"
   }
 
   withFixture((root) => {
-    const target = path.join(root, developmentFiles[0]);
+    const target = path.join(root, validationCiFlowFile);
     const content = fs.readFileSync(target, "utf8");
     const recoveryContract =
       "D0 뒤 current selection이 전체인 fail-closed 결과에서는 네 군을 모두 실행한다.";
@@ -1759,7 +1918,7 @@ test("D0·review 이후 content 변경과 환경 실패는 서로 다른 recover
 
   for (const { source, replacement, message } of cases) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, validationCiFlowFile);
       const content = fs.readFileSync(target, "utf8");
       assert.ok(content.includes(source), source);
       const mutated = content.replace(source, replacement);
@@ -1786,9 +1945,17 @@ test("local evidence 재사용은 연속 tree 결속과 증분 recovery 경계�
     },
     {
       source:
-        "필요한 의미 영향 판정과 delta review부터 복구하며, 범위 확대나 chain 공백·모호함이면 새 전체 리뷰를 수행한다.",
+        "[독립 리뷰 표준](./01_harness_guide.md#독립-리뷰-표준)이 소유한 복구 판정을 완료하고 승인된 같은 candidate에서 gate 흐름을 재개한다.",
       replacement: "기존 review 증거를 그대로 사용한다.",
       message: /의미 영향·review chain 불완전.*재진입 계약이 불완전/,
+    },
+    {
+      source:
+        "review 증거 재사용 거부 | [독립 리뷰 표준](./01_harness_guide.md#독립-리뷰-표준)",
+      replacement:
+        "review 증거 재사용 거부 | [독립 리뷰 표준](./01_harness_guide.md)",
+      message:
+        /의미 영향·review chain 불완전.*canonical owner 링크/,
     },
     {
       source:
@@ -1819,7 +1986,7 @@ test("local evidence 재사용은 연속 tree 결속과 증분 recovery 경계�
 
   for (const { source, replacement, message } of cases) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, validationCiFlowFile);
       const content = fs.readFileSync(target, "utf8");
       assert.ok(content.includes(source), source);
       const mutated = content.replace(source, replacement);
@@ -2060,7 +2227,7 @@ test("최종 snapshot owner 계약은 비가시·비규범 source로 대체할 �
 
 test("하네스 가이드는 요청 라우팅과 단일 규칙 소유 인덱스를 요구한다", () => {
   withFixture((root) => {
-    const target = path.join(root, developmentFiles[0]);
+    const target = path.join(root, harnessGuideFile);
     fs.writeFileSync(
       target,
       fs
@@ -2073,7 +2240,7 @@ test("하네스 가이드는 요청 라우팅과 단일 규칙 소유 인덱스�
   });
 
   withFixture((root) => {
-    const target = path.join(root, developmentFiles[0]);
+    const target = path.join(root, harnessGuideFile);
     fs.writeFileSync(
       target,
       fs
@@ -2086,7 +2253,7 @@ test("하네스 가이드는 요청 라우팅과 단일 규칙 소유 인덱스�
   });
 
   withFixture((root) => {
-    const target = path.join(root, developmentFiles[0]);
+    const target = path.join(root, harnessGuideFile);
     fs.writeFileSync(
       target,
       fs
@@ -2102,7 +2269,7 @@ test("하네스 가이드는 요청 라우팅과 단일 규칙 소유 인덱스�
   });
 
   withFixture((root) => {
-    const target = path.join(root, developmentFiles[0]);
+    const target = path.join(root, harnessGuideFile);
     fs.writeFileSync(
       target,
       fs
@@ -3092,7 +3259,7 @@ test("하네스 소유 표는 planned ID 수명주기 owner 행을 정확히 하
     "| PRD·Policy planned ID 수명주기 | [update-product-docs](../../.agents/skills/update-product-docs/SKILL.md) | 새 ID 요청을 단일 owner로 라우팅 |";
   for (const replacement of ["", `${row}\n${row}`]) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, harnessGuideFile);
       const content = fs.readFileSync(target, "utf8");
       assert.ok(content.includes(row), "fixture owner row missing");
       fs.writeFileSync(target, content.replace(row, replacement));
@@ -3118,7 +3285,7 @@ test("하네스 소유 표는 로컬 gate evidence owner를 commit 계약에 결
     ),
   ]) {
     withFixture((root) => {
-      const target = path.join(root, developmentFiles[0]);
+      const target = path.join(root, harnessGuideFile);
       const content = fs.readFileSync(target, "utf8");
       assert.ok(content.includes(row), "fixture gate evidence owner row missing");
       fs.writeFileSync(target, content.replace(row, replacement));
@@ -3135,7 +3302,7 @@ test("하네스 소유 표는 로컬 gate evidence owner를 commit 계약에 결
 
 test("planned ID 수명주기 owner 링크는 소유 표의 정확한 행에 결합되어야 한다", () => {
   withFixture((root) => {
-    const target = path.join(root, developmentFiles[0]);
+    const target = path.join(root, harnessGuideFile);
     const content = fs.readFileSync(target, "utf8");
     const plannedRow =
       "| PRD·Policy planned ID 수명주기 | [update-product-docs](../../.agents/skills/update-product-docs/SKILL.md) | 새 ID 요청을 단일 owner로 라우팅 |";
@@ -3165,7 +3332,7 @@ test("planned ID 수명주기 owner 링크는 소유 표의 정확한 행에 결
 
 test("이슈 추적 적용 경계는 run-github-work-item 이슈 계약 행에 결합되어야 한다", () => {
   withFixture((root) => {
-    const target = path.join(root, developmentFiles[0]);
+    const target = path.join(root, harnessGuideFile);
     const content = fs.readFileSync(target, "utf8");
     const issueRow =
       "| 작업 범위·경로·행동 시나리오·검증 계획 | [run-github-work-item 이슈 계약](../../.agents/skills/run-github-work-item/references/issue-contract.md) | 이슈 양식·제품 추적 적용 경계·구현·리뷰 입력을 단일 계약으로 라우팅 |";
@@ -5407,7 +5574,7 @@ test("앱 aggregate 검증은 주석을 거부하고 job 순서에는 독립적�
   });
 });
 
-test("README는 두 개발 표준 문서를 visible link로 연결해야 한다", () => {
+test("README는 개발 표준 문서를 visible link로 연결해야 한다", () => {
   for (const file of developmentFiles) {
     withFixture((root) => {
       const target = path.join(root, "README.md");

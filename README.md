@@ -96,6 +96,9 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
   병합 뒤 완료까지의 11단계와 독립 리뷰 계약을 잇는 orchestrator 인덱스입니다.
 - [BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)은 제품 정본을
   행동 시나리오, 결정적 테스트와 회귀 증거로 전환하는 기준을 설명합니다.
+- [검증 게이트와 CI 흐름](docs/development/03_validation_ci_flow.md)은 구현 중
+  반복 검증을 줄이는 candidate 고정, 증거 재사용과 경로별 원격 CI 경계를
+  설명합니다.
 
 ## 앱 빌드와 검증
 

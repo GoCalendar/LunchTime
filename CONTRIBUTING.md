@@ -166,6 +166,8 @@ review chain이 최종 candidate를 모두 덮으면 최종 review tree로 인�
   없으면 로컬 무거운 회귀군 전체를 다시 실행합니다. helper 자체 변경은
   로컬에서는 전체 invalidated 처리하되 current selection과의 교집합인
   `commit-pr-regression`만 실행하고, 원격 CI도 owning 회귀군만 실행합니다.
+  사람이 읽는 gate·CI 재진입 흐름은
+  [검증 게이트와 CI 흐름](docs/development/03_validation_ci_flow.md)을 따릅니다.
   상세 분류와 증거 재사용 계약은
   [`commit-work-item`](.agents/skills/commit-work-item/references/commit-contract.md)이
   소유합니다.
