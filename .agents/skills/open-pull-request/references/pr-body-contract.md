@@ -1,7 +1,7 @@
 # LunchTime PR 본문 계약
 
 PR 본문은 사람에게 읽히는 인계 문서이자 다음 AI가 구조적으로 읽는 입력이다.
-템플릿, Draft와 Ready 본문은 `<!-- lunchtime-pr:v1 -->` marker와 정확히
+템플릿, Draft와 Ready 본문은 `<!-- lunchtime-pr:v2 -->` marker와 정확히
 다섯 개의 H2를 유지한다.
 
 ## 상태별 검증
@@ -9,12 +9,12 @@ PR 본문은 사람에게 읽히는 인계 문서이자 다음 AI가 구조적�
 | 상태 | 허용 범위 |
 | --- | --- |
 | 템플릿 | 안내 placeholder를 허용하지만 구조와 필드 및 `독립 리뷰` 행은 완전해야 함 |
-| Draft | 실제 이슈·작업 키 필수, 사실인 실패·미실행·결정 필요 허용 |
-| Ready | placeholder, 실패·미실행, 결정 필요를 허용하지 않고 `독립 리뷰` 통과 증거 필수 |
+| Draft | 실제 종료 이슈 필수, 사실인 실패·미실행·결정 필요 허용 |
+| Ready | placeholder, 실패·미실행, 결정 필요를 허용하지 않고 `독립 리뷰` 생략 또는 단일 round 완료 증거 필수 |
 
 validator의 종료 코드 `0`은 통과, `1`은 계약 위반, `2`는 사용법·입력 오류다.
-구조 검증은 설명의 사실성이나 실제 diff 일치까지 보장하지 않으므로 별도
-리뷰가 필요하다.
+구조 검증은 설명의 사실성이나 실제 diff 일치까지 보장하지 않는다. 관련
+테스트와 필요할 때 한 번 수행하는 독립 리뷰가 의미 검증을 맡는다.
 
 ## 고정 구조
 
@@ -39,15 +39,13 @@ section은 다음 형태로 감싼다.
 
 ## 1. 연결된 이슈
 
-- `- 종료: #N`은 종료할 이슈를 사람이 빠르게 확인하는 메타데이터다.
 - `Closes #N`은 GitHub가 종료 이슈로 인식할 수 있도록 접두어·bullet·인용
   없이 독립된 줄에 두며, 본문 전체에 정확히 한 번만 사용한다.
-- 종료 메타데이터와 독립된 `Closes #N`의 이슈 번호는 일치해야 한다.
-- `작업 키`는 이슈의 `LT-NNN`을 사용한다. 별도 작업 키가 없는 일반 이슈는
-  `#N`을 사용한다.
-- 예상 이슈, 종료 메타데이터, 브랜치의 이슈 번호, 독립된 `Closes #N`,
-  `#N` 작업 키와 제목의 `#N` fallback은 모두 일치해야 한다. `LT-NNN`은
-  GitHub 이슈 번호에서 추측하지 않는다.
+- 종료 이슈를 `- 종료`나 `작업 키`로 다시 쓰지 않는다. 예상 이슈,
+  브랜치의 이슈 번호와 독립된 `Closes #N`이 모두 일치해야 한다.
+- 제목이 `#N` fallback을 사용하면 그 번호도 `Closes #N`과 일치해야 한다.
+  `LT-NNN`은 커밋 계약이 확인한 작업 키를 사용하고 GitHub 이슈 번호에서
+  추측하지 않는다.
 
 ## 2. 변경 요약
 
@@ -75,55 +73,29 @@ section은 다음 형태로 감싼다.
 
 `대상 | 명령·확인 | 결과 | 증거` 표를 사용한다.
 
-- 결과 값은 `통과`, `실패`, `미실행` 중 하나다.
+- 일반 검증 결과는 `통과`, `실패`, `미실행` 중 하나다. `생략`은
+  `독립 리뷰` 행에서만 사용할 수 있다.
 - 명령은 재실행 가능한 저장소 상대 명령, 수동 확인은 관찰 방법을 적는다.
 - 증거는 테스트 수·핵심 관찰·CI URL처럼 짧고 마스킹된 값만 남긴다.
 - 원시 로그, 인증 정보, 개인 데이터, 내부 네트워크 값과 로컬 절대 경로를
   붙이지 않는다.
-- Ready에는 `통과` 행만 허용한다.
+- Ready의 일반 검증에는 `통과` 행만 허용한다.
 - `대상`이 정확히 `독립 리뷰`인 행을 템플릿, Draft와 Ready에 각각 정확히
   하나 유지한다.
-- Draft의 `독립 리뷰`는 실제 상태에 따라 `통과`, `실패` 또는 `미실행`을
-  기록한다. 실패·미실행이면 현재 발견 사항이나 blocker, 책임 주체와 재개
-  조건을 증거에 사실대로 적는다.
-- Ready의 `독립 리뷰`는 `통과`여야 한다. 증거만으로 최초 전체 리뷰부터
-  최종 candidate까지 끊기지 않은 delta review chain, 각 review 전에 통과한
-  D0, 원본 요구사항 위치, 각 staged delta와 현재 전체 diff, 테스트 결과,
-  검토자 수·전문 관점과 P0~P2 발견·해소 결과를 재구성할 수 있어야 한다.
-- 같은 기존 검증 표의 증거 셀에서 pre-commit review chain부터 PR까지의
-  연속 결속을 `review-base=<40자리 commit OID>`,
-  `review-tree=<40자리 tree OID>`,
-  `verification-tree=<40자리 tree OID>`,
-  `commit-tree=<40자리 tree OID>`,
-  `pr-head-tree=<40자리 tree OID>`로 기록한다. review-base는 검토한 cached
-  diff의 base이고 review-tree는 chain이 덮는 최종 candidate다.
-  verification-tree는 그 candidate에서 review 전에 실행한 빠른 공통 gate와
-  실행했거나 유효하게 유지한 무거운 회귀군 증거를 합친 결론이다. 네 tree는
-  모두 같아야 하며 새 필수 행이나 템플릿 필드를 추가하지 않는다.
-- Ready의 snapshot은 `review-head=<40자리 SHA>`를 정확히 한 번 포함하고
-  현재 PR head와 완전히 일치해야 한다. 이 commit의 tree가 review tree와
-  같다는 위 연속 증거가 있어야 pre-commit 리뷰를 current head에 결속할 수
-  있다. 짧은 prefix나 CI 등 다른 용도의 SHA는 review-head를 대신하지 않는다.
-  Ready validator와 finalize는 GitHub에서 다시 읽은 exact head에 이 증거를
-  대조한다. head나 tree가 바뀌면 `commit-work-item`의 이전·현재 base/tree와
-  회귀군별 명령·input projection digest 판정을 거치지 않은 리뷰·gate
-  증거를 재사용하지 않는다.
-- 의미 영향·review chain·gate evidence ledger가 완전할 때만 commit과 PR
-  단계에서 로컬 증거를 재사용한다. 의미 영향이나 review chain이
-  불완전하면 필요한 delta review부터 복구하고, 범위·요구사항·보안 경계
-  확대나 chain 공백·모호함에는 새 전체 리뷰를 수행한다. gate 결과만
-  불완전하면 동일한 clean recovery worktree에 commit parent 기준 exact
-  cached diff·candidate tree를 재구성해 current index·clean 상태에 결속한
-  evidence JSON과 빠른 공통 gate를 먼저 복구한다. current
-  `selectedGroups ∩ invalidatedGroups`만 재실행하고 selected unchanged PASS는
-  유지하며 pending은 계속하고 unselected는 drop한다. base까지 완전히
-  revert하면 무거운 회귀군을 실행하지 않는다. 공유 계약·classifier·입력
-  manifest, base·환경·미선언 입력 변경 또는 영향 불명에는 로컬 무거운
-  회귀군 증거를 전체 invalidated 처리한다. helper 자체 변경도 local
-  invalidation은 전체지만 current selection 밖은 drop하고 원격 CI는 owning
-  회귀군만 실행한다. clean branch의 빈 working diff는 복구 증거가 아니다.
-- 로컬 증거 재사용은 GitHub required CI를 대신하지 않는다. Ready와 finalize는
-  현재 PR head의 원격 required CI를 계속 요구한다.
+- Draft의 `독립 리뷰`는 실제 상태에 따라 `통과`, `생략`, `실패` 또는
+  `미실행`을 기록한다. 실패·미실행이면 현재 blocker와 재개 조건을 사실대로
+  적는다.
+- Ready에서 저위험 변경의 독립 리뷰를 생략하면 결과를 `생략`, 증거를
+  `low-risk=<구체적인 저위험 근거>`로 기록한다.
+- Ready에서 독립 리뷰를 수행하면 결과를 `통과`, 증거를
+  `round=1; reviewers=N; findings=N; main-closure=N/N; scope-expansion=none`
+  형식으로 기록한다. `round=1`은 리뷰가 한 번뿐임을, `reviewers`는 그 한
+  round의 검토자 수를, `findings`는 전체 finding 수를 뜻한다.
+  `main-closure`의 두 수는 모두 finding 수와 같아야 한다.
+- `review-head`, review/tree OID, evidence JSON, `selectedGroups`와 delta
+  review chain을 PR 본문에 기록하거나 Ready 조건으로 요구하지 않는다.
+  exact current head는 PR snapshot, required CI check suite와 finalize의 Git
+  proof가 검증한다.
 - Ready의 추적 표에 적은 모든 PRD·Policy ID는 현재 branch의 제품 정본에서
   FR·AC·Policy visible heading 또는 PRD 기술 스파이크 표의 첫 셀로 실제
   정의되어 있어야 한다. planned 표식이나 이슈의 예상 ID만으로 Ready 증거를
@@ -132,30 +104,18 @@ section은 다음 형태로 감싼다.
   닫힌 `<details>`, link destination과 주석 안 문자열은 visible 정의·추적
   증거로 인정하지 않는다.
 
-독립 리뷰는 이슈별 행동 테스트와 PRD·Policy·Architecture 의미 영향 판정이
-끝나고 stage·고정·D0를 통과한 최초 candidate를 작성 컨텍스트와 분리된 읽기
-전용 검토자가 확인하는 절차다. 작성자 자기 검토는 독립 리뷰가 아니며
-작성·수정자와 최종 승인자를 분리한다. 의도한 답이나 예상 결론을 주입하지
-않고 원본 요구사항, 같은 cached diff·candidate tree와 행동 테스트 결과를
-입력으로 제공한다. 검토자는 직접 수정하지 않고 P0~P2 발견 사항을 파일 위치와
-재현 근거로 보고한다.
+독립 리뷰는 위험 판단상 필요할 때 작성 컨텍스트와 분리된 읽기 전용 검토자가
+원본 이슈, 전체 diff와 관련 테스트 결과를 한 번 확인하는 절차다. 검토자는
+직접 수정하지 않고 finding을 파일 위치와 근거로 한 번에 보고한다.
 
-- 낮은 위험의 단순 변경은 최소 1명이 검토한다.
-- 계약·validator·workflow 변경은 최소 2명이 검토한다.
-- 분산 통신·정합성·보안 같은 고위험 변경은 필요한 전문 관점별 검토자를
-  병렬 배치한다.
-- 최초 snapshot의 발견 사항을 모두 모아 무거운 회귀군 전체 없이 일괄
-  수정하고 명시적으로 stage한 뒤 evidence JSON과 D0를 먼저 갱신한다. D0만의
-  수정은 review pass를 소비하지 않는다. 행동 테스트와 의미 영향 판정 뒤
-  이전·현재 tree, staged delta와 현재 전체 diff를 별도 review pass에
-  제공한다. 최초 전체 리뷰와 끊기지 않은 delta review chain이 최종
-  candidate를 덮어야 한다. 범위·요구사항·보안 경계가 넓어지거나 chain에
-  공백·모호함이 있으면 새 전체 리뷰를 수행한다.
-- 최초 리뷰를 1회로 세어 review-fix cycle은 최대 3회다. 3회 뒤에도 P0/P1이
-  남으면 Ready 전환과 승인을 중단하고 blocker로 기록한다.
-- 모든 candidate에서 빠른 공통 gate를 review 전에 실행한다. review 뒤에는
-  current `selectedGroups`만 실행하고, 수정 뒤에는 선택·무효화된 완료
-  회귀군만 재실행하며 selected unchanged PASS를 유지하고 pending을 계속한다.
+- 단순 문구·기계적 변경처럼 영향이 명확히 좁고 관련 validator나 테스트로
+  충분히 검증되면 구체적인 저위험 근거를 남기고 리뷰를 생략할 수 있다.
+- 리뷰가 필요하면 한 round만 수행한다. 검토자 수는 변경 위험에 맞게 최소화한다.
+- 메인 세션은 finding을 한 번에 수정하고 관련 테스트와 수정 diff로 closure를
+  확인한다. finding대로 수정됐는지 확인하기 위한 재리뷰는 하지 않는다.
+- 수정이 범위·설계·보안 경계를 넓혀 새 판단이 필요해지면 같은 흐름에서
+  reviewer를 추가하거나 review-fix cycle을 열지 않는다. Ready를 중단하고
+  blocker 또는 후속 이슈로 분리한다.
 
 ## 5. 문서 영향
 

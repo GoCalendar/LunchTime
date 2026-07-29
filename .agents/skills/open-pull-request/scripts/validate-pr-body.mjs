@@ -136,7 +136,7 @@ function validateStructure(body) {
     errors.push("닫히지 않은 Markdown code fence가 있습니다.");
   }
 
-  const schemaToken = "<!-- lunchtime-pr:v1 -->";
+  const schemaToken = "<!-- lunchtime-pr:v2 -->";
   const escapedSchemaToken = schemaToken.replace(
     /[.*+?^${}()|[\]\\]/g,
     "\\$&",
@@ -155,7 +155,7 @@ function validateStructure(body) {
     rawSchemaMarkers[0]?.index !== schemaMarkers[0]?.index ||
     isInsideRange(schemaMarkers[0]?.index ?? -1, fences)
   ) {
-    errors.push("`<!-- lunchtime-pr:v1 -->` marker가 정확히 하나 필요합니다.");
+    errors.push("`<!-- lunchtime-pr:v2 -->` marker가 정확히 하나 필요합니다.");
   }
 
   const visibleBody = visibleContractMarkdown(body);
@@ -252,35 +252,8 @@ function parseIssue(body, { template = false } = {}) {
   };
 }
 
-function parseEndIssue(body) {
-  const matches = occurrences(
-    visibleMarkdown(sectionContent(body, "issues")),
-    /^- 종료:\s*#([1-9][0-9]*)\s*$/gm,
-  );
-  return {
-    matches,
-    issueNumber: matches.length === 1 ? Number(matches[0][1]) : undefined,
-  };
-}
-
-function parseWorkKey(body) {
-  const issues = visibleMarkdown(sectionContent(body, "issues"));
-  const match = issues.match(/^- 작업 키:\s*`?([^`\n]+)`?\s*$/m);
-  return match?.[1]?.trim();
-}
-
 function validateIssues(content, errors, { template = false } = {}) {
   const visible = visibleMarkdown(content);
-  const endFields = occurrences(
-    visible,
-    template
-      ? /^- 종료:\s*#(?:<issue-number>|[1-9][0-9]*)\s*$/gm
-      : /^- 종료:\s*#([1-9][0-9]*)\s*$/gm,
-  );
-  if (endFields.length !== 1) {
-    errors.push("연결된 이슈에 `- 종료: #N` 메타데이터가 정확히 하나 필요합니다.");
-  }
-
   const parsedIssue = parseIssue(content, { template });
   if (
     parsedIssue.matches.length !== 1 ||
@@ -290,16 +263,10 @@ function validateIssues(content, errors, { template = false } = {}) {
       "연결된 이슈에 접두어 없는 독립된 줄 `Closes #N`이 정확히 하나 필요합니다.",
     );
   }
-  if (
-    !template &&
-    endFields.length === 1 &&
-    parsedIssue.issueNumber &&
-    Number(endFields[0][1]) !== parsedIssue.issueNumber
-  ) {
-    errors.push("종료 메타데이터와 `Closes` 이슈 번호가 일치하지 않습니다.");
-  }
-  if (occurrences(visible, /^- 작업 키:\s*\S+/gm).length !== 1) {
-    errors.push("연결된 이슈에 `작업 키` 필드가 정확히 하나 필요합니다.");
+  if (/^-\s*(?:종료|작업 키):/m.test(visible)) {
+    errors.push(
+      "연결된 이슈에는 중복 종료·작업 키 메타데이터를 두지 않고 `Closes #N`만 사용합니다.",
+    );
   }
 }
 
@@ -331,7 +298,7 @@ function validateSummary(content, errors) {
   }
 }
 
-function validateTitle(title, { issueNumber, workKey } = {}) {
+function validateTitle(title, { issueNumber } = {}) {
   const errors = [];
   const match = String(title ?? "").match(TITLE_PATTERN);
   if (!match) {
@@ -347,9 +314,6 @@ function validateTitle(title, { issueNumber, workKey } = {}) {
   const titleKey = match[2];
   if (titleKey.startsWith("#") && issueNumber && Number(titleKey.slice(1)) !== issueNumber) {
     errors.push("PR 제목의 이슈 번호가 `Closes` 이슈와 일치하지 않습니다.");
-  }
-  if (workKey && titleKey !== workKey) {
-    errors.push("PR 제목의 작업 키가 본문의 작업 키와 일치하지 않습니다.");
   }
   return errors;
 }
@@ -442,7 +406,7 @@ function splitMarkdownRow(line) {
 function validateVerification(
   content,
   errors,
-  { template, draft, expectedHead },
+  { template, draft },
 ) {
   content = visibleContractMarkdown(content);
   const lines = content.split("\n").map((line) => line.trim());
@@ -499,15 +463,30 @@ function validateVerification(
       continue;
     }
     const result = row[2].replace(/`/g, "");
-    if (!["통과", "실패", "미실행"].includes(result)) {
-      errors.push("검증 결과는 `통과`, `실패`, `미실행` 중 하나여야 합니다.");
+    const independentReview = row[0] === "독립 리뷰";
+    const allowedResults = independentReview
+      ? ["통과", "생략", "실패", "미실행"]
+      : ["통과", "실패", "미실행"];
+    if (!allowedResults.includes(result)) {
+      errors.push(
+        independentReview
+          ? "독립 리뷰 결과는 `통과`, `생략`, `실패`, `미실행` 중 하나여야 합니다."
+          : "검증 결과는 `통과`, `실패`, `미실행` 중 하나여야 합니다.",
+      );
     }
-    if (!draft && result !== "통과") {
-      if (row[0] === "독립 리뷰") {
-        errors.push("Ready PR의 `독립 리뷰` 결과는 `통과`여야 합니다.");
-      } else {
+    if (!draft) {
+      if (independentReview && !["통과", "생략"].includes(result)) {
+        errors.push(
+          "Ready PR의 `독립 리뷰` 결과는 `통과` 또는 저위험 근거가 있는 `생략`이어야 합니다.",
+        );
+      } else if (!independentReview && result !== "통과") {
         errors.push("Ready PR에는 실패 또는 미실행 검증을 남길 수 없습니다.");
       }
+      if (!independentReview && result === "생략") {
+        errors.push("Ready PR에서 `생략`은 `독립 리뷰` 행에만 사용할 수 있습니다.");
+      }
+    } else if (!independentReview && result === "생략") {
+      errors.push("`생략`은 `독립 리뷰` 행에만 사용할 수 있습니다.");
     }
     if (row.some((cell) => !cell)) {
       errors.push("검증 표의 대상, 명령·확인, 결과와 증거를 모두 작성해야 합니다.");
@@ -524,32 +503,49 @@ function validateVerification(
       "Ready PR의 `독립 리뷰`에는 placeholder가 아닌 증거가 필요합니다.",
     );
   }
-  if (!draft) {
-    const normalizedHead = String(expectedHead).toLowerCase();
-    if (!/^[0-9a-f]{40}$/.test(normalizedHead)) {
-      errors.push("Ready PR의 현재 head는 40자리 commit SHA여야 합니다.");
-    } else if (independentReview?.length === 4) {
-      const reviewHeadMarkers = [
-        ...independentReview[3].matchAll(
-          /(?<![A-Za-z0-9_-])review-head=/gi,
-        ),
-      ];
-      const reviewHeads = [
-        ...independentReview[3].matchAll(
-          /(?<![A-Za-z0-9_-])review-head=([0-9a-f]{40})(?=$|[\s,;])/gi,
-        ),
-      ].map((match) => match[1].toLowerCase());
+  if (!draft && independentReview?.length === 4) {
+    const result = independentReview[2].replace(/`/g, "");
+    const evidence = independentReview[3].trim();
+    if (result === "생략") {
+      const match = evidence.match(/^low-risk=(\S(?:.*\S)?)$/i);
+      const reason = match?.[1]?.trim() ?? "";
       if (
-        reviewHeadMarkers.length !== 1 ||
-        reviewHeads.length !== 1
+        !match ||
+        reason.length < 5 ||
+        /^(?:해당 없음|없음|n\/a|미적용|저위험|단순 변경)$/i.test(reason)
       ) {
         errors.push(
-          "Ready PR의 `독립 리뷰` 증거에는 `review-head=<40자리 SHA>`가 정확히 하나 필요합니다.",
+          "Ready PR에서 독립 리뷰를 생략하려면 `low-risk=<구체적인 저위험 근거>`만 기록해야 합니다.",
         );
-      } else if (reviewHeads[0] !== normalizedHead) {
+      }
+    } else if (result === "통과") {
+      const match = evidence.match(
+        /^round=1;\s*reviewers=([1-9][0-9]*);\s*findings=([0-9]+);\s*main-closure=([0-9]+)\/([0-9]+);\s*scope-expansion=none$/i,
+      );
+      if (!match) {
         errors.push(
-          "Ready PR의 `독립 리뷰` 증거가 현재 head commit SHA와 일치하지 않습니다.",
+          "Ready PR의 독립 리뷰 통과 증거는 `round=1; reviewers=N; findings=N; main-closure=N/N; scope-expansion=none` 형식이어야 합니다.",
         );
+      } else {
+        const reviewers = Number(match[1]);
+        const findings = Number(match[2]);
+        const closed = Number(match[3]);
+        const closureTotal = Number(match[4]);
+        if (
+          ![reviewers, findings, closed, closureTotal].every(
+            Number.isSafeInteger,
+          ) ||
+          reviewers < 1 ||
+          reviewers > 2
+        ) {
+          errors.push(
+            "독립 리뷰의 reviewers는 1~2명이고 finding 수는 안전한 정수여야 합니다.",
+          );
+        } else if (closed !== findings || closureTotal !== findings) {
+          errors.push(
+            "독립 리뷰 finding은 메인 세션의 `main-closure`에서 모두 닫혀야 합니다.",
+          );
+        }
       }
     }
   }
@@ -595,7 +591,6 @@ export function validatePullRequest({
   issueNumber,
   branch,
   base = "main",
-  expectedHead,
   definedContractIds,
   definitionsRef,
   repositoryRoot = process.cwd(),
@@ -629,24 +624,7 @@ export function validatePullRequest({
   if (issueNumber && actualIssue !== Number(issueNumber)) {
     errors.push("`Closes` 이슈 번호가 예상 이슈와 일치하지 않습니다.");
   }
-  const endIssue = parseEndIssue(body);
-  if (
-    endIssue.issueNumber &&
-    actualIssue &&
-    endIssue.issueNumber !== actualIssue
-  ) {
-    errors.push("종료 메타데이터의 이슈 번호가 `Closes` 이슈와 일치하지 않습니다.");
-  }
-
-  const workKey = parseWorkKey(body);
-  if (!workKey || !/^(?:LT-[0-9]{3}|#[1-9][0-9]*)$/.test(workKey)) {
-    errors.push("작업 키는 실제 `LT-NNN` 또는 `#<이슈 번호>`여야 합니다.");
-  }
-  if (workKey?.startsWith("#") && actualIssue && Number(workKey.slice(1)) !== actualIssue) {
-    errors.push("본문 작업 키의 이슈 번호가 `Closes` 이슈와 일치하지 않습니다.");
-  }
-
-  errors.push(...validateTitle(title, { issueNumber: actualIssue, workKey }));
+  errors.push(...validateTitle(title, { issueNumber: actualIssue }));
   validateIssues(sectionContent(body, "issues"), errors);
   validateSummary(sectionContent(body, "summary"), errors);
 
@@ -674,7 +652,6 @@ export function validatePullRequest({
   validateVerification(sectionContent(body, "verification"), errors, {
     template: false,
     draft,
-    expectedHead,
   });
   validateDocsImpact(sectionContent(body, "docs-impact"), errors, {
     template: false,
@@ -753,7 +730,6 @@ export function pullRequestFromEvent(event) {
     body: pullRequest.body ?? "",
     draft: Boolean(pullRequest.draft),
     branch: pullRequest.head?.ref ?? "",
-    expectedHead: pullRequest.head?.sha ?? "",
     definitionsRef: pullRequest.head?.sha ?? "",
     base: pullRequest.base?.ref ?? "",
   };
@@ -783,7 +759,6 @@ async function main() {
         draft: args.draft,
         issueNumber: args.issue,
         branch: args.branch,
-        expectedHead: args.head,
         definitionsRef: args.head,
       });
     }

@@ -35,8 +35,6 @@ const NON_APP_PATHS = new Set([
   ".github/PULL_REQUEST_TEMPLATE.md",
   ".github/mvp-work-items.json",
   ".github/work-management.json",
-  ".github/workflows/validate-harness-paths.mjs",
-  ".github/workflows/validate-harness-paths.test.mjs",
   ".github/workflows/validate-harness.yml",
   ".github/workflows/validate-pr-metadata.yml",
 ]);

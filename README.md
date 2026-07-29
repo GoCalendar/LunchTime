@@ -4,7 +4,10 @@
 
 LunchTime은 회사에서 반복되는 점심 모집과 배달 주문 협의를 돕는 도구입니다. 점심방마다 참여자, 가게, 메뉴, 주문 마감, 주문 완료 상태를 한곳에서 관리하고, 방 안에서 필요한 대화를 이어갈 수 있도록 합니다.
 
-현재는 제품 정의 회의를 마치고 승인된 PRD·정책 문서를 바탕으로 기술 검증과 구현 작업을 준비하는 단계입니다. 이 README는 아이디어가 어떤 논의를 거쳐 요구사항과 정책으로 확정되는지 안내하는 문서 인덱스입니다.
+현재 제품 동작은 승인된 PRD·정책을 기준으로 구현합니다. 이 README는 저장소와
+문서의 탐색 인덱스이며 모든 이슈가 처음부터 전부 읽는 작업 컨텍스트가
+아닙니다. 구현 입력은 GitHub 이슈가 지정한 정확한 문서·코드·테스트
+범위입니다.
 
 ## 현재 제품 방향
 
@@ -25,12 +28,15 @@ LunchTime은 회사에서 반복되는 점심 모집과 배달 주문 협의를 
 
 | 경로 | 역할 | 성격 |
 |------|------|------|
-| `docs/product-definition/` | 아이디어, 가설, 질문, 논의와 의사결정 과정을 기록합니다. | 논의 이력 |
+| `docs/product-definition/` | 초기 아이디어와 의사결정 과정을 보존합니다. | 역사 archive |
 | `docs/prd/` | 논의를 거쳐 확정된 제품·기능 요구사항을 기록합니다. | 요구사항 정본 |
 | `docs/policies/` | 상태 전이, 권한, 예외 처리 등 세부 동작 규칙을 기록합니다. | 동작 규칙 정본 |
 | `docs/architecture/` | 승인된 제품 계약을 실현하는 구성요소, 통신과 데이터 흐름을 설명합니다. | 기술 구조 |
 
-`product-definition`은 결정의 배경을 이해하기 위한 기록입니다. 현재 제품이 어떻게 동작해야 하는지는 PRD와 정책 문서를 기준으로 판단합니다. 두 정본 사이에 모순이 발견되면 어느 한쪽을 임의로 우선하지 않고 함께 정정합니다.
+`product-definition`은 일반 구현·리뷰·문서 영향 판정의 입력이 아닙니다.
+사용자가 역사 조사를 명시적으로 요청하거나 archive 자체를 유지하는 이슈가
+아니면 읽거나 수정하지 않습니다. 현재 제품 동작은 PRD와 정책을 기준으로
+판단하며 두 정본이 충돌하면 임의로 우선하지 않습니다.
 
 문서와 디렉터리는 실제로 필요한 시점에만 만들며, 새 문서가 생기면 아래 인덱스에 추가합니다.
 
@@ -42,25 +48,11 @@ LunchTime은 회사에서 반복되는 점심 모집과 배달 주문 협의를 
 
 ## 문서 인덱스
 
-### 제품 정의 과정
+### 제품 정의 archive
 
-| 순서 | 문서 | 역할 |
-|------|------|------|
-| 00 | [초기 아이디어](docs/product-definition/00_initial_idea.md) | 문제의식과 지금까지의 논의 기록 |
-| 01 | [제품 방향](docs/product-definition/01_product_direction.md) | 목적, 대상, 가치, 제약과 비목표 |
-| 02 | [현재 점심 주문 여정](docs/product-definition/02_current_lunch_journey.md) | Slack과 배민을 이용하는 현재 방식 |
-| 03 | [문제와 유지할 강점](docs/product-definition/03_pains_and_existing_strengths.md) | 개선할 문제와 잃지 말아야 할 장점 |
-| 04 | [가설과 검증 계획](docs/product-definition/04_assumptions_and_validation.md) | 제품·기술 가설과 검증 순서 |
-| 05 | [어떻게 하면 질문](docs/product-definition/05_how_might_we.md) | 구체적인 해결 질문과 가설적 답 |
-| 06 | [기능 후보 목록](docs/product-definition/06_feature_inventory.md) | 우선순위 없는 F-ID 작업 원장 |
-| 07 | [경험 및 정보 구조](docs/product-definition/07_experience_structure.md) | 기능을 macOS 화면에 배치한 제안 |
-| 08 | [목표 사용자 여정](docs/product-definition/08_target_lunch_journey.md) | LunchTime에서 기대하는 전체 흐름 |
-| 09 | [범위 제안](docs/product-definition/09_scope_proposal.md) | MVP 후보, 검증 게이트와 후속 범위 |
-| 10 | [결정 및 미결정 목록](docs/product-definition/10_decision_backlog.md) | 확정 방향, 제안과 PRD 전 결정 과제 |
-
-제품 정의 과정은 [da-in/vibe-sprint](https://github.com/da-in/vibe-sprint)의 단계형 사고 모델에서 통찰을 얻되, 정해진 단계(STEP)·순서·산출물에 종속되지 않고 LunchTime에 필요한 방식으로 진행합니다.
-
-제품 정의 문서는 제공된 아이디어와 피드백, 결정의 배경을 구조화한 기록입니다. 현재 동작의 정본은 아래 PRD와 정책 문서이며, 기술 검증으로 전제가 달라지면 결정 기록과 정본을 함께 갱신합니다.
+`docs/product-definition/`의 파일별 목록은 일반 작업 인덱스에서 제외합니다.
+이 archive는 초기 브레인스토밍의 역사 보존용이며 새 결정과 미결정 작업은
+GitHub 이슈, 승인된 제품 결과는 PRD·Policy에서 관리합니다.
 
 ### PRD
 
@@ -92,13 +84,13 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
 ### 개발 표준
 
 - [개발 하네스 가이드](docs/development/01_harness_guide.md)는 Claude Code와
-  Codex의 요청을 정본 입력과 단일 Skill owner에 연결하고, 이슈 확인부터
-  병합 뒤 완료까지의 11단계와 독립 리뷰 계약을 잇는 orchestrator 인덱스입니다.
+  Codex의 요청을 exact issue context와 단일 Skill owner에 연결하는
+  orchestrator 인덱스입니다.
 - [BDD/ATDD 테스트 표준](docs/development/02_testing_standard.md)은 제품 정본을
-  행동 시나리오, 결정적 테스트와 회귀 증거로 전환하는 기준을 설명합니다.
+  행동 시나리오와 `direct case/suite → affected target → subsystem → global`
+  선택으로 전환하는 기준을 설명합니다.
 - [검증 게이트와 CI 흐름](docs/development/03_validation_ci_flow.md)은 구현 중
-  반복 검증을 줄이는 candidate 고정, 증거 재사용과 경로별 원격 CI 경계를
-  설명합니다.
+  artifact별 validator와 영향받은 원격 CI target을 고르는 경계를 설명합니다.
 
 ## 앱 빌드와 검증
 
@@ -114,16 +106,17 @@ Peer 발견·연결, 메시지 교환, 복제·복구, 저장·보안 문서를 
 | 대상 | 앱 `LunchTime`, 단위 테스트 `LunchTimeTests`, UI 테스트 `LunchTimeUITests` |
 | 앱 번들 식별자 | `com.gocalendar.LunchTime` |
 
-로컬에서 다음 명령으로 빌드와 테스트를 실행합니다.
+로컬 build와 직접 관련 XCTest의 예시는 다음과 같습니다.
 
 ```bash
 xcodebuild build -project LunchTime.xcodeproj -scheme LunchTime -destination 'platform=macOS'
-xcodebuild test -project LunchTime.xcodeproj -scheme LunchTime -destination 'platform=macOS'
+xcodebuild test -project LunchTime.xcodeproj -scheme LunchTime -destination 'platform=macOS' -only-testing:LunchTimeTests/<TestClass>/<testMethod>
 ```
 
-CI는 같은 project·scheme·destination과 같은 테스트 실행 대상을 사용합니다. 다만
-`-skip-testing`으로 UI 제외를 한 번 더 못박고 Release 구성 빌드를 추가로
-검사합니다. 아래 `테스트 구성`과 `CI 게이트` 절을 함께 보십시오.
+영향받은 case를 분리할 수 없을 때 affected test target으로 넓히고, subsystem
+또는 전체 test는 영향 범위가 불명확하거나 release 검증을 명시한 예외에만
+사용합니다. CI도 같은 project·scheme·destination과 영향 선택을 사용합니다.
+아래 `테스트 구성`과 `CI 게이트` 절을 함께 보십시오.
 
 CI는 `DEVELOPER_DIR`로 Xcode 26.2를 고정합니다. runner 이미지 기본값은 더 낮은
 버전이라 고정하지 않으면 실행마다 다른 SDK로 컴파일될 수 있고 게이트가 결정적으로
@@ -137,10 +130,10 @@ CI 실행이 runner 기본 툴체인 Xcode 16.4에서 앱 빌드·테스트·Rel
 통과했습니다. 구조적 하한은 16.0이며 `project.pbxproj`의 `objectVersion = 77`,
 폴더 동기화 그룹과 `SWIFT_VERSION = 6.0`이 그보다 낮은 Xcode를 배제합니다.
 
-저장소 도구 게이트는 Node.js 24 이상에서 실행합니다. `.agents/skills/` 회귀
-테스트 일부가 확장자 없는 stub 파일에 ESM 문법을 사용하므로 Node 20에서는
-module 자동 감지가 없어 실패합니다. CI는 24로 고정하며 로컬도 같은 계열을
-사용해야 `AGENTS.md`의 게이트 목록이 그대로 재현됩니다.
+저장소 도구 검증은 Node.js 24 이상에서 실행합니다. `.agents/skills/` test
+일부가 확장자 없는 stub 파일에 ESM 문법을 사용하므로 Node 20에서는 module
+자동 감지가 없어 실패합니다. CI는 24로 고정하며 로컬도 같은 계열을
+사용합니다.
 
 ### 소스 폴더 규칙
 
@@ -186,7 +179,8 @@ module 자동 감지가 없어 실패합니다. CI는 24로 고정하며 로컬�
 
 ### 테스트 구성
 
-위 `xcodebuild test` 명령은 단위 테스트 `LunchTimeTests`만 실행합니다. UI 테스트
+`-only-testing`을 제거한 전체 target 명령은 단위 테스트 `LunchTimeTests`를
+모두 실행합니다. 영향 범위를 한정할 수 없는 예외에서만 사용합니다. UI 테스트
 `LunchTimeUITests`는 기본 scheme의 테스트 대상에서 제외되어 있습니다. UI 실행은
 automation mode 권한과 앱 실행 타이밍에 의존해 결정적이지 않고, 한 번 실패하면
 테스트 데몬 상태가 남아 이후 테스트 실행까지 막는 것을 확인했습니다.
@@ -231,13 +225,13 @@ Release 구성에서 빌드되지 않습니다.
 
 | 게이트 | 워크플로 | 검사 |
 |--------|----------|------|
-| 앱 빌드·테스트 | [`macOS 앱 검증`](.github/workflows/app-ci.yml) | `xcodebuild build`, `xcodebuild test`와 Release 구성 빌드 |
-| 하네스 콘텐츠 | [`저장소 작업 도구 검증`](.github/workflows/validate-harness.yml) | 회귀 테스트, 제품 문서, commit과 패치 공백 결과를 `validate`로 결속 |
-| PR metadata | [`PR 메타데이터 검증`](.github/workflows/validate-pr-metadata.yml) | 실행 시점의 live PR 제목·본문·Draft·head·base와 검증 중 입력 불변성 |
+| 앱 영향 검증 | [`macOS 앱 검증`](.github/workflows/app-ci.yml) | 앱 영향 경로의 affected target; 영향 불명·release 예외의 확대 검증 |
+| 하네스 영향 검증 | [`저장소 작업 도구 검증`](.github/workflows/validate-harness.yml) | 변경 owner의 validator·direct contract test와 선택 결과 결속 |
+| PR metadata | [`PR 메타데이터 검증`](.github/workflows/validate-pr-metadata.yml) | 조회 시점의 live PR 제목·본문·Draft·head·base 계약 |
 
-앱, 하네스 콘텐츠와 PR metadata workflow는 서로 독립적으로 실행됩니다.
-하네스의 회귀, 제품 문서와 패치 공백 job도 서로 독립적으로 실행되며 required
-`validate`가 실패·취소·예상 밖 skip을 하나의 실패 결론으로 묶습니다.
+앱, 하네스와 PR metadata workflow는 서로 독립적으로 실행됩니다. Required
+summary check는 선택된 target의 `success`와 비대상의 `skipped`를 구분하되,
+required라는 이유로 모든 고비용 job을 실행하지 않습니다.
 
 병합을 차단하는 필수 검사는 저장소 ruleset이 정합니다. 현재 ruleset은
 `app-test`·`validate`·`pr-metadata`를 strict required check로 요구합니다.
@@ -246,7 +240,10 @@ Release 구성에서 빌드되지 않습니다.
 
 ## 제품 문서 갱신 절차
 
-구현을 마치고 PR을 만들기 전에는 [update-product-docs](.agents/skills/update-product-docs/SKILL.md) 스킬(Skill)로 변경사항이 PRD·정책 문서에 미치는 영향을 확인합니다. 제품 동작이나 보장 범위가 달라졌다면 코드와 정본 문서를 같은 변경에서 갱신합니다. 새 PRD·Policy ID의 문서·구현 동시 작업 조건과 Ready 전 추적성은 같은 Skill의 planned ID 계약을 따릅니다.
+제품 동작·규칙·Architecture 경계에 영향을 주는 변경은 이슈가 지정한 exact
+정본만 [update-product-docs](.agents/skills/update-product-docs/SKILL.md)로
+확인합니다. 제품 동작이나 보장 범위가 달라졌다면 코드와 정본을 같은
+변경에서 갱신합니다. 역사 archive와 관련 없는 정본은 읽지 않습니다.
 
 스킬의 단일 원본은 `.agents/skills/`에 두며, Claude에서도 같은 스킬을 사용하도록 `.claude/skills`를 해당 디렉터리의 심볼릭 링크로 연결합니다.
 
@@ -262,7 +259,8 @@ Release 구성에서 빌드되지 않습니다.
   on-demand 이슈 생성, 준비 확인, 작업 선점, 병합 뒤 완료와 후행 작업 해제를
   관리합니다.
 - [`commit-work-item` 스킬](.agents/skills/commit-work-item/SKILL.md)은
-  이슈 범위, 검증, 문서 영향과 작성자 정보를 확인하고 원자적 커밋을 만듭니다.
+  이슈 범위, 관련 테스트, 문서 영향, 한 번의 review round와 Git 안전을
+  확인하고 원자적 commit을 만듭니다.
 - [`open-pull-request` 스킬](.agents/skills/open-pull-request/SKILL.md)은
   변경 요약, 추적성, 검증 근거와 문서 영향 판정을 구조화해 PR을 만들고,
   명시적인 완료·병합 요청에서는 현재 head를 다시 검증해 finalize합니다.
@@ -278,10 +276,12 @@ Release 구성에서 빌드되지 않습니다.
   같은 맥락·완료 조건·의존성·경로 소유권·검증 정보를 갖게 합니다.
 - [PR 템플릿](.github/PULL_REQUEST_TEMPLATE.md)은 다음 AI가 대화 이력 없이
   맥락과 핵심 검토 지점을 복원할 수 있는 고정 본문 구조를 제공합니다.
-- [하네스 검증 워크플로](.github/workflows/validate-harness.yml)는 PR과
-  `main` 변경에서 문서·스킬 스크립트·패치 형식을 검사합니다.
-- [macOS 앱 검증 워크플로](.github/workflows/app-ci.yml)는 PR과 `main` 변경에서
-  앱 빌드와 테스트를 검사합니다. PR 본문·제목 편집에서는 재실행하지 않습니다.
+- [하네스 검증 워크플로](.github/workflows/validate-harness.yml)는 PR head
+  변경(`opened`·`synchronize`)과 수동 실행에서 영향받은 문서·Skill owner의
+  validator·test를 검사합니다.
+- [macOS 앱 검증 워크플로](.github/workflows/app-ci.yml)는 같은 PR head 변경과
+  수동 실행에서 영향받은 앱 target을 검사합니다. Docs·tooling-only 또는 PR
+  본문·제목 편집에서는 앱 test를 실행하지 않습니다.
 - [PR 메타데이터 검증 워크플로](.github/workflows/validate-pr-metadata.yml)는
   설정된 `opened`·`synchronize`·`reopened`·`edited`·`ready_for_review`
   event마다 live 제목·본문·Draft·head·base를 다시 읽어 검증합니다.
@@ -289,5 +289,6 @@ Release 구성에서 빌드되지 않습니다.
 실제 요청 라우팅과 단계는
 [개발 하네스 가이드](docs/development/01_harness_guide.md), 사람용 규칙과 예외는
 [개발 협약](CONTRIBUTING.md)을 기준으로 판단합니다. 준비된 이슈를 선점한 뒤
-독립 작업 트리에서 구현하고, 제품 문서 영향 확인, 원자적 커밋, 검증된 PR,
-요청된 경우에만 squash merge와 완료 전이를 순서대로 수행합니다.
+독립 worktree에서 exact context만 읽고 관련 test를 실행합니다. 위험도에 따른
+한 번의 review round와 메인 세션 finding closure, 원자적 commit, 영향받은
+CI가 있는 PR, 요청된 경우의 squash merge와 완료 전이를 순서대로 수행합니다.

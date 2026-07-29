@@ -26,17 +26,14 @@ const template = await readFile(
 );
 const currentHead = "1234567890abcdef1234567890abcdef12345678";
 const independentReviewRow =
-  `| 독립 리뷰 | 원본 요구사항·raw diff·테스트 결과를 분리된 reviewer가 확인 | 통과 | review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1 |`;
+  "| 독립 리뷰 | 원본 요구사항·diff·관련 테스트를 한 번 검토 | 통과 | round=1; reviewers=1; findings=0; main-closure=0/0; scope-expansion=none |";
 
 function readyBody() {
-  return `<!-- lunchtime-pr:v1 -->
+  return `<!-- lunchtime-pr:v2 -->
 
 ## 연결된 이슈
 
 <!-- pr:issues:start -->
-- 종료: #17
-- 작업 키: \`LT-017\`
-
 Closes #17
 <!-- pr:issues:end -->
 
@@ -89,7 +86,6 @@ function validate(overrides = {}) {
     title: "feat: LT-017 - 메뉴 누락 차단 상태를 추가한다",
     issueNumber: 17,
     branch: "work/issue-17-menu-ack",
-    expectedHead: currentHead,
     ...overrides,
   });
 }
@@ -106,11 +102,9 @@ test("완결된 Ready PR을 허용한다", () => {
   assert.deepEqual(validate(), []);
 });
 
-test("GitHub 이슈 fallback 제목과 작업 키를 허용한다", () => {
-  const body = readyBody().replaceAll("LT-017", "#17");
+test("GitHub 이슈 fallback 제목을 허용한다", () => {
   assert.deepEqual(
     validate({
-      body,
       title: "docs: #17 - PR 계약을 명확히 한다",
     }),
     [],
@@ -128,10 +122,10 @@ test("정확히 다섯 H2와 marker를 요구한다", () => {
   assert.match(joined(validate({ body: inlineMarker })), /issues:start/);
 
   const inlineSchema = readyBody().replace(
-    "<!-- lunchtime-pr:v1 -->",
-    "`<!-- lunchtime-pr:v1 -->`\n<!-- lunchtime-pr:v1 -->",
+    "<!-- lunchtime-pr:v2 -->",
+    "`<!-- lunchtime-pr:v2 -->`\n<!-- lunchtime-pr:v2 -->",
   );
-  assert.match(joined(validate({ body: inlineSchema })), /lunchtime-pr:v1/);
+  assert.match(joined(validate({ body: inlineSchema })), /lunchtime-pr:v2/);
 });
 
 test("숨긴 H2와 section 밖 marker를 거부한다", () => {
@@ -163,8 +157,8 @@ test("코드 fence 안 section marker를 거부한다", () => {
 
 test("닫히지 않은 code fence로 렌더링 계약을 숨길 수 없다", () => {
   const unmatched = readyBody().replace(
-    "<!-- lunchtime-pr:v1 -->",
-    "<!-- lunchtime-pr:v1 -->\n```markdown",
+    "<!-- lunchtime-pr:v2 -->",
+    "<!-- lunchtime-pr:v2 -->\n```markdown",
   );
   assert.match(joined(validate({ body: unmatched })), /닫히지 않은/);
 });
@@ -184,10 +178,6 @@ test("변경 요약의 고정 필드와 1~5개 결과를 요구한다", () => {
 test("Closes와 브랜치 이슈 번호 불일치를 거부한다", () => {
   assert.match(joined(validate({ issueNumber: 18 })), /예상 이슈/);
   assert.match(joined(validate({ branch: "work/issue-18-menu-ack" })), /head의 이슈 번호/);
-  assert.match(
-    joined(validate({ body: readyBody().replace("- 종료: #17", "- 종료: #18") })),
-    /종료 메타데이터.*Closes/,
-  );
 });
 
 test("주석이나 코드 블록의 Closes를 종료 이슈로 인정하지 않는다", () => {
@@ -221,6 +211,20 @@ test("독립된 Closes 지시문 중복을 거부한다", () => {
   assert.match(joined(validate({ body })), /정확히 하나/);
 });
 
+test("연결된 이슈의 중복 종료·작업 키 메타데이터를 거부한다", () => {
+  for (const metadata of ["- 종료: #17", "- 작업 키: `LT-017`"]) {
+    const body = readyBody().replace(
+      "Closes #17",
+      `${metadata}\n\nCloses #17`,
+    );
+    assert.match(
+      joined(validate({ body })),
+      /중복 종료·작업 키 메타데이터/,
+      metadata,
+    );
+  }
+});
+
 test("주석으로 숨긴 변경 요약 필드를 인정하지 않는다", () => {
   const hidden = readyBody().replace(
     "- 위험·복구: 기존 데이터는 미확인으로 보수적으로 처리하며 문제 시 해당 커밋을 revert합니다.",
@@ -237,10 +241,10 @@ test("AI 해석이 모호해지는 고정 필드 중복을 거부한다", () => 
   assert.match(joined(validate({ body: duplicated })), /판정.*정확히 하나/);
 });
 
-test("제목과 본문 작업 키 불일치를 거부한다", () => {
+test("제목의 GitHub 이슈 fallback 불일치를 거부한다", () => {
   assert.match(
-    joined(validate({ title: "feat: LT-018 - 메뉴 누락 차단 상태를 추가한다" })),
-    /작업 키/,
+    joined(validate({ title: "feat: #18 - 메뉴 누락 차단 상태를 추가한다" })),
+    /제목의 이슈 번호/,
   );
 });
 
@@ -316,10 +320,7 @@ test("Draft의 독립 리뷰는 실패와 미실행을 사실대로 남길 수 �
         : "reviewer 배정 대기, review pass 0";
     const body = readyBody().replace(
       independentReviewRow,
-      independentReviewRow.replace(
-        `| 통과 | review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1 |`,
-        `| ${result} | ${evidence} |`,
-      ),
+      `| 독립 리뷰 | 위험 판단 대기 | ${result} | ${evidence} |`,
     );
     assert.deepEqual(validate({ body, draft: true }), []);
   }
@@ -333,14 +334,11 @@ test("Ready의 독립 리뷰 실패와 미실행은 구체적으로 거부한다
         : "reviewer 배정 대기, review pass 0";
     const body = readyBody().replace(
       independentReviewRow,
-      independentReviewRow.replace(
-        `| 통과 | review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1 |`,
-        `| ${result} | ${evidence} |`,
-      ),
+      `| 독립 리뷰 | 위험 판단 대기 | ${result} | ${evidence} |`,
     );
     assert.match(
       joined(validate({ body })),
-      /Ready PR의 `독립 리뷰` 결과는 `통과`여야 합니다/,
+      /Ready PR의 `독립 리뷰` 결과는 `통과` 또는 .*`생략`/,
     );
   }
 });
@@ -348,8 +346,8 @@ test("Ready의 독립 리뷰 실패와 미실행은 구체적으로 거부한다
 test("Ready의 독립 리뷰에는 non-placeholder 증거가 필요하다", () => {
   for (const evidence of ["<독립 리뷰 증거>", "TODO", ""]) {
     const body = readyBody().replace(
-      `review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1`,
-      evidence,
+      independentReviewRow,
+      `| 독립 리뷰 | 원본 요구사항·diff·관련 테스트를 한 번 검토 | 통과 | ${evidence} |`,
     );
     assert.match(
       joined(validate({ body })),
@@ -358,114 +356,83 @@ test("Ready의 독립 리뷰에는 non-placeholder 증거가 필요하다", () =
   }
 });
 
-test("Ready의 독립 리뷰 snapshot은 현재 head SHA와 일치해야 한다", () => {
+test("Ready는 구체적인 저위험 근거로 독립 리뷰를 생략할 수 있다", () => {
+  const skipped = readyBody().replace(
+    independentReviewRow,
+    "| 독립 리뷰 | 변경 위험을 판단해 생략 | 생략 | low-risk=제품 동작이 없는 문서 오탈자만 수정 |",
+  );
+  assert.deepEqual(validate({ body: skipped }), []);
+
+  for (const evidence of [
+    "low-risk=해당 없음",
+    "저위험 변경",
+    "low-risk=없음",
+    "low-risk=저위험",
+  ]) {
+    const invalid = readyBody().replace(
+      independentReviewRow,
+      `| 독립 리뷰 | 변경 위험을 판단해 생략 | 생략 | ${evidence} |`,
+    );
+    assert.match(
+      joined(validate({ body: invalid })),
+      /low-risk=<구체적인 저위험 근거>/,
+      evidence,
+    );
+  }
+});
+
+test("Ready의 독립 리뷰 통과는 한 round와 메인 closure만 기록한다", () => {
   assert.deepEqual(validate(), []);
-  assert.deepEqual(
-    validate({ expectedHead: `${currentHead.slice(0, 7)}${currentHead.slice(7)}` }),
-    [],
-  );
-  assert.match(
-    joined(
-      validate({
-        expectedHead: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
-      }),
-    ),
-    /현재 head commit SHA와 일치하지 않습니다/,
-  );
-  assert.match(
-    joined(validate({ expectedHead: "1234567" })),
-    /40자리 commit SHA/,
-  );
-});
 
-test("Ready의 독립 리뷰에는 구조화된 40자리 review-head를 정확히 하나 요구한다", () => {
-  const short = readyBody().replace(currentHead, currentHead.slice(0, 7));
-  assert.match(
-    joined(validate({ body: short })),
-    /review-head=<40자리 SHA>.*정확히 하나/,
-  );
-
-  const duplicated = readyBody().replace(
-    `review-head=${currentHead}`,
-    `review-head=${currentHead}, review-head=${currentHead}`,
-  );
-  assert.match(
-    joined(validate({ body: duplicated })),
-    /review-head=<40자리 SHA>.*정확히 하나/,
-  );
-
-  const stale = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
-  const unrelatedCurrent = readyBody().replace(
-    `review-head=${currentHead}`,
-    `review-head=${stale}, CI 대상 ${currentHead}`,
-  );
-  assert.match(
-    joined(validate({ body: unrelatedCurrent })),
-    /현재 head commit SHA와 일치하지 않습니다/,
-  );
-
-  const malformedAndValid = readyBody().replace(
-    `review-head=${currentHead}`,
-    `review-head=short, review-head=${currentHead}`,
-  );
-  assert.match(
-    joined(validate({ body: malformedAndValid })),
-    /review-head=<40자리 SHA>.*정확히 하나/,
-  );
-
-  assert.match(
-    joined(validate({ expectedHead: undefined })),
-    /현재 head는 40자리 commit SHA/,
-  );
-});
-
-test("링크 destination과 HTML attribute에 숨긴 review-head를 증거로 인정하지 않는다", () => {
-  for (const hiddenEvidence of [
-    `[리뷰 증거](https://example.com/review-head=${currentHead})`,
-    `<a href="https://example.com/review-head=${currentHead}">리뷰 증거</a>`,
-    `![review-head=${currentHead}](review.png)`,
-    `<span hidden>review-head=${currentHead}</span>`,
-    `<span style="display: none">review-head=${currentHead}</span>`,
-    `<details><summary>리뷰 증거</summary>review-head=${currentHead}</details>`,
+  for (const evidence of [
+    "round=2; reviewers=1; findings=0; main-closure=0/0; scope-expansion=none",
+    "round=1; reviewers=0; findings=0; main-closure=0/0; scope-expansion=none",
+    `round=1; reviewers=1; findings=0; main-closure=0/0; scope-expansion=none; review-head=${currentHead}`,
   ]) {
-    const body = readyBody().replace(
-      `review-head=${currentHead}, reviewer 1명, P0~P2 발견 없음, review pass 1`,
-      hiddenEvidence,
+    const invalid = readyBody().replace(
+      "round=1; reviewers=1; findings=0; main-closure=0/0; scope-expansion=none",
+      evidence,
     );
     assert.match(
-      joined(validate({ body })),
-      /review-head=<40자리 SHA>.*정확히 하나/,
+      joined(validate({ body: invalid })),
+      /round=1; reviewers=N; findings=N; main-closure=N\/N; scope-expansion=none/,
+      evidence,
     );
   }
+
+  const tooManyReviewers = readyBody().replace(
+    "round=1; reviewers=1; findings=0; main-closure=0/0; scope-expansion=none",
+    "round=1; reviewers=3; findings=0; main-closure=0/0; scope-expansion=none",
+  );
+  assert.match(
+    joined(validate({ body: tooManyReviewers })),
+    /reviewers는 1~2명/,
+  );
 });
 
-test("review-head SHA 뒤에 별도 token이 아닌 suffix를 허용하지 않는다", () => {
-  for (const suffix of [
-    "garbage",
-    "1",
-    "_suffix",
-    "-suffix",
-    "/garbage",
-    "@garbage",
-  ]) {
-    const body = readyBody().replace(
-      `review-head=${currentHead}`,
-      `review-head=${currentHead}${suffix}`,
-    );
-    assert.match(
-      joined(validate({ body })),
-      /review-head=<40자리 SHA>.*정확히 하나/,
-      suffix,
-    );
-  }
+test("독립 리뷰 finding은 메인 세션에서 모두 닫혀야 한다", () => {
+  const incomplete = readyBody().replace(
+    "findings=0; main-closure=0/0",
+    "findings=2; main-closure=1/2",
+  );
+  assert.match(
+    joined(validate({ body: incomplete })),
+    /finding은 메인 세션의 `main-closure`에서 모두 닫혀야/,
+  );
+
+  const complete = readyBody().replace(
+    "findings=0; main-closure=0/0",
+    "findings=2; main-closure=2/2",
+  );
+  assert.deepEqual(validate({ body: complete }), []);
 });
 
 test("closed details 안의 PR 본문 구조를 실제 다섯 section으로 인정하지 않는다", () => {
   const body = [
-    "<!-- lunchtime-pr:v1 -->",
+    "<!-- lunchtime-pr:v2 -->",
     "<details>",
     "<summary>접힌 PR 계약</summary>",
-    readyBody().replace("<!-- lunchtime-pr:v1 -->\n\n", ""),
+    readyBody().replace("<!-- lunchtime-pr:v2 -->\n\n", ""),
     "</details>",
   ].join("\n");
   assert.match(joined(validate({ body })), /H2는 다음 다섯 개/);

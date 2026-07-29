@@ -399,7 +399,6 @@ export function validateFinalizeSnapshot({
       issueNumber: normalizedIssue,
       branch: pr.headRefName ?? "",
       base: pr.baseRefName ?? "",
-      expectedHead: pr.headRefOid ?? "",
       definitionsRef: pr.headRefOid ?? "",
     }),
   );

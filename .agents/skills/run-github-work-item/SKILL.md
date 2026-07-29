@@ -1,134 +1,107 @@
 ---
 name: run-github-work-item
-description: 검증된 본문으로 개별 GitHub 이슈를 안전하게 생성하고, 기본 의존 관계, 담당자 소유권, 작업 흐름 레이블, 선택적 GitHub Project 상태, 병합된 PR 완료 처리와 후행 작업 차단 해제를 일관되게 관리한다. 이슈를 작성·생성·점검하거나, MVP 작업을 일괄 등록하거나, 구현을 시작·재개하거나, 차단 상태를 복구하거나, PR 병합 뒤 이슈와 프로젝트를 정리할 때 사용한다.
+description: 검증된 본문으로 개별 GitHub 이슈를 생성하고, 기본 의존 관계, 담당자 소유권, 작업 흐름 레이블, 선택적 GitHub Project 상태, 병합 뒤 완료와 후행 작업 차단 해제를 관리한다. 이슈를 작성·생성·점검하거나 구현을 시작·재개·완료할 때 사용한다.
 ---
 
 # GitHub 작업 이슈 운영
 
-GitHub 이슈, Project와 의존 관계 상태를 일치시킨다. 점검 실패를 중단 조건으로 취급하고, 구현을 시작하거나 일부 상태만 임의로 전이하지 않는다.
+이 Skill은 이슈 본문과 GitHub 생명주기만 소유합니다. 구현, 테스트 범위,
+review와 commit 절차를 복제하지 않고 각 owner에게 인계합니다.
 
-## 요청 분류
+## 요청별 읽기
 
-- **준비 상태만 점검:** [issue-contract.md](references/issue-contract.md)를 읽고 `check`를 실행한다.
-- **구현 시작:** 두 참조 문서와 [개발 협약](../../../CONTRIBUTING.md)을 읽고 `work/issue-<번호>-<설명>` 형식의 짧은 브랜치와 안정적인 에이전트 표식을 정한다. `start` 성공을 확인한 뒤 최신 `origin/main`에서 기록된 정확한 브랜치를 만들거나 전환한다.
-- **병합된 작업 완료:** [work-item-lifecycle.md](references/work-item-lifecycle.md)를 읽고 PR 병합을 확인한 뒤 `complete`를 실행한다.
-- **병합되지 않은 작업 포기:** [work-item-lifecycle.md](references/work-item-lifecycle.md)를 읽고 열려 있는 PR을 닫은 뒤 원래 브랜치, 에이전트 표식과 사유로 `release`를 실행한다.
-- **파생 차단 레이블 복구:** [work-item-lifecycle.md](references/work-item-lifecycle.md)를 읽고 선점되지 않은 `Todo` 이슈에만 `reconcile`을 실행한다.
-- **이슈 본문 작성·감사:** [issue-contract.md](references/issue-contract.md)를
-  읽고 `완료 조건`에 happy·error·recovery 행동 시나리오, 적용 가능한 추적
-  ID 또는 허용된 tooling-only 비적용 근거와 검증 계획을 연결한다. 로컬 본문
-  파일이 있으면 실제 type label을 `--label`로 전달해 `validate-body`를
-  실행하되 구조 통과를 시나리오 품질 승인으로 간주하지 않는다.
-- **개별 이슈 생성:** 두 참조 문서를 읽고 본문을 `validate-body`로 검증한다.
-  안정적인 idempotency key, 정확한 열린 milestone과 기존 label을 입력하고
-  `create --dry-run`을 먼저 실행한다. 계획 전체를 확인한 뒤 같은 입력과 출력된
-  `--confirm-plan` token으로 한 번만 생성한다. MVP 이슈에만 `--project`를
-  지정하고 일반 이슈는 Project 없이 같은 생명주기를 사용한다.
-- **MVP 작업 목록 일괄 등록:** [bulk-registration.md](references/bulk-registration.md)를 읽고 `.github/mvp-work-items.json`을 검토한 뒤 `validate`, `apply --dry-run`, 한 번의 제한된 `apply`를 차례로 실행한다.
+현재 요청에 필요한 참조만 읽습니다.
 
-저장소 루트 기준 진입점을 사용한다.
+| 요청 | 읽을 참조 |
+|---|---|
+| 본문 작성·감사, `validate-body`, `check` | [issue-contract.md](references/issue-contract.md) |
+| `start` | issue contract와 [CONTRIBUTING.md](../../../CONTRIBUTING.md)의 branch 절 |
+| `complete`, `release`, `reconcile` | [work-item-lifecycle.md](references/work-item-lifecycle.md) |
+| 개별 `create` | issue contract와 work-item lifecycle |
+| MVP 일괄 등록 | [bulk-registration.md](references/bulk-registration.md) |
+
+다른 참조를 선제적으로 읽지 않습니다. `docs/product-definition/**`은 역사
+archive이며 이슈 작성·점검·구현 시작의 기본 입력이 아닙니다.
+
+## 진입점
+
+저장소 루트에서 실행합니다.
 
 ```bash
 node .agents/skills/run-github-work-item/scripts/work-item.mjs check <issue>
-node .agents/skills/run-github-work-item/scripts/work-item.mjs create --idempotency-key <key> --title <title> --body <body-file> --milestone <title> --label <label> --dry-run
-node .agents/skills/run-github-work-item/scripts/work-item.mjs create --idempotency-key <key> --title <title> --body <body-file> --milestone <title> --label <label> --confirm-plan <dry-run-token>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs start <issue> --branch <branch> --agent <marker>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs complete <issue> --pr <merged-pr> --head <finalized-head> --repo <owner/repo>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs release <issue> --branch <branch> --agent <marker> --reason <text>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs reconcile <issue>
 node .agents/skills/run-github-work-item/scripts/work-item.mjs validate-body <body-file> [--label <actual-label>...]
+node .agents/skills/run-github-work-item/scripts/work-item.mjs create --idempotency-key <key> --title <title> --body <body-file> --milestone <title> --label <label> --dry-run
+node .agents/skills/run-github-work-item/scripts/work-item.mjs create --idempotency-key <key> --title <title> --body <body-file> --milestone <title> --label <label> --confirm-plan <dry-run-token>
 node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs validate
 node .agents/skills/run-github-work-item/scripts/bootstrap-mvp.mjs apply --dry-run
 ```
 
-`create`, `start`, `complete`, `release`, `reconcile`에 `--dry-run`을 추가하면
-모든 조회를 수행하고 예정된 변경을 출력하되 GitHub 상태는 쓰지 않는다.
-`create` 실제 쓰기는 직전 같은 입력의 dry-run token 없이는 거부한다. `check`와
-`validate-body`는 항상 읽기 전용이다.
+`create`, `start`, `complete`, `release`, `reconcile`의 `--dry-run`은 조회와 계획만
+수행합니다. `create` 실제 쓰기는 같은 입력의 직전 dry-run token을
+요구합니다. `check`와 `validate-body`는 읽기 전용입니다.
 
-## 구현 snapshot 검증
+## 이슈 작성과 검증
 
-구현 중에는 이슈의 시나리오를 확인하는 빠른 행동 테스트만 반복한다. 그 뒤
-`update-product-docs`로 전체 diff와 변경 경로를 PRD·Policy·Architecture
-정본에 대조하며, 필요한 정본이 누락됐거나 금지 경로에 있으면 tooling-only
-비적용을 승인하지 않고 별도 제품 계약 이슈로 차단한다.
+- 이슈는 독립적으로 병합 가능한 결과 하나를 소유합니다.
+- 이슈 본문을 작업 컨텍스트 manifest로 작성합니다. 목표·완료 조건, 정확한
+  PRD·Policy 파일과 ID, 좁은 허용·금지 경로, 관련 test case·suite·target과
+  문서 영향을 기록합니다.
+- 디렉터리 전체, 문서 인덱스 전체 또는 역사 archive를 구현 컨텍스트로
+  요구하지 않습니다.
+- `완료 조건`은 관련 있는 happy·error·recovery 행동과 검증 계획을
+  연결합니다. 적용되지 않는 축을 형식적으로 채우지 않습니다.
+- 제품 동작을 바꾸지 않는 `type:chore`만 issue contract의 tooling-only
+  비적용 형식을 사용할 수 있습니다.
+- 구조 validator 통과를 제품 타당성 승인으로 간주하지 않습니다.
 
-`commit-work-item`은 진입 시 기존 index가 다른 작업을 포함하지 않는지 확인한
-뒤 검토한 경로만 명시적으로 stage한다. unstaged tracked 변경과 예상하지 않은
-untracked 입력이 없는 cached diff·candidate tree를 고정하고 빠른 공통 gate를
-먼저 통과시킨 뒤 작성 컨텍스트와 분리된 읽기 전용 검토자들에게 같은
-snapshot으로 넘긴다. D0만의 수정은 review 전에 다시 stage·D0하므로 pass를
-소비하지 않는다. 작성자 자기 검토는 독립 리뷰가 아니며 작성·수정자와 최종
-승인자를 분리한다. 의도한 답이나 예상 결론을 주입하지 않고 원본 요구사항,
-cached diff, 행동 테스트와 정본 영향 결과를 제공하며, 검토자는 P0~P2 발견
-사항을 파일 위치와 재현 근거로 보고하고 직접 수정하지 않는다. 낮은 위험은
-최소 1명, 계약·validator·workflow 변경은 최소 2명, 고위험 변경은 필요한 전문
-관점별 검토자를 병렬 배치한다.
+로컬 본문은 실제 type label을 함께 전달해 검증합니다.
 
-최초 snapshot의 발견 사항을 모두 모은 뒤 저장소 고정 게이트 전체를 실행하지
-않고 한 번에 수정한다. 수정은 즉시 명시적으로 stage하고 빠른 공통 gate를
-먼저 통과시킨 뒤 필요한 행동 테스트와 정본 영향 판정을 갱신한다. 다음 pass는
-이전·현재 tree, staged delta와 현재 전체 cached diff를 함께 검토한다. 최초
-전체 리뷰와 끊기지 않은 delta review chain이 최종 candidate를 덮으면 최종
-review tree로 인정하지만, 범위·요구사항·보안 경계가 넓어지거나 chain에
-공백·모호함이 있으면 새 전체 리뷰가 필요하다. 최초 리뷰를 1회로 세어 최대
-3회까지만 review-fix를 반복하며, 3회 뒤에도 P0/P1이 남으면 상태 전이나
-승인을 진행하지 않고 blocker로 보고한다.
+```bash
+node .agents/skills/run-github-work-item/scripts/work-item.mjs \
+  validate-body <body-file> --label type:chore
+```
 
-최종 gate 선택과 증거 재사용은 `commit-work-item`이 소유한다. 모든
-candidate에서 빠른 공통 gate를 리뷰 전에 실행하고, 리뷰 뒤에는 현재
-base→candidate에 선택된 무거운 회귀군만 실행한다. gate 중 수정 뒤에는
-stage·D0, 행동 테스트·정본 영향 판정과 delta review를 거쳐
-`selectedGroups ∩ invalidatedGroups`만 다시 실행한다. 선택된 unchanged
-PASS는 유지하고 pending은 계속하며 unselected는 버린다. base까지 완전히
-되돌리면 무거운 회귀군을 실행하지 않는다. 공유 계약·classifier·입력
-manifest, base·환경 또는 선언하지 않은 입력이 바뀌거나 영향을 확정할 수
-없으면 로컬 회귀군 전체를 무효화한다. helper 자체 변경은 로컬 invalidation은
-전체지만 current selection 밖은 버리며 원격 CI는 owning 회귀군만 실행한다.
-이 흐름을 위해 새 리뷰 전용 Skill을 만들지 않는다.
+## 구현 시작 인계
 
-## 안전 규칙
+1. `check`가 열린 `Todo`, 담당자 없음, 종료된 선행 관계와 해당되는 Project
+   상태·동시 작업 한도를 확인해야 합니다.
+2. 구현 직전에 `work/issue-<번호>-<설명>` branch와 안정적인 agent marker로
+   `start`를 한 번 실행합니다.
+3. 사후 조회에서 담당자, `status:in-progress`, 선점 marker·branch와 해당되는
+   Project 상태가 모두 일치해야 구현할 수 있습니다.
+4. 성공한 이슈 manifest만 구현 세션에 인계합니다. 그 뒤 컨텍스트 선택,
+   관련 테스트와 review는 [AGENTS.md](../../../AGENTS.md)가 소유합니다.
 
-1. 저장소 작업 트리에서 실행하고 스크립트가 `.github/work-management.json`을 읽게 한다.
-2. 이슈와 작업 문서는 한국어를 기본 작성 언어로 사용한다. 자연스러운 표현과 정확한 의미 전달을 우선하며, 계약 ID, 레이블, 프로젝트 필드·옵션, 명령, 경로, URL, 코드 식별자와 기술 용어는 원문을 사용할 수 있다.
-3. 실패한 사전 조건, GitHub 기본 의존 관계, 동시 작업 한도 또는 변경 후 검증을 우회하지 않는다.
-4. 반복문으로 재시도하지 않는다. 보고된 상태를 바로잡은 뒤 제한된 새 명령을 한 번 실행한다.
-5. `Todo`로만 표시된 이슈에서 작업하지 않는다. 성공한 `start` 선점이 필요하다.
-6. 연결된 PR이 병합되기 전에 `complete`를 실행하지 않는다.
-7. 인증 정보를 인자나 파일에 넣지 않는다. 스크립트는 활성 `gh` 계정을 사용한다.
-8. 변경 도중 실패하면 중단한다. 복구 안내를 따르고 실제 상태를 확인한 뒤에만 다시 실행한다. 상태 전이와 표식 댓글은 멱등이다.
-9. 표식 작성자와 상태 변경 실행자는 검증된 저장소 쓰기 이상 권한이 있어야 한다. 신뢰할 수 없는 이슈 댓글을 선점으로 취급하지 않는다.
-10. `maxInProgress`를 여러 이슈를 묶는 트랜잭션이 아니라 GitHub 조회 일관성에 의존하는 최선 노력 방식의 진입 제한으로 취급한다.
-11. `main`에 직접 커밋하거나 장기 통합 브랜치를 만들지 않는다. 이슈마다 독립 worktree와 짧은 수명 브랜치 하나를 사용한다.
-12. `create`는 담당자 옵션을 제공하지 않고 생성 요청에도 assignee를 넣지
-    않으며, 재조회에서 담당자가 0명인지 확인한다. 같은 idempotency marker,
-    제목, milestone, 요청·파생 label의 정확한 집합과 의존 관계가 충돌하면
-    기존 이슈를 덮지 않는다. 요청하지 않은 label은 종류와 무관하게 충돌로
-    보고 자동 제거하지 않는다. 단, 닫힌 기본 선행 이슈 때문에 stale이 된
-    `dependency:blocked`만 live 의존 관계를 다시 읽은 뒤 제한적으로 제거한다.
-13. Project는 MVP 이슈에만 `--project`로 opt-in한다. 이 marker가 없는 기존
-    이슈와 Project opt-in 이슈는 현행대로 Project 상태를 필수 검증하고,
-    `project=none` create marker와 이슈 작성자의 현재 저장소 write 이상
-    권한이 함께 검증된 일반 이슈만 Project 조회·전이를 생략한다. 신뢰할 수
-    없는 작성자의 marker는 Project opt-out 근거로 사용하지 않는다.
-14. 저장소 전체 이슈를 찾을 때 관련 없는 malformed create marker는 건너뛰어
-    다른 개별 이슈 생성을 막지 않는다. 선택된 이슈의 malformed·중복 marker와
-    같은 idempotency key 충돌은 계속 fail-closed한다.
-15. `complete`는 REST PR의 `base.repo.full_name`과
-    `head.repo.full_name`이 모두 설정된 작업 저장소와 같을 때만 실행한다.
-    fork·cross-repository PR이나 repository identity가 누락된 응답은 branch와
-    head SHA가 같아도 완료 근거로 사용하지 않는다.
-16. 제품 계약 ID 비적용은 [이슈 계약](references/issue-contract.md)의
-    tooling-only 형식과 raw 문자열이 정확한 실제 `type:chore` 하나가 모두
-    맞을 때만 허용하고 앞뒤 whitespace를 정규화해 승인하지 않는다.
-    개별 `create`, `check`, `start`, `validate-body`에만 적용하고 MVP 일괄
-    등록은 계속 제품 정본 ID를 요구한다. exact 비적용 prefix가 있는 본문은
-    rendered ID·경로 판정보다 먼저 fail-closed 소스 문법으로 검사한다. 정확한
-    create marker 한 줄, 일반 제목·문단·목록·표, inline code와 같은 줄에서
-    완결된 inline link만 사용하고 HTML·entity·image·reference·blockquote·
-    4열 이상 소스 들여쓰기·각 nested list marker 뒤 tab·5칸 이상 padding·
-    indented·fenced code·CRLF가 아닌 bare CR 또는 불완전한
-    bracket·destination으로 표현력을 넓히지 않는다. 이 문법은
-    CommonMark 전체를 해석하려는 계약이 아니다.
+`start`가 실패하면 branch를 만들거나 코드를 수정하지 않습니다. 상태를
+바로잡고 현재 GitHub 상태를 확인한 새 명령으로만 재개합니다.
 
-정확한 이슈 본문 계약은 [issue-contract.md](references/issue-contract.md)에 있다. 상태 전이, 설정, 의존 관계 해제와 복구 규칙은 [work-item-lifecycle.md](references/work-item-lifecycle.md)에 있다. 순서가 보장되고 멱등인 MVP 등록 절차는 [bulk-registration.md](references/bulk-registration.md)에 있다.
+## 생성·상태 전이 안전
+
+- `create`는 담당자를 입력하지 않으며 생성 뒤 담당자 0명을 재조회합니다.
+- `status:todo`와 열린 기본 선행 이슈에 따른 `dependency:blocked`는 도구가
+  파생합니다. type·area label만 명시적으로 전달합니다.
+- MVP 이슈만 `--project`로 Project를 opt-in합니다. 검증된
+  `project=none` marker가 있는 일반 이슈는 label 생명주기를 사용합니다.
+- idempotency marker, 제목, milestone, label 집합이나 의존 관계가 충돌하면
+  기존 이슈를 덮거나 자동 정리하지 않습니다.
+- 일부 쓰기 뒤 실패하면 이슈를 삭제하거나 같은 요청을 자동 반복하지
+  않습니다. 현재 상태를 재조회하고 새 dry-run으로 남은 단계만 계획합니다.
+- Project 최대 `In Progress` 수는 best-effort admission guard입니다. 최종
+  검증이 초과를 발견하면 구현을 시작하지 않습니다.
+- 비밀, 내부 네트워크 식별자, 인증 정보와 개인 데이터를 공개 이슈에 넣지
+  않습니다.
+
+## 완료 안전
+
+`complete`는 연결된 PR이 병합됐고, REST PR의 `base.repo.full_name`과
+`head.repo.full_name`이 모두 작업 저장소와 같은 same-repository PR일 때만
+실행합니다. fork, 저장소 신원 누락, branch·head 불일치 또는 불명확한 병합
+응답은 완료 근거가 아닙니다.
+
+병합 확인 뒤 이 Skill이 이슈 label·Project 상태·종료와 후행 의존성 전이를
+소유합니다. 원격 branch와 로컬 worktree 정리는 `open-pull-request`가
+소유합니다. 자동 retry 없이 마지막 성공 상태부터 재개합니다.

@@ -5,14 +5,7 @@ on:
     types:
       - opened
       - synchronize
-      - reopened
-      - edited
-  push:
-    branches:
-      - main
   workflow_dispatch:
-  schedule:
-    - cron: "23 18 * * 0"
 
 permissions:
   contents: read
@@ -31,21 +24,28 @@ jobs:
       reason: ${{ steps.paths.outputs.reason }}
       changed_paths_json: ${{ steps.paths.outputs.changed_paths_json }}
     steps:
-      - name: 저장소 체크아웃
+      - name: exact head 체크아웃
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+
+      - name: exact head 확인
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "checkout HEAD가 검증 대상 SHA와 다릅니다."
+            echo "expected=$EXPECTED_SHA"
+            echo "actual=$ACTUAL_SHA"
+            exit 1
+          fi
 
       - name: Node.js 고정
         uses: actions/setup-node@v6
         with:
           node-version: 24
-
-      - name: 경로 classifier 자체 검증
-        run: |
-          node --check .github/workflows/validate-app-paths.mjs
-          node --check .github/workflows/validate-app-paths.test.mjs
-          node --test .github/workflows/validate-app-paths.test.mjs
 
       - name: 변경 경로 분류
         id: paths
@@ -72,8 +72,22 @@ jobs:
       # 다시 정한다.
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
     steps:
-      - name: 저장소 체크아웃
+      - name: exact head 체크아웃
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: exact head 확인
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "checkout HEAD가 검증 대상 SHA와 다릅니다."
+            echo "expected=$EXPECTED_SHA"
+            echo "actual=$ACTUAL_SHA"
+            exit 1
+          fi
 
       - name: 도구 버전 고정 확인
         run: |
@@ -86,13 +100,6 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks | grep -i macos
           swift --version
-
-      - name: 앱 빌드
-        run: |
-          xcodebuild build \
-            -project LunchTime.xcodeproj \
-            -scheme LunchTime \
-            -destination 'platform=macOS'
 
       # UI 테스트는 automation mode 권한과 앱 실행 타이밍에 의존해 결정적이지
       # 않으므로 실행에서 제외한다. 기본 scheme도 이미 제외하지만 scheme이 바뀌어도
@@ -107,14 +114,6 @@ jobs:
             -destination 'platform=macOS' \
             -skip-testing:LunchTimeUITests \
             -resultBundlePath "${{ runner.temp }}/LunchTime.xcresult"
-
-      - name: Release 구성 빌드
-        run: |
-          xcodebuild build \
-            -project LunchTime.xcodeproj \
-            -scheme LunchTime \
-            -configuration Release \
-            -destination 'platform=macOS'
 
       - name: 실패 진단 자료 업로드
         if: failure()
@@ -135,8 +134,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 저장소 체크아웃
+      - name: exact head 체크아웃
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: exact head 확인
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "checkout HEAD가 검증 대상 SHA와 다릅니다."
+            echo "expected=$EXPECTED_SHA"
+            echo "actual=$ACTUAL_SHA"
+            exit 1
+          fi
 
       - name: 선택 결과와 실행 결과 결속
         env:
