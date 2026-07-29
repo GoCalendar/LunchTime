@@ -242,6 +242,15 @@ public enum ProjectionReducer {
         // 3. Room·사용자별 참여 상태.
         var participation: [RoomID: [UserID: ParticipationState]] = [:]
         for (room, info) in roomInfo {
+            // 생성 record가 둘 이상이면 누가 생성자인지 확정되지 않았다. 더 이른
+            // 논리 순서로 심은 record가 결정적 첫 record가 되면 그 작성자가
+            // `creator`를 가져가고, 자동 참여로 등록되는 순간 불변식 34의
+            // "참여 상태 없는 사용자의 메뉴는 만들지 않는다"까지 통과한다.
+            // 확정되지 않은 생성자를 참여자로 세우지 않는다.
+            guard duplicateRoomRecords[room] == nil else {
+                participation[room] = [:]
+                continue
+            }
             participation[room] = [info.creator: .creatorWithoutRemoteAcknowledgement]
         }
         for request in requests.values.sorted(by: LedgerEvent.deterministicOrder) {
@@ -446,7 +455,17 @@ public enum ProjectionReducer {
             // 취소 Room이어도 마지막 유효 주문 동작은 계산한다. 계산을 건너뛰면
             // 완료 상태로 취소된 방이 `진행 중`으로 보인다.
             var orderState: OrderState = .inProgress
-            if let last = orderingEvents.last {
+            // Room 정보가 확정되지 않았으면 되돌리기도 확정 동작으로 보지
+            // 않는다. 심은 생성 record를 권한 근거로 쓴 `orderReverted` 하나가
+            // 마지막 유효 동작이 되면 정당한 완료 표식이 모든 Peer에서
+            // `진행 중`으로 사라진다. `POL-01` 4.2는 완료와 되돌리기를 누가
+            // 언제 실행했는지 표시하라고 정하므로, 미확정 Room에서는 마지막
+            // 완료를 `확인 필요`로 남긴다.
+            let lastOrderEvent = roomRecordAmbiguous
+                ? (orderingEvents.last { if case .orderCompleted = $0.kind { return true } else { return false } }
+                    ?? orderingEvents.last)
+                : orderingEvents.last
+            if let last = lastOrderEvent {
                 if case .orderCompleted(_, _, let snapshot) = last.kind {
                     let currentParticipants = states
                         .filter { $0.value.isConfirmedByRemoteAcknowledgement }

@@ -146,8 +146,14 @@ public struct LocalObservationProjection: Sendable {
 
         // 생성자 기기가 아닌 기기의 event가 하나라도 있으면 원격 이력이다.
         guard roomEvents.allSatisfy({ $0.authorDevice == created.authorDevice }) else { return false }
-        // 원격 참여·ACK evidence record가 하나라도 있으면 예외가 아니다.
-        let hasRemoteParticipationRecord = roomEvents.contains {
+        // 참여 evidence record가 하나라도 있으면 예외가 아니다.
+        //
+        // 이름을 `원격 참여 record`로 읽으면 안 된다. 바로 위 guard가 다른 기기의
+        // event를 이미 걸러냈으므로 여기 남는 것은 **생성자 자신의 기기가 만든**
+        // record뿐이다. 실제 효과는 "생성자가 자기 방에 참여 요청을 하나라도
+        // 남기면 단독 Room 예외가 사라진다"이며, 원격 여부를 관측하는 것이
+        // 아니다. 방향은 fail-closed다.
+        let hasParticipationRecord = roomEvents.contains {
             switch $0.kind {
             case .participationRequest, .participationAcceptance, .participationConfirmation:
                 return true
@@ -155,7 +161,7 @@ public struct LocalObservationProjection: Sendable {
                 return false
             }
         }
-        guard !hasRemoteParticipationRecord else { return false }
+        guard !hasParticipationRecord else { return false }
         // 어떤 event든 다른 Peer가 StorageACK한 이력이 있으면 이미 공유된 Room이다.
         let acknowledged = roomEvents.contains { event in
             !(observation.storageAcknowledgements[event.id]?.isEmpty ?? true)

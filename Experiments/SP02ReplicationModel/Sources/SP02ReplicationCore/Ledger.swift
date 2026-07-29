@@ -258,11 +258,22 @@ public struct Ledger: Sendable {
             return nil
 
         case .duplicateParticipationSelection(let keptConfirmation, let supersededConfirmations):
-            // 일일 세션 scope 이벤트이므로 Room 일치를 요구하지 않는다.
+            // 일일 세션 scope 이벤트이므로 Room 일치를 요구하지 않는다. 대신
+            // 참조가 같은 운영일인지는 확인해야 한다.
             guard event.room == nil else { return .scopeMismatch }
             for referenced in [keptConfirmation] + supersededConfirmations {
                 guard let confirmation = validated[referenced] else { return .scopeMismatch }
+                guard confirmation.daySession == event.daySession else { return .scopeMismatch }
                 guard confirmation.authorUser == event.authorUser else { return .recordOwnedByOtherUser }
+                // 선택은 철회와 같은 종결 효과를 낸다 — 지목되지 않은 Room의
+                // 참여가 `supersededByUserSelection`으로 무효화되고 그 메뉴가
+                // `revoked`가 되며, 그 사이 `확인 필요` 차단까지 사라진다.
+                // 사용자 ID만 보면 같은 ID를 주장하는 다른 기기가 남의 확정
+                // 참여와 메뉴를 아무 신호 없이 주문에서 제거할 수 있다.
+                // 불변식 20·25와 같은 근거로 기기까지 본다.
+                guard confirmation.authorDevice == event.authorDevice else {
+                    return .recordOwnedByOtherDevice
+                }
                 guard case .participationConfirmation = confirmation.kind else { return .scopeMismatch }
             }
             return nil
@@ -275,12 +286,19 @@ public struct Ledger: Sendable {
                 if let mismatch = sameRoom(event, as: droppedHead) { return mismatch }
                 guard let dropped = validated[droppedHead] else { return .scopeMismatch }
                 guard dropped.authorUser == event.authorUser else { return .recordOwnedByOtherUser }
+                guard dropped.authorDevice == event.authorDevice else { return .recordOwnedByOtherDevice }
                 guard case .menuRevision = dropped.kind else { return .scopeMismatch }
             }
             if let parent {
                 if let mismatch = sameRoom(event, as: parent) { return mismatch }
                 guard let parentEvent = validated[parent] else { return .scopeMismatch }
                 guard parentEvent.authorUser == event.authorUser else { return .menuAuthorIsNotOwner }
+                // 기기를 보지 않으면 같은 ID를 주장하는 다른 기기가 남의 메뉴에
+                // 리비전을 이어 붙여 head를 조용히 교체한다. 분기가 아니므로
+                // `확인 필요`도 붙지 않는다.
+                guard parentEvent.authorDevice == event.authorDevice else {
+                    return .recordOwnedByOtherDevice
+                }
                 guard case .menuRevision(_, let parentRevision, _, _, _) = parentEvent.kind,
                       revision == parentRevision + 1 else {
                     return .menuRevisionNotSequential
@@ -331,6 +349,9 @@ public struct Ledger: Sendable {
         if let mismatch = sameRoom(event, as: authority) { return mismatch }
         guard let authorityEvent = validated[authority] else { return .scopeMismatch }
         guard authorityEvent.authorUser == event.authorUser else { return missing }
+        // 권한 record도 같은 기기가 만든 것이어야 한다. `POL-03-R-02`가 사용자
+        // ID와 설치·기기를 1:1로 묶으므로 기기 불일치는 언제나 사칭이다.
+        guard authorityEvent.authorDevice == event.authorDevice else { return missing }
         switch authorityEvent.kind {
         case .participationConfirmation, .roomCreated:
             return nil

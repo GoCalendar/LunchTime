@@ -551,6 +551,68 @@ struct ProjectionTests {
         }
     }
 
+    @Test("심은 생성 record를 근거로 한 되돌리기는 완료 표식을 지우지 못한다")
+    func plantedRevertCannotEraseCompletion() {
+        // 되돌리기에 같은 가드가 없으면, 심은 record를 authority로 쓴
+        // `orderReverted` 하나가 마지막 유효 동작이 되어 정당한 완료 기록이
+        // 모든 Peer에서 `진행 중`으로 사라진다. `POL-01` 4.2는 완료와 되돌리기를
+        // 누가 언제 실행했는지 표시하도록 정한다.
+        let completed = makeEvent(
+            "E74", user: FixtureBase.u1, device: FixtureBase.d1, room: FixtureBase.r1, order: 74, at: 700,
+            kind: .orderCompleted(
+                roomRecord: EventID("E01"),
+                authority: EventID("E07"),
+                snapshot: OrderSnapshot(
+                    participants: [FixtureBase.u1, FixtureBase.u2],
+                    menuHeads: [FixtureBase.u1: EventID("E08"), FixtureBase.u2: EventID("E09")]
+                )
+            )
+        )
+        let attack = plantedRoomRecordAttack(order: 75)
+        let plantedRevert = makeEvent(
+            "E76", user: FixtureBase.u3, device: FixtureBase.d3, room: FixtureBase.r1, order: 76, at: 702,
+            kind: .orderReverted(roomRecord: EventID("E01"), authority: EventID("E70"))
+        )
+        let events = base.all + [completed, attack.planted, plantedRevert]
+        let store = ledger(events)
+        #expect(store.validated[EventID("E76")] != nil, "이 시험의 전제인 장부 통과가 사라졌다")
+
+        for arrival in rotations(of: events) {
+            let room = projection(arrival).rooms[FixtureBase.r1]
+            #expect(room?.orderState == .completedNeedsReview(
+                event: EventID("E74"), by: FixtureBase.u1, atMinute: 700
+            ))
+        }
+    }
+
+    @Test("더 이른 논리 순서로 심어도 심은 사람이 참여자·메뉴로 들어오지 않는다")
+    func earlierPlantedRecordDoesNotCreateParticipant() {
+        // 심은 record가 결정적 첫 record가 되면 그 작성자가 `creator`를
+        // 가져간다. 생성자 자동 참여로 등록하면 참여 상태가 생기고, 불변식 34의
+        // "참여 상태 없는 사용자의 메뉴는 만들지 않는다"까지 통과해 비참여자의
+        // 메뉴가 수렴 projection에 들어간다.
+        let attack = plantedRoomRecordAttack(order: 0)
+        let plantedMenu = makeEvent(
+            "E77", user: FixtureBase.u3, device: FixtureBase.d3, room: FixtureBase.r1, order: 77, at: 702,
+            kind: .menuRevision(
+                items: ["M3"], revision: 1, parent: nil, supersedes: [], authority: EventID("E70")
+            )
+        )
+        let events = base.all + [attack.planted, plantedMenu]
+        let store = ledger(events)
+        #expect(store.validated[EventID("E77")] != nil, "이 시험의 전제인 장부 통과가 사라졌다")
+
+        for arrival in rotations(of: events) {
+            let room = projection(arrival).rooms[FixtureBase.r1]
+            #expect(room?.creator == FixtureBase.u3, "이 시험의 전제가 깨졌다")
+            #expect(room?.participants[FixtureBase.u3] == nil)
+            #expect(room?.menus[FixtureBase.u3] == nil)
+            // 정상 참여자는 그대로 남는다.
+            #expect(room?.participants[FixtureBase.u1] == .confirmed(confirmation: EventID("E07")))
+            #expect(room?.menus[FixtureBase.u1]?.headEventID == EventID("E08"))
+        }
+    }
+
     @Test("생성 record가 하나뿐이면 정상 완료는 그대로 확정된다")
     func singleRoomRecordStillConfirmsCompletion() {
         // 미확정 판정이 정상 완료까지 막으면 fail-closed가 아니라 기능 정지다.

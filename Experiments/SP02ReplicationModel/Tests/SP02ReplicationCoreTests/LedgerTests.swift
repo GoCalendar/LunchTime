@@ -287,6 +287,53 @@ struct LedgerTests {
             .participants[FixtureBase.u2] == .confirmed(confirmation: EventID("E05")))
     }
 
+    @Test("같은 사용자 ID를 주장하는 다른 기기의 중복 참여 선택은 거부한다")
+    func duplicateSelectionFromAnotherDeviceIsRejected() {
+        // 선택은 철회와 같은 종결 효과를 낸다 — 지목되지 않은 Room의 참여가
+        // 무효화되고 그 메뉴가 `revoked`가 되며 `확인 필요` 차단까지 사라진다.
+        // 사용자 ID만 보면 다른 기기가 남의 확정 참여와 메뉴를 아무 신호 없이
+        // 주문에서 제거할 수 있다.
+        let fixture = FixtureCatalog.duplicateRoomParticipation()
+        var store = Ledger()
+        for event in fixture.authored.values.flatMap({ $0 }).sorted(by: LedgerEvent.deterministicOrder) {
+            store.receive(event)
+        }
+        let before = ProjectionReducer.reduce(daySession: fixture.daySession, ledger: store)
+        #expect(before.rooms[FixtureBase.r1]?.participants[FixtureBase.u2] == .conflictedAcrossRooms)
+
+        // U2를 주장하는 두 번째 기기 D3이 R2를 유지하고 R1을 버리는 선택.
+        let injected = makeEvent(
+            "E95", user: FixtureBase.u2, device: FixtureBase.d3, room: nil, order: 95, at: 700,
+            kind: .duplicateParticipationSelection(
+                keptConfirmation: EventID("E36"), supersededConfirmations: [EventID("E33")]
+            )
+        )
+        #expect(store.receive(injected) == .rejected(reason: .recordOwnedByOtherDevice))
+        let after = ProjectionReducer.reduce(daySession: fixture.daySession, ledger: store)
+        #expect(after.rooms[FixtureBase.r1]?.participants[FixtureBase.u2] == .conflictedAcrossRooms)
+        #expect(after.daySessionConflicts.isEmpty == false)
+    }
+
+    @Test("같은 사용자 ID를 주장하는 다른 기기의 메뉴 리비전은 거부한다")
+    func menuRevisionFromAnotherDeviceIsRejected() {
+        // 기기를 보지 않으면 남의 메뉴에 리비전을 이어 붙여 head를 조용히
+        // 교체할 수 있다. 분기가 아니므로 `확인 필요`도 붙지 않는다.
+        var ledger = ledgerWithBaseRoom()
+        let hijackedParent = makeEvent(
+            "E96", user: FixtureBase.u1, device: FixtureBase.d3, room: FixtureBase.r1, order: 96, at: 700,
+            kind: .menuRevision(
+                items: ["M1-x"], revision: 2, parent: EventID("E08"), supersedes: [],
+                authority: EventID("E07")
+            )
+        )
+        // 권한 record도 같은 기기여야 한다. parent 검사에 도달하기 전에 걸린다.
+        #expect(ledger.receive(hijackedParent) == .rejected(reason: .menuAuthorIsNotOwner))
+        #expect(ProjectionReducer
+            .reduce(daySession: FixtureBase.daySession, ledger: ledger)
+            .rooms[FixtureBase.r1]?
+            .menus[FixtureBase.u1]?.headEventID == EventID("E08"))
+    }
+
     @Test("수락·실패 대상이 참여 요청 record가 아니면 거부한다")
     func acceptanceAndFailureTargetsMustBeRequests() {
         // 종류를 보지 않으면 참여 요청이 아닌 record 위에 세운 수락·확정이

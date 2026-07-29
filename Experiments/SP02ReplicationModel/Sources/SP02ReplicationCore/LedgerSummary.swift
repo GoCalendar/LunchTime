@@ -13,9 +13,20 @@ public struct ScopeSummary: Equatable, Sendable {
     public let scope: EventScope
     /// 정렬된 보유 event ID.
     public let eventIDs: [EventID]
+    /// 보유 event의 payload digest.
+    ///
+    /// ID만 접으면 불변식 9가 projection에서 막은 것과 **똑같은 구멍**이
+    /// 대조 계약에 남는다. 두 Peer가 같은 ID의 서로 다른 payload를 하나씩만
+    /// 보유하면 요약이 일치해 세션이 `converged`로 끝나고, 양쪽이 서로 다른
+    /// 주문 요약을 들고 `동기화됨`·주문 가능이 된다. 격리는 한 Peer가 두
+    /// payload를 **모두** 본 경우에만 작동하므로 이 쌍을 잡지 못한다.
+    public let payloadDigests: [EventID: String]
 
     public var digest: String {
-        Digest.hex(of: "\(scope.description)|" + eventIDs.map(\.rawValue).joined(separator: ","))
+        let entries = eventIDs
+            .map { "\($0.rawValue):\(payloadDigests[$0] ?? "")" }
+            .joined(separator: ",")
+        return Digest.hex(of: "\(scope.description)|" + entries)
     }
 }
 
@@ -29,11 +40,17 @@ public struct LedgerSummary: Equatable, Sendable {
     /// 재검증 전 payload가 장부에 퍼진다.
     public init(ledger: Ledger) {
         var grouped: [EventScope: [EventID]] = [:]
+        var digests: [EventScope: [EventID: String]] = [:]
         for event in ledger.validated.values {
             grouped[event.scope, default: []].append(event.id)
+            digests[event.scope, default: [:]][event.id] = event.payloadDigest
         }
         scopes = grouped.reduce(into: [:]) { result, entry in
-            result[entry.key] = ScopeSummary(scope: entry.key, eventIDs: entry.value.sorted())
+            result[entry.key] = ScopeSummary(
+                scope: entry.key,
+                eventIDs: entry.value.sorted(),
+                payloadDigests: digests[entry.key] ?? [:]
+            )
         }
     }
 

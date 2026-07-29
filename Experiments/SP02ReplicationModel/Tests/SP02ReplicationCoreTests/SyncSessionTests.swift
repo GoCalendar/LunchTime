@@ -174,6 +174,49 @@ struct SyncSessionTests {
         #expect(left.observation.storageAcknowledgements[EventID("A98")] == nil)
     }
 
+    @Test("같은 ID·다른 payload를 하나씩만 가진 두 Peer는 요약 일치로 끝나지 않는다")
+    func sameIDDifferentPayloadIsDetectedBySummary() {
+        // 요약이 event ID 집합만 접으면, 불변식 9가 projection에서 막은 것과
+        // 똑같은 구멍이 대조 계약에 남는다. 각 Peer가 같은 ID의 서로 다른
+        // payload를 **하나씩만** 보유하면 어느 쪽도 격리를 만들지 못하므로
+        // (격리는 두 payload를 모두 본 Peer에게만 생긴다) 그 차이를 볼 수 있는
+        // 것은 요약뿐이다.
+        var left = PeerState(id: FixtureBase.p1, device: FixtureBase.d1)
+        var right = PeerState(id: FixtureBase.p2, device: FixtureBase.d2)
+        let honest = base.all.sorted(by: LedgerEvent.deterministicOrder)
+        for event in honest where event.id != base.menuU2.id {
+            left.ledger.receive(event)
+            right.ledger.receive(event)
+        }
+        // 같은 ID `E09`에 서로 다른 메뉴 내용.
+        let forged = makeEvent(
+            "E09", user: FixtureBase.u2, device: FixtureBase.d2, room: FixtureBase.r1, order: 9, at: 676,
+            kind: .menuRevision(
+                items: ["M2-변조"], revision: 1, parent: nil, supersedes: [], authority: EventID("E05")
+            )
+        )
+        left.ledger.receive(base.menuU2)
+        right.ledger.receive(forged)
+        #expect(left.ledger.quarantined.isEmpty)
+        #expect(right.ledger.quarantined.isEmpty, "격리가 생기면 이 시험의 전제가 사라진다")
+
+        let leftHash = ProjectionReducer.reduce(daySession: FixtureBase.daySession, ledger: left.ledger).hash
+        let rightHash = ProjectionReducer.reduce(daySession: FixtureBase.daySession, ledger: right.ledger).hash
+        #expect(leftHash != rightHash, "두 Peer가 실제로 다른 주문 요약을 들고 있어야 한다")
+
+        let result = AntiEntropy.reconcile(&left, &right, limits: SessionLimits())
+        // 요약이 내용 차이를 보므로 세션이 `일치`로 끝나지 않는다.
+        #expect(result.converged == false)
+        #expect(result.stopReason == .attemptLimitReached)
+        // 양쪽 모두 `확인 필요`로 남고 주문 완료가 막힌다.
+        for peer in [left, right] {
+            let local = peer.localProjection(daySession: FixtureBase.daySession)
+            #expect(local.status(of: EventID("E09")) == .needsReview)
+            #expect(local.orderReadiness(room: FixtureBase.r1)
+                .blockers.contains(.peerSummaryDifferenceUnreconciled))
+        }
+    }
+
     @Test("세션은 스스로 재시작하지 않는다")
     func sessionDoesNotRestartItself() {
         // 한도를 소진한 세션이 같은 호출 안에서 다시 시도하면 시도 횟수가
