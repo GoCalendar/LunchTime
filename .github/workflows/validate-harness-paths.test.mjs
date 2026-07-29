@@ -89,6 +89,7 @@ test("owner 입력 파일도 관련 회귀군을 선택한다", () => {
 test("일반 문서와 회귀 명령이 직접 읽지 않는 Skill 설명은 대형 회귀군을 선택하지 않는다", () => {
   const result = classifyChangedPaths([
     "README.md",
+    "docs/development/03_validation_ci_flow.md",
     "docs/meetings/2026-07-29-harness.md",
     ".agents/skills/open-pull-request/SKILL.md",
     ".agents/skills/open-pull-request/references/cleanup-notes.md",
@@ -96,6 +97,7 @@ test("일반 문서와 회귀 명령이 직접 읽지 않는 Skill 설명은 대
   falseGroups(result);
   assert.deepEqual(result.changedPaths, [
     "README.md",
+    "docs/development/03_validation_ci_flow.md",
     "docs/meetings/2026-07-29-harness.md",
     ".agents/skills/open-pull-request/SKILL.md",
     ".agents/skills/open-pull-request/references/cleanup-notes.md",

@@ -1498,6 +1498,44 @@ function readVisibleH2Sections(content) {
   }));
 }
 
+const harnessGuideFile = "docs/development/01_harness_guide.md";
+const testingStandardFile = "docs/development/02_testing_standard.md";
+const validationCiFlowFile =
+  "docs/development/03_validation_ci_flow.md";
+const validationCiFlowRequiredSections = [
+  "문서 경계와 정본",
+  "변경 경로별 CI 회귀 선택",
+  "최종 snapshot 검증 순서",
+  "실패와 증거 무효화",
+  "원격 required CI",
+];
+const validationCiFlowMovedSections = [
+  "변경 경로별 CI 회귀 선택",
+  "최종 snapshot 검증 순서",
+  "실패와 증거 무효화",
+];
+const independentReviewOwnerLink = [
+  "독립 리뷰 표준",
+  "./01_harness_guide.md#독립-리뷰-표준",
+];
+const validationCiFlowCanonicalLinks = [
+  ["개발 하네스 가이드", "./01_harness_guide.md"],
+  independentReviewOwnerLink,
+  [
+    "commit-work-item 계약",
+    "../../.agents/skills/commit-work-item/references/commit-contract.md",
+  ],
+  ["validate workflow", "../../.github/workflows/validate-harness.yml"],
+  ["app-test workflow", "../../.github/workflows/app-ci.yml"],
+  [
+    "pr-metadata workflow",
+    "../../.github/workflows/validate-pr-metadata.yml",
+  ],
+  [
+    "canonical classifier",
+    "../../.github/workflows/validate-harness-paths.mjs",
+  ],
+];
 const harnessRoutingDocuments = [
   {
     file: "AGENTS.md",
@@ -1508,7 +1546,7 @@ const harnessRoutingDocuments = [
     section: "8. 병합과 정리",
   },
   {
-    file: "docs/development/01_harness_guide.md",
+    file: harnessGuideFile,
     section: "규칙 소유와 링크",
   },
 ];
@@ -1628,18 +1666,11 @@ const finalSnapshotGateOrder = [
   {
     order: "5",
     stage: "독립 리뷰",
+    ownerLink: independentReviewOwnerLink,
     contracts: [
       [
-        "D0 뒤 최초 candidate 리뷰",
-        /D0를 통과한 최초 cached diff·candidate tree[\s\S]{0,160}reviewer가 검토/,
-      ],
-      [
-        "수정 뒤 stage→D0와 delta review",
-        /수정하면 stage→D0[\s\S]{0,160}행동 테스트·정본 의미 영향 판정[\s\S]{0,120}이전·현재 tree[\s\S]{0,100}staged delta·현재 전체 diff[\s\S]{0,80}delta review/,
-      ],
-      [
-        "delta review chain의 전체 리뷰 fallback",
-        /범위·요구사항·보안 경계 확대[\s\S]{0,120}chain 공백·모호함[\s\S]{0,120}새 전체 리뷰/,
+        "동일 candidate의 독립 리뷰 owner 인계",
+        /D0를 통과한 같은 cached diff·candidate tree[\s\S]{0,120}독립 리뷰 표준[\s\S]{0,120}승인된 같은 candidate[\s\S]{0,80}다음 gate로 인계/,
       ],
     ],
   },
@@ -1705,8 +1736,9 @@ const finalSnapshotRecoveryOrder = [
   {
     situation: "의미 영향·review chain 불완전",
     evidence: /review 증거 재사용 거부/,
+    ownerLink: independentReviewOwnerLink,
     reentry:
-      /의미 영향 판정[\s\S]{0,100}delta review[\s\S]{0,160}범위 확대[\s\S]{0,80}chain 공백·모호함[\s\S]{0,100}새 전체 리뷰/,
+      /독립 리뷰 표준[\s\S]{0,100}소유한 복구 판정[\s\S]{0,120}승인된 같은 candidate[\s\S]{0,100}gate 흐름을 재개/,
   },
   {
     situation: "개별 회귀군 증거 불완전",
@@ -2322,7 +2354,7 @@ const plannedIdRoutingDocuments = [
     section: "4. 개발 템플릿",
   },
   {
-    file: "docs/development/01_harness_guide.md",
+    file: harnessGuideFile,
     section: "규칙 소유와 링크",
   },
 ];
@@ -4481,6 +4513,108 @@ function validateHarnessOrchestration(file) {
   }
 }
 
+function requireExactVisibleH2Sections(
+  file,
+  content,
+  sectionNames,
+  ownerLabel,
+) {
+  const visible = visibleFinalSnapshotMarkdown(content);
+  const sections = readStrictH2Sections(content, content);
+  const canonical = new Map();
+
+  for (const name of sectionNames) {
+    const matches = sections.filter(
+      (section) =>
+        section.source === `## ${name}` &&
+        strictH2SourceIsVisible(visible, section),
+    );
+    const protectedCount = protectedH2Matches(content, name).length;
+    if (matches.length !== 1 || protectedCount !== 1) {
+      errors.push(
+        `${file}: ${ownerLabel}은 exact visible top-level H2로 정확히 하나여야 합니다: ${name} (canonical ${matches.length}개, 보호 후보 ${protectedCount}개)`,
+      );
+    } else {
+      canonical.set(name, matches[0]);
+    }
+  }
+  return canonical;
+}
+
+function requireOneVisibleInlineLink(
+  file,
+  context,
+  source,
+  [label, target],
+) {
+  const count = scanInlineMarkdownLinks(
+    maskMarkdownStructureForLinkScan(source),
+  ).filter(
+    (link) =>
+      !link.isImage &&
+      link.label === label &&
+      link.target === target,
+  ).length;
+  if (count !== 1) {
+    errors.push(
+      `${file}: ${context}에는 canonical owner 링크 '[${label}](${target})'가 정확히 하나 필요합니다.`,
+    );
+  }
+}
+
+function validateValidationCiFlowOwnership(file, reviewOwnerFile) {
+  if (!isFile(file)) return;
+
+  const content = fs.readFileSync(path.join(root, file), "utf8");
+  const canonicalSections = requireExactVisibleH2Sections(
+    file,
+    content,
+    validationCiFlowRequiredSections,
+    "검증·CI owner 구역",
+  );
+  const boundarySection = canonicalSections.get("문서 경계와 정본");
+  if (boundarySection) {
+    for (const ownerLink of validationCiFlowCanonicalLinks) {
+      requireOneVisibleInlineLink(
+        file,
+        "'문서 경계와 정본'",
+        boundarySection.content,
+        ownerLink,
+      );
+    }
+  }
+
+  if (!isFile(reviewOwnerFile)) return;
+  const reviewOwnerContent = fs.readFileSync(
+    path.join(root, reviewOwnerFile),
+    "utf8",
+  );
+  const reviewOwnerSections = requireExactVisibleH2Sections(
+    reviewOwnerFile,
+    reviewOwnerContent,
+    ["독립 리뷰 표준", "검증 게이트와 CI"],
+    "01 owner 구역",
+  );
+  const validationCiSection =
+    reviewOwnerSections.get("검증 게이트와 CI");
+  if (validationCiSection) {
+    requireOneVisibleInlineLink(
+      reviewOwnerFile,
+      "'검증 게이트와 CI'",
+      validationCiSection.content,
+      ["검증 게이트와 CI 흐름", "./03_validation_ci_flow.md"],
+    );
+  }
+  for (const name of validationCiFlowMovedSections) {
+    const matches = protectedH2Matches(reviewOwnerContent, name);
+    if (matches.length > 0) {
+      errors.push(
+        `${reviewOwnerFile}: '${name}'은 ${file}로 이동한 검증·CI owner H2이므로 다시 정의할 수 없습니다. (현재 ${matches.length}개)`,
+      );
+    }
+  }
+}
+
 function validateFinalSnapshotGateOrder(file) {
   if (!isFile(file)) return;
 
@@ -4511,11 +4645,13 @@ function validateFinalSnapshotGateOrder(file) {
       `${file}: '## 최종 snapshot 검증 순서' exact plain-text top-level H2가 정확히 하나 필요합니다. (canonical ${orderSections.length}개, 보호 후보 ${orderProtectedCount}개)`,
     );
   } else {
+    const rawRows = [];
     const rows = readTraceTableRows(orderSections[0].content, {
       file,
       label: "최종 snapshot 검증 순서",
       headers: [["순서", "단계", "필수 계약"]],
       visibleContracts: true,
+      rawRows,
     });
     const actualOrder = rows.map((row) => row.slice(0, 2));
     const expectedOrder = finalSnapshotGateOrder.map(({ order, stage }) => [
@@ -4548,6 +4684,19 @@ function validateFinalSnapshotGateOrder(file) {
           );
         }
       }
+      const rawRow = rawRows.find(
+        (candidate) =>
+          candidate[0] === expected.order &&
+          candidate[1] === expected.stage,
+      );
+      if (expected.ownerLink && rawRow) {
+        requireOneVisibleInlineLink(
+          file,
+          `최종 snapshot 검증 순서의 '${expected.stage}' 행`,
+          rawRow[2],
+          expected.ownerLink,
+        );
+      }
     }
   }
 
@@ -4559,11 +4708,13 @@ function validateFinalSnapshotGateOrder(file) {
       `${file}: '## 실패와 증거 무효화' exact plain-text top-level H2가 정확히 하나 필요합니다. (canonical ${recoverySections.length}개, 보호 후보 ${recoveryProtectedCount}개)`,
     );
   } else {
+    const rawRows = [];
     const rows = readTraceTableRows(recoverySections[0].content, {
       file,
       label: "실패와 증거 무효화",
       headers: [["상황", "기존 증거", "재진입"]],
       visibleContracts: true,
+      rawRows,
     });
     const actualSituations = rows.map((row) => row[0]);
     const expectedSituations = finalSnapshotRecoveryOrder.map(
@@ -4595,6 +4746,17 @@ function validateFinalSnapshotGateOrder(file) {
       if (!expected.reentry.test(row[2])) {
         errors.push(
           `${file}: 실패와 증거 무효화의 '${expected.situation}' 재진입 계약이 불완전합니다.`,
+        );
+      }
+      const rawRow = rawRows.find(
+        (candidate) => candidate[0] === expected.situation,
+      );
+      if (expected.ownerLink && rawRow) {
+        requireOneVisibleInlineLink(
+          file,
+          `실패와 증거 무효화의 '${expected.situation}' 행`,
+          rawRow[2],
+          expected.ownerLink,
         );
       }
     }
@@ -6148,12 +6310,16 @@ function readTraceTableRows(
     label,
     headers,
     visibleContracts = false,
+    rawRows,
   },
 ) {
   const projectedSection = visibleContracts
     ? maskIndentedCodeLines(visibleFinalSnapshotMarkdown(section))
     : maskInvisibleMarkdown(section);
   const lines = projectedSection.split("\n");
+  const rawLines = rawRows
+    ? maskInvisibleMarkdown(section).split("\n")
+    : null;
   const headerIndexes = lines
     .map((line, index) => {
       const cells = parseMarkdownTableCells(line);
@@ -6197,6 +6363,14 @@ function readTraceTableRows(
       continue;
     }
     rows.push(cells);
+    if (rawRows) {
+      const rawCells = parseMarkdownTableCells(
+        rawLines[index] ?? "",
+      );
+      rawRows.push(
+        rawCells?.length === columnCount ? rawCells : cells,
+      );
+    }
   }
 
   if (rows.length === 0) {
@@ -6230,8 +6404,9 @@ const architectureFiles = [
 const architectureDetailFiles = architectureFiles.slice(1);
 const architectureIndexFile = architectureFiles[0];
 const developmentFiles = [
-  "docs/development/01_harness_guide.md",
-  "docs/development/02_testing_standard.md",
+  harnessGuideFile,
+  testingStandardFile,
+  validationCiFlowFile,
 ];
 const skillDirectories = [
   ".agents/skills/update-product-docs",
@@ -6271,7 +6446,7 @@ const unexpectedDevelopmentFiles = walk("docs/development")
   .sort();
 for (const file of unexpectedDevelopmentFiles) {
   errors.push(
-    `docs/development에는 지정된 두 문서만 둘 수 있습니다. 허용되지 않은 파일: ${file}`,
+    `docs/development에는 지정된 개발 표준 문서만 둘 수 있습니다. 허용되지 않은 파일: ${file}`,
   );
 }
 
@@ -6397,9 +6572,13 @@ for (const file of developmentFiles) {
     requireFlowchart: true,
   });
 }
-validateHarnessSteps(developmentFiles[0]);
-validateHarnessOrchestration(developmentFiles[0]);
-validateFinalSnapshotGateOrder(developmentFiles[0]);
+validateHarnessSteps(harnessGuideFile);
+validateHarnessOrchestration(harnessGuideFile);
+validateValidationCiFlowOwnership(
+  validationCiFlowFile,
+  harnessGuideFile,
+);
+validateFinalSnapshotGateOrder(validationCiFlowFile);
 validateHarnessRoutingBoundaries();
 validatePlannedIdRoutingBoundaries();
 validatePlannedIdDetailOwnerBoundary();

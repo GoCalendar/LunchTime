@@ -90,8 +90,10 @@ flowchart LR
 7. **전체 회귀 테스트:** 영향 범위의 빠른 테스트부터 저장소 필수 게이트까지
    실행하고 PR에 재실행 가능한 증거를 남긴다.
 
-상세 작업 순서와 review-fix 한도는
-[개발 하네스 가이드](./01_harness_guide.md)를 따른다.
+독립 리뷰의 review-fix 한도는
+[하네스 가이드의 독립 리뷰 표준](./01_harness_guide.md#독립-리뷰-표준)을,
+candidate 고정 뒤 gate·CI 실행 순서는
+[검증 게이트와 CI 흐름](./03_validation_ci_flow.md)을 따른다.
 
 ## 결정적 테스트 규칙
 
