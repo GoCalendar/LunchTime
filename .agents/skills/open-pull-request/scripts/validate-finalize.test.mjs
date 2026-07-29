@@ -22,15 +22,16 @@ const tree = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const merge = "cccccccccccccccccccccccccccccccccccccccc";
 const repository = "GoCalendar/LunchTime";
 
-function body({ reviewHead = head } = {}) {
-  return `<!-- lunchtime-pr:v1 -->
+function body({ review = "reviewed" } = {}) {
+  const reviewRow =
+    review === "skipped"
+      ? "| 독립 리뷰 | 변경 위험을 판단해 생략 | 생략 | low-risk=제품 동작이 없는 문서 오탈자만 수정 |"
+      : "| 독립 리뷰 | 원본 이슈·diff·관련 테스트를 한 번 검토 | 통과 | round=1; reviewers=1; findings=1; main-closure=1/1; scope-expansion=none |";
+  return `<!-- lunchtime-pr:v2 -->
 
 ## 연결된 이슈
 
 <!-- pr:issues:start -->
-- 종료: #49
-- 작업 키: \`#49\`
-
 Closes #49
 <!-- pr:issues:end -->
 
@@ -62,7 +63,7 @@ Closes #49
 <!-- pr:verification:start -->
 | 대상 | 명령·확인 | 결과 | 증거 |
 | --- | --- | --- | --- |
-| 독립 리뷰 | 원본 이슈·raw diff·테스트 결과 읽기 전용 검토 | 통과 | review-head=${reviewHead}, reviewer 2명, P0~P2 없음, pass 1 |
+${reviewRow}
 | finalize fixture | \`node --test validate-finalize.test.mjs\` | 통과 | happy·error·recovery fixture 통과 |
 <!-- pr:verification:end -->
 
@@ -183,7 +184,7 @@ function joined(result) {
   return result.errors.join("\n");
 }
 
-test("현재 head의 Ready·CI·review snapshot을 finalize 입력으로 고정한다", () => {
+test("현재 head의 Ready·CI·review thread snapshot을 finalize 입력으로 고정한다", () => {
   assert.deepEqual(validate(), {
     errors: [],
     snapshot: {
@@ -357,33 +358,24 @@ test("OPEN gate 입력과 MERGED recovery 입력을 혼용하지 않는다", () 
   );
 });
 
-test("독립 리뷰가 stale head를 가리키면 중단한다", () => {
+test("저위험 근거로 독립 리뷰를 생략한 Ready PR도 finalize할 수 있다", () => {
   const value = snapshot();
   value.pr = {
     ...value.pr,
-    body: body({
-      reviewHead: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
-    }),
+    body: body({ review: "skipped" }),
   };
-  assert.match(
-    joined(validateFinalizeSnapshot(value)),
-    /현재 head commit SHA와 일치하지 않습니다/,
-  );
+  assert.deepEqual(validateFinalizeSnapshot(value).errors, []);
 });
 
-test("stale review-head를 무관한 current SHA로 우회할 수 없다", () => {
-  const stale = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+test("리뷰 head metadata 대신 exact PR head와 Git proof를 검증한다", () => {
   const value = snapshot();
-  value.pr = {
-    ...value.pr,
-    body: body({ reviewHead: stale }).replace(
-      `review-head=${stale}`,
-      `review-head=${stale}, CI 대상 ${head}`,
-    ),
+  value.gitProof = {
+    ...value.gitProof,
+    head: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
   };
   assert.match(
     joined(validateFinalizeSnapshot(value)),
-    /현재 head commit SHA와 일치하지 않습니다/,
+    /Git proof의 head commit이 PR head OID와 다릅니다/,
   );
 });
 

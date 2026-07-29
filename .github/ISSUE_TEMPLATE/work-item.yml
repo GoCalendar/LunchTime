@@ -22,7 +22,7 @@ body:
     id: context
     attributes:
       label: 맥락
-      description: 현재 문제, 사용자 영향과 이 작업이 필요한 이유를 설명합니다.
+      description: 현재 문제와 이유를 설명하고, 이번 작업에 필요한 정확한 PRD·Policy·Architecture 파일과 관련 절만 연결합니다. 전체 인덱스나 product-definition archive를 기본 입력으로 지정하지 않습니다.
     validations:
       required: true
 
@@ -52,7 +52,7 @@ body:
     id: acceptance
     attributes:
       label: 완료 조건
-      description: 이 구역을 행동 시나리오의 정본으로 사용합니다. 관찰 가능한 Given/When/Then 또는 조건/행동/결과로 happy·error·recovery path를 다루고, 각 시나리오에 추적 ID와 검증 계획을 연결합니다.
+      description: 이 구역을 행동 시나리오의 정본으로 사용합니다. 이번 변경에 적용되는 Given/When/Then 또는 조건/행동/결과와 추적 ID, 가장 좁은 검증 계획을 연결합니다. 적용되지 않는 error·recovery를 형식적으로 만들지 말고 제외 이유를 적습니다.
       placeholder: |
         Happy path
         - 조건(Given):
@@ -96,7 +96,8 @@ body:
         Ready 전 exact head 정본 검증을 계획합니다. 제품 동작·PRD·Policy를
         바꾸지 않는 type:chore만 이슈 계약의 direct bullet
         "해당 없음 — 제품 동작·PRD·Policy 추적 대상이 아닌 도구 작업: 구체적 사유"를
-        사용할 수 있습니다.
+        사용할 수 있습니다. 역사 archive의 D·F ID는 보조 이력일 뿐 기본
+        구현 컨텍스트나 제품 정본을 대신하지 않습니다.
     validations:
       required: true
 
@@ -104,7 +105,7 @@ body:
     id: allowed_paths
     attributes:
       label: 변경 허용 경로
-      description: 저장소 기준의 좁은 경로나 경로 패턴을 작성합니다. 새 PRD·Policy ID를 같은 PR에서 정의하면 namespace 번호가 일치하는 구체적 docs/**/NN_*.md 정본 파일과 필요한 인덱스 경로를 반드시 포함합니다. README나 재귀 glob만으로는 정의 파일을 소유하지 않습니다.
+      description: 저장소 기준의 좁은 경로나 경로 패턴을 작성합니다. 새 PRD·Policy ID를 같은 PR에서 정의하면 namespace 번호가 일치하는 구체적 docs/**/NN_*.md 정본 파일과 필요한 인덱스 경로를 포함합니다. README·재귀 glob·product-definition archive로 exact path를 대신하지 않습니다.
     validations:
       required: true
 
@@ -120,7 +121,16 @@ body:
     id: verification
     attributes:
       label: 검증
-      description: 완료 조건의 happy·error·recovery 시나리오별 명령·관찰 방법과 증거, 위험도에 맞는 독립 리뷰 인원·관점을 계획합니다.
+      description: direct case/suite, 필요 시 affected target과 확대 조건을 적습니다. 전체 테스트는 영향 불명·release 예외에만 계획합니다. 리뷰 위험은 낮음(0명), 일반(1명), 높음(같은 round 최대 2명)으로 기록합니다.
+      placeholder: |
+        테스트 선택:
+        - direct case/suite:
+        - affected target:
+        - 확대 조건:
+
+        리뷰:
+        - 위험도:
+        - reviewer 수·관점:
     validations:
       required: true
 
@@ -129,7 +139,9 @@ body:
     attributes:
       label: 문서 영향
       description: >-
-        검토할 PRD·정책 또는 제품 동작이 바뀌지 않는 근거를 작성합니다.
+        변경할 정확한 PRD·Policy·Architecture 파일 또는 제품 동작이 바뀌지
+        않는 근거를 작성합니다. product-definition archive는 일반 영향
+        대상이 아닙니다.
         planned ID가 있으면 같은 branch에서 만들 정본 파일과 Ready 전
         validator로 ID 존재를 확인할 계획을 적습니다. tooling-only 비적용을
         사용하면 "- 제품 문서: 변경 없음 — 구체적 근거" 한 줄을 포함합니다.

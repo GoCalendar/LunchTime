@@ -23,10 +23,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 저장소 체크아웃
+      - name: exact head 체크아웃
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+
+      - name: exact head 확인
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "checkout HEAD가 검증 대상 SHA와 다릅니다."
+            echo "expected=$EXPECTED_SHA"
+            echo "actual=$ACTUAL_SHA"
+            exit 1
+          fi
 
       - name: Node.js 설정
         uses: actions/setup-node@v6
@@ -51,34 +64,9 @@ jobs:
                 head: {ref: .head.ref, sha: .head.sha},
                 base: {ref: .base.ref}
               }
-            }' > "${RUNNER_TEMP}/live-pr-before.json"
+            }' > "${RUNNER_TEMP}/live-pr.json"
 
       - name: PR 제목·본문·브랜치 검증
         run: |
           node .agents/skills/open-pull-request/scripts/validate-pr-body.mjs \
-            --event "${RUNNER_TEMP}/live-pr-before.json"
-
-      - name: 검증 중 PR 입력 불변 확인
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
-            --jq '{
-              pull_request: {
-                title: .title,
-                body: .body,
-                draft: .draft,
-                head: {ref: .head.ref, sha: .head.sha},
-                base: {ref: .base.ref}
-              }
-            }' > "${RUNNER_TEMP}/live-pr-after.json"
-          if ! cmp -s \
-            "${RUNNER_TEMP}/live-pr-before.json" \
-            "${RUNNER_TEMP}/live-pr-after.json"; then
-            echo "검증 중 PR 입력이 변경되었습니다. 최신 event 실행을 확인하세요."
-            exit 1
-          fi
+            --event "${RUNNER_TEMP}/live-pr.json"

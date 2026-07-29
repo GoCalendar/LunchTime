@@ -74,8 +74,6 @@ test("문서, 하네스, 작업 도구와 독립 실험은 앱 검증을 생략�
     ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/mvp-work-items.json",
     ".github/work-management.json",
-    ".github/workflows/validate-harness-paths.mjs",
-    ".github/workflows/validate-harness-paths.test.mjs",
     ".github/workflows/validate-harness.yml",
     ".github/workflows/validate-pr-metadata.yml",
   ];
