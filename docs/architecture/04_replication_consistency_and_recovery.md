@@ -111,13 +111,65 @@ local 이용 횟수는 합치지 않으므로 같은 Room event 집합에서도 
 - 보존·채팅·종료 상세·히스토리 재계산은
   [POL-02-R-06](../policies/02_replication_consistency_retention.md)을
   따른다.
-- 시계 허용오차가 확정되기 전과 검증할 수 없을 때의 fail-closed 결과는
+- 고정 KST 업무 달력, macOS 시스템 시각 신뢰 원천, Room 공유 이력에 따른
+  Peer 교차 확인과 검증 실패의 fail-closed 결과는
   [POL-02-R-08](../policies/02_replication_consistency_retention.md)이
   소유한다.
 
 정확한 세션 횟수·시간, 일일 경계와 보존 창은 위 Policy의 입력값이다. 이
 문서는 scheduler·retention worker·projection이 해당 값을 소비하는 지점만
 설명한다.
+
+### 시계 검증 경계
+
+```mermaid
+flowchart LR
+    Wall["macOS wall clock<br/>UTC instant"] --> Calendar["Asia/Seoul<br/>업무 달력"]
+    Monotonic["단조 시각"] --> Continuity["wall/monotonic<br/>연속성 검사"]
+    Wall --> Continuity
+    Share["durable Room<br/>공유 이력"] --> ClockGate{"clock validation gate"}
+    Peer["eligible Room Peer<br/>승인된 fresh 표본 집합"] --> ClockGate
+    Continuity --> ClockGate
+    ClockGate --> TimeWrite["참여 수락·마감 수정·상태 변경"]
+    Calendar --> DailyGate{"daily write gate"}
+    Calendar --> Latch["KST 운영일<br/>terminal close latch"]
+    Latch --> DailyGate
+    DailyGate --> TimeWrite
+    DailyGate --> OtherWrite["Room 생성·메뉴·채팅·라운지 등<br/>그 밖의 사용자 쓰기"]
+```
+
+- 장부와 wire의 절대 시각은 UTC instant로 유지하고, `BusinessCalendar`가
+  기기 설정과 무관한 `Asia/Seoul` 변환으로 운영일과 11:00·14:30·14:32
+  경계를 계산한다. 경과 시간 상한은 wall clock이 아니라 단조 시각으로
+  계산한다.
+- `ClockValidation`은 macOS wall clock을 절대 시각 신뢰 원천으로 사용한다.
+  앱은 macOS 자동 시간 설정을 runtime에서 승인하거나 자체 NTP·외부 시간
+  서비스·Peer quorum으로 wall clock을 보정하지 않는다.
+- `ClockValidation`은 wall clock과 단조 시각의 진행을 함께 관찰한다.
+  `NSSystemClockDidChange` 또는 허용할 수 없는 진행 불연속이 발생하면 현재
+  기준점과 Peer 표본을 함께 폐기하고 durable `clockRecoveryRequired` 안전
+  상태를 남긴다. 불연속 허용 기준과 sleep/wake에서 사용할 단조 clock 의미는
+  `PRD-01-SP-03` 실기기 증거가 승인하며 이 문서에서 수치를 추측하지 않는다.
+- 결정적 Room business projection과 분리된 durable·단조 증가 안전 metadata인
+  `everShared`를 유지한다. 최초 outbound transport handoff 전에 `true`를
+  저장하고, remote-origin Room event 수신이나 StorageACK 관찰도 즉시
+  `true`로 만든다. 이 값은 crash·process 재시작, Peer 오프라인이나 단일
+  참여자 전환으로 되돌리지 않는다.
+- `everShared == false`이면 유효한 로컬 시각 기준점만으로 시간 의존 쓰기를
+  판정할 수 있다. `everShared == true`이면 `POL-02-R-08`이 정의한 eligible
+  Room Peer 중 승인된 freshness·연속 표본 수를 충족한 Peer가 하나 이상
+  필요하며, 현재 검증 session의 모든 승인 대상 표본 중 하나라도 허용 오차를
+  벗어나거나 서로 충돌하면 전체 판정을 실패시킨다. Peer 표본을 평균·다수결
+  하거나 wall clock 보정값으로 사용하지 않는다.
+- `TerminalCloseLatch`는 KST 운영일별 14:30 terminal close를 로컬 안전 상태로
+  보존한다. 이 latch는 복제된 업무 event가 아니며 system clock rollback,
+  locale·time zone 변경이나 process 재시작으로 해제하지 않는다. clock
+  validation gate와 별도로 모든 사용자 쓰기에 우선 적용한다.
+- 시계 허용 오차, freshness, 필요한 연속 표본 수, wall/monotonic 연속성
+  기준·sleep/wake clock 의미와 wire 교환 방식은 `PRD-01-SP-03` 실기기 증거가
+  승인한 값을 입력으로 받는다. 값이 승인되기 전에는 공유된 Room의 time
+  write gate만 fail-closed하고 local-only 예외를 Peer 검증 의존으로 바꾸지
+  않는다.
 
 ## 논리 모델
 
@@ -129,8 +181,8 @@ local 이용 횟수는 합치지 않으므로 같은 Room event 집합에서도 
 4. 암호화된 로컬 장부에 먼저 append한다.
 5. 장부 summary와 로컬 projection을 다시 계산해 `로컬 저장`과 원격 확인을
    구분해 표시한다.
-6. 연결된 정상 대상 Peer에 즉시 전파하고 정확한 revision StorageACK를
-   수집한다.
+6. 연결된 정상 대상 Peer로 넘기기 전에 해당 Room의 durable `everShared`를
+   `true`로 기록한 뒤 즉시 전파하고 정확한 revision StorageACK를 수집한다.
 
 로컬 append가 실패하면 이벤트를 생성 완료나 원격 전파 성공으로 표시하지
 않는다. 원격 StorageACK 전에 앱이 종료될 수 있으므로 로컬 장부와 outbound
@@ -146,9 +198,17 @@ event만 의존 record와 권한·scope·revision·시간을 검증한다. Depen
 
 의존 record를 받은 뒤 전체 검증을 다시 통과한 event는 분기 충돌 여부와
 무관하게 append하고 summary를 갱신해 정확한 revision을 StorageACK한 뒤,
-해당 scope의 projection과 로컬 동기화 관측을 다시 계산한다. 검증 실패 event는
-장부·ACK·projection·재전파에 넣지 않으며, 수신 payload로 화면 객체를 직접
-부분 덮어쓰지 않는다.
+해당 scope의 projection과 로컬 동기화 관측을 다시 계산한다. 인식된 원격
+Room event를 받으면 후속 검증 결과와 무관하게 durable `everShared`를 먼저
+`true`로 기록한다.
+
+인증·무결성·원작성자·scope·권한은 유효하지만 KST 14:30 이전 생성 여부만
+검증할 수 없는 늦은 event는 검증 장부와 분리된 유한
+`readOnlyLateEventQuarantine`에 보존할 수 있다. 이 자료는 `확인 필요`가 붙은
+열람용 스냅샷만 계산하며 StorageACK, anti-entropy·재전파, operational
+projection, 주문 완료·성공 히스토리에 사용하지 않는다. 그 밖의 검증 실패
+event는 장부·ACK·projection·재전파에 넣지 않으며, 수신 payload로 화면 객체를
+직접 부분 덮어쓰지 않는다.
 
 ### 장부 요약
 
@@ -324,11 +384,14 @@ revision과 결정적 보조 키로 projection을 계산한다.
 | 더 오래된 revision이 나중에 도착 | 장부에는 보존하되 최신 projection을 되돌리지 않음 |
 | 같은 논리 순서의 서로 다른 이벤트 | Policy의 결정적 보조 키를 적용하고 동시 변경을 표시 |
 | 정책의 쓰기 경계 전에 유효하게 생성된 이벤트가 늦게 도착 | Policy가 허용한 열람 전용 재계산 경로에 포함 |
-| 생성 시각·시계 유효성을 검증할 수 없음 | 성공 projection을 자동 정정하지 않고 `확인 필요` 유지 |
+| 생성 시각·시계 유효성을 검증할 수 없음 | 제한 quarantine의 열람용 스냅샷에만 반영하고 성공 projection은 자동 정정하지 않으며 `확인 필요` 유지 |
 | 채팅이 늦게 도착 | 현재 활성 일일 세션 `11:00 ≤ now < 14:30`에서 원작성자·scope·권한·시간·취소 검증을 통과한 경우만 현재 프로세스 메모리에 best-effort 반영하며 durable 장부·StorageACK·anti-entropy에는 포함하지 않음 |
 
-시계 차이의 정확한 허용오차와 검증 방식은 `PRD-01-SP-03`의 미결정
-기술이다. 값이 확정되기 전에도 안전 차단 결과는
+시계 신뢰 원천, KST 변환, local-only 예외와 공유 Room의 Peer 선택 결과는
+[POL-02-R-08](../policies/02_replication_consistency_retention.md)로 확정됐다.
+정확한 허용오차·freshness·연속 표본 수, wall/monotonic 진행 불연속 기준,
+sleep/wake clock 의미와 wire 교환 방식은 `PRD-01-SP-03`의 미결정 기술이다.
+값이 확정되기 전에도 안전 차단 결과는
 [POL-02-R-08](../policies/02_replication_consistency_retention.md)을 따른다.
 
 ## 동시 변경과 충돌
@@ -343,7 +406,7 @@ revision과 결정적 보조 키로 projection을 계산한다.
 | 생성자 관리 정보 변경 | 생성자·대상의 단조 revision | `POL-02-R-05`의 결정적 정렬 |
 | 주문 상태 순서 이벤트 | 참여자 이벤트의 논리 순서·보조 키 | `POL-02-R-05`의 마지막 유효 동작 |
 | 취소·철회와 이전 데이터 | tombstone과 대상 이벤트 | `POL-02-R-05`의 무효화 |
-| 시간 유효성 불명 | Peer 시계 검증 실패 | `POL-02-R-08`의 fail-closed |
+| 시간 유효성 불명 | 로컬 기준점 무효 또는 공유 Room의 fresh Peer 대조 실패 | `POL-02-R-08`의 fail-closed |
 
 미해결 충돌은 참여·메뉴 누락 위험이 있는 동작과 주문 완료를 차단하는
 projection으로 노출한다. 사용자 결정을 이벤트로 기록하면 그 이벤트도
@@ -353,10 +416,14 @@ projection으로 노출한다. 사용자 결정을 이벤트로 기록하면 그
 
 ### 앱 재실행
 
-1. Keychain과 암호화된 로컬 장부를 연다.
+1. Keychain, 암호화된 로컬 장부와 durable `everShared`·
+   `clockRecoveryRequired`·terminal close 안전 metadata를 연다.
 2. 저장된 이벤트로 구조화 projection을 재구성한다.
 3. 프로세스 종료로 비워진 채팅 메모리를 영구 장부에서 복원하지 않는다.
-4. 현재 네트워크·시간 경계를 판정하고 Peer discovery를 시작한다.
+4. 저장된 KST terminal close latch를 먼저 적용하고 새 macOS wall-clock·단조
+   시각 기준점을 만든다. `clockRecoveryRequired`가 남아 있으면 이 기준점을
+   아직 유효한 것으로 승인하지 않고, macOS 시각 점검과 수동 새로고침이
+   완료될 때까지 local-only 시간 의존 쓰기도 차단한다.
 5. 정상 응답 Peer와 장부 대조를 수행한다.
 6. 현재 활성 일일 세션 `11:00 ≤ now < 14:30`일 때만 다른 Peer 메모리에
    살아 있고 원작성자·scope·권한·시간·취소 검증을 통과한 채팅을
@@ -374,9 +441,11 @@ projection으로 노출한다. 사용자 결정을 이벤트로 기록하면 그
 
 ### Sleep 복귀
 
-Sleep 중 실시간 메시지를 받았다고 가정하지 않는다. 먼저 시간 경계를 적용해
-쓰기 가능 여부를 계산하고, 그 뒤 장부 요약과 누락 이벤트를 대조한다. 대조가
-끝나기 전에는 sleep 전 안정 상태를 그대로 최신이라고 표시하지 않는다.
+Sleep 중 실시간 메시지를 받았다고 가정하지 않는다. 먼저 고정
+`Asia/Seoul` 업무 달력과 terminal close latch를 적용해 쓰기 가능 여부를
+계산하고, 그 뒤 장부 요약과 누락 이벤트를 대조한다. 공유된 Room은 sleep 전
+Peer 시계 표본을 freshness 근거로 재사용하지 않는다. 대조가 끝나기 전에는
+sleep 전 안정 상태를 그대로 최신이라고 표시하지 않는다.
 
 앱 재실행·sleep 복귀의 정확한 사용자 결과는
 [PRD-01-AC-03](../prd/01_lunchtime_mvp.md),
@@ -408,7 +477,9 @@ Sleep 중 실시간 메시지를 받았다고 가정하지 않는다. 먼저 시
 | 유효한 분기 revision | event·summary·StorageACK를 유지하고 자동 projection만 보류 | 사용자 재확정 event 전파 |
 | 참여 의존 record 누락·순서 역전 | pending·확인 필요로 두고 메뉴 쓰기 차단 | 세 record를 anti-entropy로 수집 |
 | Deadline 전 저장된 confirmation의 늦은 도착 | 유효한 늦은 참여로 재계산 | 의존 record 검증 뒤 projection 갱신 |
-| 시계 유효성 확인 불가 | 시간 의존 쓰기·성공 판정 fail-closed | 시계 점검 뒤 정상 Peer와 재대조 |
+| local-only Room의 시계 기준점 무효 | 시간 의존 쓰기·성공 판정 fail-closed | macOS 시각 점검 뒤 수동 새로고침으로 새 wall/monotonic 기준점 생성 |
+| 공유 Room의 Peer 표본 없음·만료·충돌·허용 오차 초과 | 시간 의존 쓰기·성공 판정 fail-closed | 새 기준점과 정상 응답 Peer의 fresh 표본으로 재대조 |
+| KST 14:30 뒤 wall clock rollback·time zone 변경 | terminal close latch 유지, 쓰기 재개 금지 | 같은 운영일에는 복구로 다시 열지 않고 다음 KST 운영일 판정 |
 | 최종 대조 불완전 | 열람 가능한 정보와 불완전 상태를 함께 표시 | 후속 제한 세션에서 종료 projection 재계산 |
 | 14:30 이후 앱 재실행 | 빈 채팅 cache를 Peer 메모리로 복원하지 않음 | 기존 프로세스 메모리만 열람 전용, 다음 활성 일일 세션은 새 cache |
 | 모든 채팅 보유 Peer 소실 | 채팅 완전 복구를 실패 약속으로 만들지 않음 | 허용된 메모리 보존 결과 |
@@ -426,7 +497,10 @@ Sleep 중 실시간 메시지를 받았다고 가정하지 않는다. 먼저 시
 - 모든 Peer가 동시에 같은 상태를 보는 것
 - 채팅의 완전 복구와 모든 Peer의 동일한 전역 순서
 - 만료·독립 삭제 뒤 모든 복제본과 고아 데이터의 영구 제거
-- 시계 허용오차·검증 방식이 확정되기 전의 시간 유효성 자동 승인
+- macOS 시스템 시각의 암호학적 진위나 OS 관리자에 의한 오설정 탐지
+- Peer 평균·다수결·quorum을 이용한 절대 시각 보정
+- LunchTime 전용 중앙 시간 서버나 별도 외부 시간 서비스의 가용성
+- `PRD-01-SP-03` 허용오차·freshness·표본 수가 확정되기 전 공유 Room의 시간 유효성 자동 승인
 - 정책 한도 밖의 무한 retry·polling 또는 실패 세션의 자동 성공 처리
 
 ## 미결정 기술
@@ -435,11 +509,11 @@ Sleep 중 실시간 메시지를 받았다고 가정하지 않는다. 먼저 시
 |---|---|---|
 | 장부 요약 | 누락 이벤트·tombstone을 식별 가능 | version vector, Merkle 구조, set reconciliation 등 |
 | 이벤트 저장 schema | append·revision·scope query·원자성 | DB 엔진, table/record 형식, index |
-| pending/quarantine 저장 | 원 event scope의 최대 14일 창과 유한 용량 안에서 envelope·dependency ID를 보호하고 검증 장부와 분리 | 저장 엔진, quota·eviction 방식, dependency index |
+| pending/quarantine 저장 | 원 event scope의 최대 14일 창과 유한 용량 안에서 envelope·dependency ID 및 시간 검증 불가 late event를 보호하고 검증 장부·operational projection과 분리 | 저장 엔진, quota·eviction 방식, dependency index |
 | sync observation 저장 | 관련 event·session·Peer 수명에 묶어 유한 보존하고 retention 대상으로 정리 | 저장 엔진, quota·compaction 방식 |
 | 충돌 구현 | `POL-02-R-05` 결과를 결정적으로 계산 | CRDT 사용 여부, custom reducer 구조 |
 | 논리 순서 | 동일 집합에서 결정적 projection | Lamport/HLC 등 clock 표현 |
-| 시계 검증 | `POL-02-R-08`의 안전 차단·복구 | 허용오차 값과 Peer 비교 방식 |
+| 시계 검증 | macOS wall clock 신뢰 원천, 고정 KST 변환, local-only 예외, 공유 Room의 fresh Peer 교차 확인과 `POL-02-R-08`의 안전 차단·복구 | 허용오차·freshness·연속 표본 수, wall/monotonic 진행 불연속 기준, sleep/wake clock 의미, wire 교환 형식 |
 | tombstone·GC | 보존 계약과 종료 scope 비부활 | 안전 삭제 조건, compact·vacuum 방식 |
 | outbound 복구 | 로컬 append 뒤 미ACK 전파를 재대조 가능 | 별도 queue, 장부 파생 작업 |
 | 대용량 교환 | 제한 세션 안의 완결성 판정 | batching, pagination, backpressure |
@@ -452,7 +526,7 @@ Sleep 중 실시간 메시지를 받았다고 가정하지 않는다. 먼저 시
 - PRD: [PRD-01](../prd/01_lunchtime_mvp.md) `PRD-01-FR-01`,
   `PRD-01-FR-02`, `PRD-01-FR-03`, `PRD-01-FR-04`, `PRD-01-FR-05`,
   `PRD-01-FR-06`, `PRD-01-FR-08`, `PRD-01-FR-09`, `PRD-01-FR-10`,
-  `PRD-01-FR-11`, `PRD-01-AC-02`, `PRD-01-AC-03`, `PRD-01-AC-04`,
+  `PRD-01-FR-11`, `PRD-01-AC-01`, `PRD-01-AC-02`, `PRD-01-AC-03`, `PRD-01-AC-04`,
   `PRD-01-AC-05`, `PRD-01-AC-09`, `PRD-01-AC-11`
 - Policy: [POL-01](../policies/01_daily_room_lifecycle.md) `POL-01-R-01`,
   `POL-01-R-02`, `POL-01-R-03`, `POL-01-R-04`, `POL-01-R-05`,
