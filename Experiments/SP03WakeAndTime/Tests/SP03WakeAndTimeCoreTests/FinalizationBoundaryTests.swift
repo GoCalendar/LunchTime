@@ -35,6 +35,53 @@ struct FinalizationBoundaryTests {
         #expect(boundary.observe(wallTime: wallTime("2026-07-30T12:00:00+09:00")) == .closed)
     }
 
+    @Test("14:30 terminal close는 process 재생성·rollback·time zone 변경 뒤에도 복원된다")
+    func persistedTerminalCloseDoesNotReopen() {
+        var original = DailyWriteBoundary(
+            operatingDayContaining: wallTime("2026-07-30T11:00:00+09:00")
+        )
+        #expect(
+            original.observe(wallTime: wallTime("2026-07-30T14:30:00+09:00"))
+                == .closed
+        )
+
+        let durableSnapshot = original.snapshot
+        var restored = DailyWriteBoundary(restoring: durableSnapshot)
+
+        #expect(durableSnapshot.isTerminallyClosed)
+        #expect(restored.operatingDayStart == original.operatingDayStart)
+        #expect(
+            restored.observe(wallTime: wallTime("2026-07-29T20:00:00-07:00"))
+                == .closed
+        )
+        #expect(
+            restored.observe(wallTime: wallTime("2026-07-30T12:00:00+09:00"))
+                == .closed
+        )
+    }
+
+    @Test("다음 KST 운영일은 이전 snapshot을 재사용하지 않고 새 경계로 시작한다")
+    func nextOperatingDayRequiresNewBoundary() {
+        var previous = DailyWriteBoundary(
+            operatingDayContaining: wallTime("2026-07-30T11:00:00+09:00")
+        )
+        _ = previous.observe(wallTime: wallTime("2026-07-30T14:30:00+09:00"))
+
+        var restoredPrevious = DailyWriteBoundary(restoring: previous.snapshot)
+        #expect(
+            restoredPrevious.observe(wallTime: wallTime("2026-07-31T11:00:00+09:00"))
+                == .closed
+        )
+
+        var nextDay = DailyWriteBoundary(
+            operatingDayContaining: wallTime("2026-07-31T11:00:00+09:00")
+        )
+        #expect(
+            nextDay.observe(wallTime: wallTime("2026-07-31T11:00:00+09:00"))
+                == .writable
+        )
+    }
+
     @Test("14:30에 잠들어 있던 기기는 복귀 첫 관측에서 바로 닫힌다")
     func resumeAfterCutoffClosesBeforeWriting() {
         var boundary = DailyWriteBoundary(

@@ -17,9 +17,12 @@
 - 한 session은 최대 3회 또는 단조 시간 30초 중 먼저 도달한 한도에서 끝납니다.
 - 실패 뒤 cadence timer만으로 새 session을 만들지 않고 새 의미 있는 trigger가 있어야 재개합니다.
 - 정상 anti-entropy cadence는 30초에 due가 되며 데이터·정상 Peer 부재와 14:30 terminal close에서 중단합니다.
-- KST 쓰기 창은 `[11:00, 14:30)`이고 14:30 이후 벽시계를 되돌려도 다시 열리지 않습니다.
+- 업무 달력은 기기 locale·time zone과 무관하게 `Asia/Seoul`로 고정하고, 장부와 Peer 교환 시각은 UTC instant로 표현합니다.
+- KST 쓰기 창은 `[11:00, 14:30)`이고 같은 운영일의 terminal close를 복원하면 process 재실행·time zone 변경·벽시계 rollback 뒤에도 다시 열리지 않습니다.
 - finalization은 단조 시간 120초의 바깥 한도와 내부 3회·30초 상한을 함께 적용합니다.
-- 시계 검증 불가·허용 오차 초과·오래된 검증·system clock 변경은 참여 수락, 주문 마감 수정과 주문 상태 변경만 fail-closed로 차단합니다.
+- local-only Room은 유효한 macOS wall/monotonic 기준점이 있으면 Peer 부재만으로 시간 의존 쓰기를 차단하지 않습니다.
+- 한 번 공유된 Room은 다시 local-only가 되지 않으며, eligible Room Peer별 fresh 표본 전체가 후보 허용 오차 안에서 일관될 때만 후보 판정을 통과합니다.
+- 시계 검증 불가·허용 오차 초과·오래된 검증·system clock 변경은 참여 수락, 주문 마감 수정과 주문 상태 변경만 fail-closed로 차단합니다. local-only는 새 로컬 기준점, 공유 Room은 새 기준점과 fresh Peer 대조를 모두 요구합니다.
 - 14:30 이전 생성 여부를 검증할 수 없는 늦은 이벤트는 열람용 스냅샷만 계산하고 성공·주문 완료·성공 히스토리를 자동 정정하지 않습니다.
 
 그러나 `PRD-01-SP-03`의 출시 gate는 아직 해제할 수 없습니다. 현재 환경에서
@@ -27,16 +30,20 @@
 실제 sleep·wake, foreground, network 전환, 14:30 finalization과 실제
 전력·네트워크 비용은 측정하지 않았습니다.
 
-`±1초`, freshness `30초`, 연속 표본 `3개`는 **실기기 미확정 후보**입니다.
+`±1초`, freshness `30초`, 연속 표본 `3개`와 wall/monotonic 진행 불연속
+허용치는 **실기기 미확정 후보**입니다.
 이 수치를 [POL-02-R-08](../../policies/02_replication_consistency_retention.md)의
-승인값으로 사용해서는 안 됩니다. 증거가 없는 동안 기존 fail-closed 동작을
-유지해야 합니다.
+승인값으로 사용해서는 안 됩니다. 후보 판정 로직이 통과해도 공유 이력 Room의
+출시 쓰기 허용으로 해석하지 않으며, 증거가 없는 동안 fail-closed를 유지해야
+합니다.
 
-두 Peer의 상대 시각 일치와 6.2절의 10회 행렬은 필요조건일 뿐 UTC/KST 절대
-정확성의 충분조건이 아닙니다. 신뢰할 절대 시각 기준을 정의하거나 여러 Peer의
-불일치를 다루는 quorum·선택 규칙을 제품 계약으로 승인하기 전에는 `±1초`를
-승인하지 않습니다. 실제 live 행렬과 제품 책임자 승인까지 완료되기 전에는
-#4의 PR을 **Ready로 전환하거나 merge해서는 안 되며 Draft로 유지**합니다.
+[POL-02-R-08](../../policies/02_replication_consistency_retention.md)은 macOS
+시스템 wall clock을 MVP의 절대 시각 신뢰 원천으로 확정했습니다. Peer 시각은
+이를 보정하거나 평균·다수결·quorum으로 대체하지 않고 공유 Room의 불일치
+탐지와 fresh 교차 확인에만 사용합니다. 따라서 이전의 “절대 시각 신뢰 원천
+또는 quorum 미결정” blocker는 #86으로 해소됐습니다. 남은 실제 live 행렬과
+제품 책임자 승인까지 완료되기 전에는 #4의 PR을 **Ready로 전환하거나
+merge해서는 안 되며 Draft로 유지**합니다.
 
 ## 2. 모델과 실기기 증거의 경계
 
@@ -45,8 +52,10 @@
 - trigger coalescing과 동시에 활성인 session 수
 - 시도 횟수·단조 경과 시간·finalization 바깥 한도
 - anti-entropy 시작 조건과 중단 조건
-- KST 14:30 terminal close와 wall-clock rollback
+- 고정 KST 14:30 terminal close와 durable snapshot 복원 뒤 rollback 차단
 - 4-timestamp offset 구간 계산과 fail-closed 분기
+- local-only·공유 이력 Room 분기, 되돌릴 수 없는 공유 이력과 서로 다른 복구 조건
+- eligible Room Peer별 표본 수, 여러 Peer의 전체 표본 충돌과 미승인 후보의 출시 차단
 - 늦은 이벤트의 열람·자동 정정 허용 범위
 
 ### 2.2 결정적 모델이 답하지 않는 것
@@ -55,6 +64,8 @@
 - 실제 sleep 뒤 `NSWorkspace.didWakeNotification` 전달 시각
 - 실제 foreground와 network path callback burst의 순서
 - 실제 Peer 대조가 3회·30초와 120초 안에서 끝나는지
+- 실제 sleep 중 `ContinuousClock` 진행과 wake 뒤 wall/monotonic 연속성 분포
+- local-only 새 기준점과 공유 Room의 새 기준점·fresh Peer 복구
 - Instruments 또는 `powermetrics` 수준의 에너지 비용
 - 지원 사내망에서 교환한 실제 byte 수
 
@@ -71,20 +82,22 @@ SwiftPM package입니다.
 | `BoundedSyncSession` | 최대 3회·30초와 stop reason |
 | `SyncCoordinator` | 단일 활성 session, trigger burst 병합, 실패 뒤 cadence 억제 |
 | `AntiEntropyCadence` | 정상 조건 30초 cadence와 중단 조건 |
-| `DailyWriteBoundary` | 고정 `Asia/Seoul` 쓰기 창과 terminal close |
+| `DailyWriteBoundary` | 고정 `Asia/Seoul` 쓰기 창과 복원 가능한 terminal-close snapshot |
 | `FinalizationCoordinator` | 단조 120초 바깥 한도와 내부 session 검증 |
-| `ClockSkewGate` | 4-timestamp 구간, 후보 오차, freshness와 fail-closed |
+| `ClockSkewGate` | local-only·공유 Room, macOS 기준점, Peer별 후보 판정과 출시 fail-closed |
 | `ClockExchangeProbe` | Bonjour A/B rendezvous, 양방향 3회 4-timestamp 교환과 익명 evidence |
 | `LateEventClockSafety` | 검증 불가 늦은 이벤트의 열람 전용 처리 |
 | `SystemEventSource` | AppKit, NSWorkspace, Foundation, Network event를 `SyncTrigger`로 정규화 |
-| `ScenarioCatalog` | 기대값을 실행 전에 선언한 13개 결정적 시나리오 |
-| `sp03-probe` | 모델 JSON과 live system-event timeline 출력 |
+| `ScenarioCatalog` | 기대값을 실행 전에 선언한 15개 결정적 시나리오 |
+| `sp03-probe` | 모델 JSON, live system-event timeline, 익명 typed evidence 집계 |
 
 timeout과 cadence에는 절전 중에도 증가하는
 [Swift `ContinuousClock`](https://developer.apple.com/documentation/swift/continuousclock)을
 사용합니다. 14:30과 Peer 시계 비교에만 wall clock을 사용합니다.
 `SuspendingClock`이나 `Date` 경과 시간으로 30초·120초를 재면 sleep 또는
-사용자 시계 변경이 상한을 늘릴 수 있으므로 사용하지 않습니다.
+사용자 시계 변경이 상한을 늘릴 수 있으므로 사용하지 않습니다. API 의미는
+문서로 확인되지만 이 스파이크의 출시 증거에는 실제 macOS sleep 전후 진행
+측정도 별도로 남깁니다.
 
 live adapter는 다음 macOS 14 호환 API를 사용합니다.
 
@@ -108,7 +121,7 @@ swift test --package-path Experiments/SP03WakeAndTime
 2026-07-30 실행 결과:
 
 ```text
-87 tests, 12 suites, 0 failures
+102 tests, 13 suites, 0 failures
 ```
 
 ### 4.2 결정적 시나리오
@@ -123,7 +136,7 @@ swift run --package-path Experiments/SP03WakeAndTime sp03-probe \
 기본 실행 결과:
 
 ```text
-scenarioCount: 13
+scenarioCount: 15
 modelPassed: true
 anonymized: true
 verdict: model-passed-live-gate-pending
@@ -140,12 +153,13 @@ payload를 교환하지 않기 때문입니다. 이 값을 실제 network 비용
 
 ```bash
 swift run --package-path Experiments/SP03WakeAndTime sp03-probe \
-  --observe-seconds 180
+  --observe-seconds 900
 ```
 
-관찰 시간 안에 다른 앱으로 전환했다가 복귀하고, sleep·wake와 network 전환을
-직접 수행합니다. 실제 system clock 변경은 작업용 Mac이 아닌 disposable VM
-또는 별도 시험 기기에서만 수행합니다.
+15분 관찰 시간 안에 다른 앱으로 전환했다가 복귀하고, 짧은 sleep·wake와
+network 전환을 직접 수행합니다. 이 결과는 adapter 관찰일 뿐 실제 Peer
+session·cadence·finalization 증거가 아닙니다. 실제 system clock 변경은 작업용
+Mac이 아닌 disposable VM 또는 별도 시험 기기에서만 수행합니다.
 
 현재 환경에서 1초 관찰한 결과:
 
@@ -202,6 +216,28 @@ TCP framing과 fail-closed 판정만 확인하며 두 Mac evidence로 세지 않
 같은 host에서 `--confirm-distinct-physical-macs`를 잘못 지정해도 loopback
 관측이 운영자 확인보다 우선하므로 동일하게 `sameHost`로 거부됩니다.
 
+### 4.5 typed live evidence 집계
+
+live·clock 출력은 전체 보고서와 별도로 재사용 가능한 `evidenceBundle`을
+포함합니다. 각 원본 보고서는 임시 디렉터리에 보존하고 bundle만 추출한 뒤
+배열로 합칩니다.
+
+```bash
+jq '.evidenceBundle' sp03-clock-A-run01.json > bundle-clock-A-run01.json
+jq '.evidenceBundle' sp03-clock-B-run01.json > bundle-clock-B-run01.json
+jq -s '.' bundle-*.json \
+  | swift run --package-path Experiments/SP03WakeAndTime sp03-probe \
+      --aggregate-live-evidence
+```
+
+clock·system-event 외의 bounded session, cadence, 시계 경계·복구,
+finalization과 resource 측정도 `LiveEvidenceBundle`의 해당 typed artifact로
+기록합니다. 집계기는 빈 입력을 성공으로 채우거나 누락값을 추정하지 않습니다.
+최대 입력은 1 MiB이며, hostname·IP·SSID·로컬 절대 경로 marker가 있거나
+필수 증거가 하나라도 빠지면 `live-gate-pending`과 nonzero로 끝납니다. 집계
+결과가 `release-gate-evidence-complete`여도 제품 책임자의 후보값 승인은
+별도로 남습니다.
+
 ## 5. 결정적 시나리오 결과
 
 | 시나리오 | 결과 | 주요 추적 |
@@ -214,10 +250,12 @@ TCP framing과 fail-closed 판정만 확인하며 두 Mac evidence로 세지 않
 | `anti-entropy-suspends-without-prerequisites` | 통과 | PRD-01-FR-01, POL-02-R-02 |
 | `daily-close-never-reopens` | 통과 | PRD-01-FR-01, POL-01-R-01 |
 | `finalization-completes-within-120-seconds` | 통과 | PRD-01-AC-05, POL-01-R-04 |
-| `clock-skew-within-candidate` | 모델만 통과 | PRD-01-SP-03, POL-02-R-08 |
+| `local-only-baseline-allows-without-peer` | 통과 | PRD-01-AC-09, POL-02-R-08 |
+| `shared-clock-candidate-does-not-open-release-gate` | 통과 · 출시 차단 유지 | PRD-01-SP-03, POL-02-R-08 |
+| `eligible-room-peers-must-all-agree` | 통과 | PRD-01-FR-10, POL-02-R-08 |
 | `clock-skew-exceeded-blocks-writes` | 통과 | PRD-01-AC-09, POL-02-R-08 |
 | `clock-skew-unverifiable-blocks-writes` | 통과 | PRD-01-FR-10, POL-02-R-08 |
-| `system-clock-change-invalidates-validation` | 통과 | PRD-01-FR-10, POL-02-R-08 |
+| `system-clock-change-invalidates-validation` | 통과 · durable 복구 분기 | PRD-01-FR-10, POL-02-R-08 |
 | `unverifiable-late-event-is-read-only` | 통과 | PRD-01-AC-05, POL-02-R-08 |
 
 ## 6. 시계 검증 후보
@@ -248,29 +286,38 @@ local elapsed, Peer processing과 capture uncertainty는 각각 `0...30,000ms`
 초과는 `probe-failed:reportingOverflow`로, 음수 network round-trip과
 연속성 위반은 `probe-failed:clockJumpDetected`로 보고합니다.
 또한 local·Peer 각각의 wall-clock 경과와 대응 단조 경과 차이는 네 캡처
-불확실성 합에 `10ms` 연속성 여유를 더한 값 이하여야 합니다. 이보다 큰
-차이는 일반 지연이 아니라 관찰 중 시계 불연속으로 판정합니다.
+불확실성 합에 미승인 연속성 여유 후보를 더한 값 이하여야 합니다. 현재
+`10ms`는 단위 테스트와 probe에서 사용하는 후보일 뿐 승인된 정책값이
+아닙니다. 이보다 큰 차이는 일반 지연으로 흡수하지 않고 관찰 중 시계
+불연속 후보로 판정합니다.
 
-연속 3개 표본의 offset 구간이 모두 서로 겹치고, 각 구간 전체가 허용 오차
-안에 있을 때만 검증 성공 후보입니다. 다음 경우에는 추측하지 않고 즉시
-fail-closed합니다.
+공유 이력 Room에서는 eligible Room Peer마다 연속 3개 표본을 요구합니다.
+현재 검증 session의 모든 대상 Peer 표본 구간이 서로 겹치고, 각 구간 전체가
+후보 허용 오차 안에 있을 때만 후보 판정을 통과합니다. 특정 Peer를 임의로
+선택하거나 평균·다수결로 outlier를 지우지 않습니다. 다음 경우에는 추측하지
+않고 즉시 fail-closed합니다.
 
-- 정상 응답 Peer 없음
-- 표본 3개 미만
+- eligible Room Peer 없음
+- 한 Peer라도 표본 3개 미만
 - monotonic duration이 잘못됐거나 불완전한 표본
-- 표본 구간끼리 교집합 없음
+- 같은 Peer 또는 여러 Peer의 표본 구간끼리 교집합 없음
 - 불확실성 구간이 허용 오차 경계를 걸침
 - 검증 뒤 30초 경과
-- `NSSystemClockDidChange` 수신
+- `NSSystemClockDidChange` 수신 또는 wall/monotonic 진행 불연속
 
 freshness는 단조 시각 기준 반열린 구간
 `[validatedAt, validatedAt + 30,000ms)`입니다. 검증 이전 시각과 정확히
-30,000ms가 된 시점부터는 stale이며, system clock 변경 뒤에는 새 Peer 표본
-3개로 다시 검증하기 전까지 시간 민감 쓰기를 열지 않습니다.
+30,000ms가 된 시점부터는 stale입니다. system clock 변경 뒤에는 macOS 시각
+점검과 수동 새로고침으로 새 wall/monotonic 기준점을 만든 뒤 local-only
+Room만 복구할 수 있습니다. 공유 이력 Room은 새 기준점과 fresh한 eligible
+Room Peer 대조를 모두 통과해야 복구 후보가 됩니다.
 
-Peer끼리 같은 시각을 보고 있다는 사실은 UTC/KST 절대 정확성을 증명하지
-않습니다. 여러 정상 Peer가 서로 다른 시각을 보낼 때의 quorum·선택 규칙도
-현재 정본에 없습니다. 이 두 항목을 임의로 구현해서는 안 됩니다.
+local-only Room은 현재 process의 macOS 기준점이 유효하면 Peer 표본을
+요구하지 않습니다. Room event의 outbound handoff, remote-origin event 수신
+또는 원격 StorageACK 관찰 중 하나라도 발생하면 durable `everShared`를 먼저
+남기고 이후 다시 local-only로 되돌리지 않습니다. macOS wall clock이 절대
+시각 신뢰 원천이고 Peer는 공유 Room의 교차 확인 수단이므로 Peer 표본으로
+wall clock을 보정하지 않습니다.
 
 ### 6.2 `±1초` 후보의 승인 조건
 
@@ -319,10 +366,9 @@ jq -e -s '
 ```
 
 `500ms`는 승인 허용치가 아니라 `±1초` 후보에 2배 안전 여유가 있는지 확인하는
-실험 기준입니다. 이 행렬은 두 Peer의 상대 일치만 보이므로 통과 자체로
-UTC/KST 정확성을 증명하지 않습니다. 신뢰 기준 또는 승인된
-multi-peer/quorum 계약과 제품 책임자 승인이 모두 있기 전에는
-`POL-02-R-08`을 확정하지 않습니다.
+실험 기준입니다. 이 행렬의 Peer 시각은 macOS wall clock을 보정하는 값이
+아니라 공유 Room의 불일치 탐지 증거입니다. 7절의 전체 실기기 행렬과 제품
+책임자 승인 전에는 후보 수치를 `POL-02-R-08`의 확정값으로 올리지 않습니다.
 
 ## 7. 실기기 시험 행렬
 
@@ -338,15 +384,23 @@ multi-peer/quorum 계약과 제품 책임자 승인이 모두 있기 전에는
 | 120초 finalization — 깨어 있는 기기 | 14:30 뒤 즉시 시작·종료 결과 | 미측정 |
 | 120초 finalization — 잠든 기기 | 14:30을 지나 wake한 뒤 시작·종료 결과 | 미측정 |
 | clock candidate | 두 Mac 양방향 4-timestamp 행렬 | 미측정 |
-| system clock change | disposable 환경의 무효화와 새 Peer 표본 재검증 복구 | 미측정 |
+| local-only 기준점 | Peer 없이 유효한 기준점 허용, 무효화 뒤 수동 새 기준점 복구 | 모델만 통과 · 실기기 미측정 |
+| 공유 이력 고정 | 최초 공유 전 durable 기록, Peer 부재·단일 참여 뒤에도 복귀 금지 | 모델만 통과 · 실기기 미측정 |
+| system clock change | disposable 환경의 durable 무효화, local-only 새 기준점, 공유 Room 새 기준점과 fresh Peer 복구 | 미측정 |
+| freshness 경계 | 실제 29,999ms 허용과 30,000ms stale | 모델만 통과 · 실기기 미측정 |
+| 연속 표본 수 | 1·2개 차단과 3번째 표본 뒤 후보 판정 | 모델만 통과 · 실기기 미측정 |
+| 여러 eligible Peer | Peer별 표본 수와 전체 구간 일치·outlier 차단 | 모델만 통과 · 실기기 미측정 |
+| wall/monotonic 연속성 | 후보 허용 범위와 불연속 차단 | 모델만 통과 · 실기기 미측정 |
+| sleep/wake clock | 실제 sleep 중 `ContinuousClock` 진행과 wake 뒤 deadline | 문서 의미 확인 · 실기기 미측정 |
 | 전력·network 비용 | timer wake, CPU/energy, 실제 bytes | 미측정 |
 
-JSON `liveGate.complete`는 두 Mac clock 교환, 10-pair clock 행렬, wake,
-foreground, network 전환, 새 Peer 발견, 실제 bounded session, 실제 30초
-cadence, system clock 변경 뒤 재검증 복구, 깨어 있는 기기 finalization,
-잠든 기기 finalization과 실제 resource 비용을 각각 typed evidence로
-요구합니다. 하나라도 `false`이면 `policyToleranceMayBeApproved`도
-`false`입니다.
+JSON 최상위 `complete`는 `liveGate`의 두 Mac clock 교환, 10-pair clock 행렬,
+wake, foreground, network 전환, 새 Peer 발견, 실제 bounded session, 실제
+30초 cadence, local-only 기준점 복구, 공유 Room 기준점과 fresh Peer 복구,
+freshness·표본 수 경계, wall/monotonic 연속성, sleep/wake clock 의미,
+깨어 있는 기기 finalization, 잠든 기기 finalization과 실제 resource 비용을
+모두 충족한 경우에만 `true`입니다. 하나라도 빠지면 최상위
+`missingEvidence`에 남고 `policyToleranceMayBeApproved`도 `false`입니다.
 
 ## 8. 구현 불변식
 
@@ -354,14 +408,17 @@ cadence, system clock 변경 뒤 재검증 복구, 깨어 있는 기기 finaliza
 2. 하나의 coordinator는 동시에 bounded session 하나만 소유합니다.
 3. 종료된 session은 timer나 task를 만들어 자신을 다시 시작하지 않습니다.
 4. system clock change는 동기화 trigger가 아니라 시계 검증 무효화 trigger입니다.
-5. daily close는 terminal이며 wall clock rollback으로 해제하지 않습니다.
+5. daily close는 KST 운영일별 terminal snapshot이며 process 재실행·time zone 변경·wall clock rollback으로 해제하지 않습니다.
 6. 14:30 이후 복귀는 쓰기를 열지 않고 finalization부터 시작합니다.
 7. finalization 내부 session도 3회·30초를 넘지 않습니다.
-8. 시계 검증 성공은 구간 전체가 승인 오차 안에 있을 때만 가능합니다.
-9. 열람, 제한된 동기화와 수동 새로고침은 시계 차이 gate가 막지 않습니다.
-10. 검증 불가 늦은 이벤트는 성공 결과를 자동 정정하지 않습니다.
-11. 모델 보고서는 실기기 gate의 미측정을 `false`로 명시합니다.
-12. 결과에는 hostname, IP, SSID, interface 이름과 로컬 절대 경로를 넣지 않습니다.
+8. local-only Room은 유효한 macOS 기준점만 요구하고 Peer 부재만으로 차단하지 않습니다.
+9. `everShared`는 한 번 `true`가 되면 다시 local-only로 되돌리지 않습니다.
+10. 공유 Room의 후보 판정은 eligible Peer별 표본 수와 전체 표본 구간을 모두 검사합니다.
+11. 미승인 후보 판정 통과와 출시 쓰기 허용을 분리하며, 증거 전에는 공유 Room을 fail-closed합니다.
+12. 열람, 제한된 동기화와 수동 새로고침은 시계 차이 gate가 막지 않습니다.
+13. 검증 불가 늦은 이벤트는 성공 결과를 자동 정정하지 않습니다.
+14. 모델 보고서는 실기기 gate의 미측정을 명시적으로 남깁니다.
+15. 결과에는 hostname, IP, SSID, interface 이름, 절대 실행 시각과 로컬 절대 경로를 넣지 않습니다.
 
 ## 9. 한계와 열린 항목
 
@@ -370,30 +427,29 @@ cadence, system clock 변경 뒤 재검증 복구, 깨어 있는 기기 finaliza
 - 실제 sleep·foreground·network burst 순서를 관찰하지 않았습니다.
 - 실제 Peer 동기화 payload와 byte 비용을 모델링하지 않았습니다.
 - OS 수준 energy 측정을 하지 않았습니다.
-- 여러 정상 Peer의 시계가 불일치할 때 quorum 규칙이 없습니다.
-- UTC/KST 절대 정확성을 판단할 신뢰 기준이 없습니다.
+- local-only 새 기준점과 공유 Room의 새 기준점·fresh Peer 복구를 실기기에서 관찰하지 않았습니다.
+- 여러 eligible Room Peer의 불일치·outlier 차단을 실제 장비에서 관찰하지 않았습니다.
+- wall/monotonic 진행 불연속 후보와 실제 sleep 중 `ContinuousClock` 진행을 계측하지 않았습니다.
 - Peer 시각을 근거로 로컬 finalization을 앞당기는 동작은 승인되지 않았습니다.
-- Peer 간 상대 일치는 절대 시각의 정확성을 증명하지 않습니다.
+- macOS 시각의 암호학적 진위나 관리자 권한으로 함께 잘못 설정된 여러 기기까지 검출하지 못하는 위험은 `POL-02-R-08`이 MVP에서 수용합니다.
 
 이 항목 중 제품 동작을 선택해야 하는 내용은 현재 이슈에서 추측하지 않습니다.
 실기기 행렬을 채운 뒤에도 남으면 후속 제품 계약 이슈로 분리합니다.
 
 ## 10. 문서 영향
 
-- 이 문서를 새로 추가해 모델 결과, live prerequisite와 미측정 gate를 분리했습니다.
-- [POL-02-R-08](../../policies/02_replication_consistency_retention.md)에 모델 결과를 승인 허용 오차로 오인하지 않는 증거 gate를 명시합니다.
-- [PRD-01](../../prd/01_lunchtime_mvp.md)과 [POL-01](../../policies/01_daily_room_lifecycle.md)의 승인된 사용자 결과는 바꾸지 않습니다.
-- Architecture 문서는 바꾸지 않습니다. 실제 transport·scheduler 구현 방식을 확정한 작업이 아니기 때문입니다.
+- 이 문서는 #86의 KST·macOS 시각·Room별 신뢰 계약에 맞춰 모델 결과, live prerequisite와 미측정 gate를 분리합니다.
+- [POL-02-R-08](../../policies/02_replication_consistency_retention.md)은 변경하지 않습니다. 현재 결과는 후보 수치를 승인할 실기기 증거가 없으므로 #86이 남긴 미승인 후보와 fail-closed 규칙을 그대로 지킵니다.
+- [PRD-01](../../prd/01_lunchtime_mvp.md)과 [POL-01](../../policies/01_daily_room_lifecycle.md)은 변경하지 않습니다. #86이 승인 사용자 결과를 이미 정렬했고 이 spike는 이를 검증합니다.
+- [복제·정합성·복구 Architecture](../../architecture/04_replication_consistency_and_recovery.md)는 변경하지 않습니다. #86이 `everShared`, `clockRecoveryRequired`, 기준점, eligible Room Peer와 terminal close 구현 경계를 이미 확정했습니다.
 
 ## 11. 다음 단계
 
-1. 두 물리 Mac에서 6.2절 clock 행렬을 양방향으로 실행합니다.
-2. 7절의 wake·foreground·network·14:30·비용 행렬을 채웁니다.
-3. 신뢰할 절대 시각 기준 또는 multi-peer/quorum 계약을 제품 정본으로
-   결정합니다.
-4. 위 증거와 계약이 후보를 지지하면 제품 책임자가 허용 오차와 freshness를
-   승인합니다.
-5. 승인 뒤에만 `POL-02-R-08`을 확정값으로 갱신하고 `PRD-01-SP-03` 출시
-   gate를 해제하며 #4 PR을 Ready로 전환할 수 있습니다.
-6. 증거가 후보를 지지하지 않으면 수치를 자동 완화하지 않고 후속 제품 계약
-   이슈를 만듭니다.
+1. 현재 Mac에서 15분 live adapter 관찰을 수행하되 system clock은 변경하지 않습니다.
+2. 두 물리 Mac에서 6.2절 clock 행렬을 양방향으로 실행하고 익명 typed evidence로 집계합니다.
+3. 7절의 wake·foreground·network·Peer session·cadence·local-only·공유 Room 복구·비용 행렬을 채웁니다.
+4. 실제 KST 14:30에 한 기기는 awake, 다른 기기는 sleep 상태로 finalization과 terminal close를 관찰합니다.
+5. 별도 시험 기기에서만 system clock 변경·rollback과 복구 행렬을 수행합니다.
+6. 위 증거가 후보를 지지하면 제품 책임자가 허용 오차, freshness, 표본 수, wall/monotonic 연속성 기준과 sleep/wake clock 의미를 승인합니다.
+7. 승인 뒤에만 `POL-02-R-08`을 확정값으로 갱신하고 `PRD-01-SP-03` 출시 gate를 해제하며 #4 PR을 Ready로 전환할 수 있습니다.
+8. 증거가 후보를 지지하지 않으면 수치를 자동 완화하지 않고 후속 제품 계약 이슈를 만듭니다.

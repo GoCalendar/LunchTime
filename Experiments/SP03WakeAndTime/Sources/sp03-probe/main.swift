@@ -16,6 +16,7 @@ func usageText() -> String {
                sp03-probe --observe-seconds <1...900>
                sp03-probe --clock-local <A|B> --clock-peer <A|B>
                  [--confirm-distinct-physical-macs]
+               sp03-probe --aggregate-live-evidence < bundles.json
 
         기본 실행은 결정적 모델 시나리오 전체를 JSON으로 출력한다.
         `--observe-seconds`는 AppKit·NSWorkspace·NWPathMonitor의 실제 사건을
@@ -23,6 +24,11 @@ func usageText() -> String {
         관찰 중 사용자가 수행해야 하며 synthetic 결과로 대체하지 않는다.
         clock mode는 두 Mac에서 A/B를 반대로 지정해 동시에 실행한다.
         확인 flag는 실제로 서로 다른 물리 Mac 두 대에서 실행할 때만 사용한다.
+        live·clock 출력의 `evidenceBundle`은 절대 시각·hostname·IP·SSID를
+        포함하지 않는 재사용 가능한 조각이다. aggregate mode는 stdin의
+        `LiveEvidenceBundle` JSON 한 개 또는 그 배열만 합치며, 빠진 관찰을
+        추정하지 않는다. 입력은 최대 1 MiB이고 부분 evidence는 nonzero로 끝난다.
+        여러 출력 조각은 `jq -s '[.[].evidenceBundle]' result-*.json`으로 묶는다.
         """
 }
 
@@ -44,6 +50,7 @@ struct LiveObservationOutput: Codable, Sendable {
     let durationSeconds: Double
     let anonymized: Bool
     let events: [LiveEventRecord]
+    let evidenceBundle: LiveEvidenceBundle
     let liveGate: LiveGateEvidence
     let sessionsStarted: Int
     let coalescedTriggers: Int
@@ -134,6 +141,7 @@ struct ClockObservationOutput: Codable, Sendable {
     let allRoundsWithinFiveHundredMillisecondSafetyMargin: Bool
     let policyToleranceMayBeApproved: Bool
     let anonymized: Bool
+    let evidenceBundle: LiveEvidenceBundle
     let verdict: String
 
     init(report: ClockExchangeProbeReport) {
@@ -170,6 +178,9 @@ struct ClockObservationOutput: Codable, Sendable {
         // 한 번의 clock 교환은 전체 live matrix나 제품 책임자 승인이 아니다.
         policyToleranceMayBeApproved = false
         anonymized = true
+        evidenceBundle = LiveEvidenceBundle(
+            clockRuns: [ClockRunLiveEvidence(report: report)]
+        )
 
         if let failure = report.failure {
             verdict = "probe-failed:\(failure.rawValue)"
@@ -255,6 +266,24 @@ final class LiveRecorder: @unchecked Sendable {
         defer { lock.unlock() }
 
         let observed = Set(records.map(\.trigger))
+        let eventEvidence = SystemEventLiveEvidence(
+            observationDurationMilliseconds: max(
+                1,
+                Int64((durationSeconds * 1_000).rounded(.down))
+            ),
+            wakeCount: records.count {
+                $0.trigger == SyncTrigger.wake.rawValue
+            },
+            foregroundCount: records.count {
+                $0.trigger == SyncTrigger.foreground.rawValue
+            },
+            networkChangeCount: records.count {
+                $0.trigger == SyncTrigger.networkChanged.rawValue
+            },
+            newPeerDiscoveryCount: records.count {
+                $0.trigger == SyncTrigger.peerDiscovered.rawValue
+            }
+        )
         let liveGate = LiveGateEvidence(
             twoMacClockExchangeObserved: false,
             clockCandidateMatrixPassed: false,
@@ -277,6 +306,9 @@ final class LiveRecorder: @unchecked Sendable {
             durationSeconds: durationSeconds,
             anonymized: true,
             events: records,
+            evidenceBundle: LiveEvidenceBundle(
+                systemEvents: [eventEvidence]
+            ),
             liveGate: liveGate,
             sessionsStarted: coordinator.sessionsStarted,
             coalescedTriggers: coordinator.coalescedTriggerCount,
@@ -316,6 +348,7 @@ enum Mode {
     case list
     case live(seconds: Double)
     case clock(options: ClockExchangeProbeOptions)
+    case aggregateLiveEvidence
 }
 
 var selectedScenario: String?
@@ -324,6 +357,7 @@ var observationSeconds: Double?
 var clockLocalLabel: String?
 var clockPeerLabel: String?
 var operatorConfirmedDistinctPhysicalMacs = false
+var aggregateLiveEvidence = false
 var arguments = Array(CommandLine.arguments.dropFirst())
 
 while let argument = arguments.first {
@@ -360,6 +394,8 @@ while let argument = arguments.first {
         clockPeerLabel = value
     case "--confirm-distinct-physical-macs":
         operatorConfirmedDistinctPhysicalMacs = true
+    case "--aggregate-live-evidence":
+        aggregateLiveEvidence = true
     case "--help", "-h":
         writeStandardOutput(usageText())
         exit(0)
@@ -374,7 +410,8 @@ if listOnly {
           observationSeconds == nil,
           clockLocalLabel == nil,
           clockPeerLabel == nil,
-          !operatorConfirmedDistinctPhysicalMacs
+          !operatorConfirmedDistinctPhysicalMacs,
+          !aggregateLiveEvidence
     else {
         failUsage("`--list`는 다른 mode와 함께 사용할 수 없습니다.")
     }
@@ -383,7 +420,8 @@ if listOnly {
     guard selectedScenario == nil,
           clockLocalLabel == nil,
           clockPeerLabel == nil,
-          !operatorConfirmedDistinctPhysicalMacs
+          !operatorConfirmedDistinctPhysicalMacs,
+          !aggregateLiveEvidence
     else {
         failUsage("live 관찰과 결정적 scenario를 동시에 선택할 수 없습니다.")
     }
@@ -394,7 +432,8 @@ if listOnly {
 {
     guard selectedScenario == nil,
           let clockLocalLabel,
-          let clockPeerLabel
+          let clockPeerLabel,
+          !aggregateLiveEvidence
     else {
         failUsage("clock mode에는 `--clock-local`과 `--clock-peer`가 모두 필요합니다.")
     }
@@ -412,6 +451,11 @@ if listOnly {
     } catch {
         failUsage("clock mode 옵션을 만들 수 없습니다.")
     }
+} else if aggregateLiveEvidence {
+    guard selectedScenario == nil else {
+        failUsage("aggregate mode는 결정적 scenario와 함께 사용할 수 없습니다.")
+    }
+    mode = .aggregateLiveEvidence
 } else {
     mode = .model(scenario: selectedScenario)
 }
@@ -504,4 +548,50 @@ case let .live(seconds):
     writeStandardOutput(text)
     log("판정: \(output.verdict)")
     exit(0)
+
+case .aggregateLiveEvidence:
+    let maximumInputBytes = 1_048_576
+    var input = Data()
+    while true {
+        let chunk = FileHandle.standardInput.availableData
+        if chunk.isEmpty { break }
+        guard input.count <= maximumInputBytes - chunk.count else {
+            log("evidence 입력이 1 MiB 제한을 넘었습니다.")
+            exit(2)
+        }
+        input.append(chunk)
+    }
+    guard !input.isEmpty,
+          let sourceText = String(data: input, encoding: .utf8)
+    else {
+        log("aggregate mode에는 UTF-8 JSON stdin이 필요합니다.")
+        exit(2)
+    }
+
+    let decoder = JSONDecoder()
+    let bundles: [LiveEvidenceBundle]
+    if let many = try? decoder.decode([LiveEvidenceBundle].self, from: input) {
+        bundles = many
+    } else if let one = try? decoder.decode(LiveEvidenceBundle.self, from: input) {
+        bundles = [one]
+    } else {
+        log("typed live evidence JSON을 해석하지 못했습니다.")
+        exit(2)
+    }
+
+    let report = LiveEvidenceAggregator.aggregate(
+        bundles,
+        sourceText: sourceText
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    guard let data = try? encoder.encode(report),
+          let text = String(data: data, encoding: .utf8)
+    else {
+        log("aggregate 결과를 직렬화하지 못했습니다.")
+        exit(1)
+    }
+    writeStandardOutput(text)
+    log("판정: \(report.verdict)")
+    exit(report.complete ? 0 : 1)
 }

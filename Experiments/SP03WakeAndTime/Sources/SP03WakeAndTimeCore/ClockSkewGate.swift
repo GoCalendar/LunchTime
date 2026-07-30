@@ -11,20 +11,25 @@ public struct UnconfirmedClockSafetyCandidate: Equatable, Sendable {
     public let maxAbsoluteOffsetMilliseconds: Int64
     public let freshnessMilliseconds: Int64
     public let requiredConsistentSamples: Int
+    public let maximumUnexplainedWallClockDriftMilliseconds: Int64
     public let evidenceStatus: EvidenceStatus
 
     public init(
         maxAbsoluteOffsetMilliseconds: Int64,
         freshnessMilliseconds: Int64,
         requiredConsistentSamples: Int,
+        maximumUnexplainedWallClockDriftMilliseconds: Int64,
         evidenceStatus: EvidenceStatus = .requiresRealDeviceEvidence
     ) {
         precondition(maxAbsoluteOffsetMilliseconds > 0)
         precondition(freshnessMilliseconds > 0)
         precondition(requiredConsistentSamples > 0)
+        precondition(maximumUnexplainedWallClockDriftMilliseconds >= 0)
         self.maxAbsoluteOffsetMilliseconds = maxAbsoluteOffsetMilliseconds
         self.freshnessMilliseconds = freshnessMilliseconds
         self.requiredConsistentSamples = requiredConsistentSamples
+        self.maximumUnexplainedWallClockDriftMilliseconds =
+            maximumUnexplainedWallClockDriftMilliseconds
         self.evidenceStatus = evidenceStatus
     }
 
@@ -32,7 +37,8 @@ public struct UnconfirmedClockSafetyCandidate: Equatable, Sendable {
     public static let sp03RealDeviceUnconfirmed = UnconfirmedClockSafetyCandidate(
         maxAbsoluteOffsetMilliseconds: 1_000,
         freshnessMilliseconds: 30_000,
-        requiredConsistentSamples: 3
+        requiredConsistentSamples: 3,
+        maximumUnexplainedWallClockDriftMilliseconds: 10
     )
 }
 
@@ -49,7 +55,9 @@ public struct ClockFourTimestampSample: Equatable, Sendable {
     ///
     /// A larger unexplained difference is treated as a clock discontinuity instead of
     /// being folded into an apparently valid offset interval.
-    public static let maximumUnexplainedWallClockDriftMilliseconds: Int64 = 10
+    public static let unconfirmedMaximumUnexplainedWallClockDriftMilliseconds: Int64 =
+        UnconfirmedClockSafetyCandidate.sp03RealDeviceUnconfirmed
+            .maximumUnexplainedWallClockDriftMilliseconds
 
     public let localSentWallTime: WallClockInstant
     public let peerReceivedWallTime: WallClockInstant
@@ -82,6 +90,19 @@ public struct ClockFourTimestampSample: Equatable, Sendable {
     /// `offset = ((T2 - T1) + (T3 - T4)) / 2`
     /// `uncertainty = network round-trip / 2 + capture uncertainty`
     public var offsetInterval: ClockOffsetInterval? {
+        offsetInterval(
+            maximumUnexplainedWallClockDriftMilliseconds:
+                Self.unconfirmedMaximumUnexplainedWallClockDriftMilliseconds
+        )
+    }
+
+    /// 주어진 **후보** wall/monotonic 불연속 허용치로 표본을 계산한다.
+    ///
+    /// 허용치가 실기기에서 승인되기 전에는 이 결과 역시 출시 승인이 아니라
+    /// 후보 판정에만 사용할 수 있다.
+    public func offsetInterval(
+        maximumUnexplainedWallClockDriftMilliseconds: Int64
+    ) -> ClockOffsetInterval? {
         guard localElapsedMonotonicMilliseconds >= 0,
               localElapsedMonotonicMilliseconds
                 <= Self.maximumMeasuredDurationMilliseconds,
@@ -90,7 +111,8 @@ public struct ClockFourTimestampSample: Equatable, Sendable {
                 <= Self.maximumMeasuredDurationMilliseconds,
               captureUncertaintyMilliseconds >= 0,
               captureUncertaintyMilliseconds
-                <= Self.maximumMeasuredDurationMilliseconds
+                <= Self.maximumMeasuredDurationMilliseconds,
+              maximumUnexplainedWallClockDriftMilliseconds >= 0
         else { return nil }
 
         let localWallElapsed =
@@ -101,7 +123,7 @@ public struct ClockFourTimestampSample: Equatable, Sendable {
             - Double(peerReceivedWallTime.millisecondsSinceUnixEpoch)
         let continuityAllowance =
             Double(captureUncertaintyMilliseconds)
-            + Double(Self.maximumUnexplainedWallClockDriftMilliseconds)
+            + Double(maximumUnexplainedWallClockDriftMilliseconds)
         guard abs(localWallElapsed - Double(localElapsedMonotonicMilliseconds))
                 <= continuityAllowance,
               abs(peerWallElapsed - Double(peerProcessingMonotonicMilliseconds))
@@ -140,6 +162,17 @@ public struct ClockOffsetInterval: Equatable, Sendable {
     }
 }
 
+/// 현재 검증 session에서 Room 데이터를 보유하고 정상 응답한 Peer의 표본.
+public struct EligibleRoomPeerClockSamples: Equatable, Sendable {
+    public let peerID: String
+    public let samples: [ClockFourTimestampSample]
+
+    public init(peerID: String, samples: [ClockFourTimestampSample]) {
+        self.peerID = peerID
+        self.samples = samples
+    }
+}
+
 public enum ClockUnverifiableReason: String, Equatable, Sendable {
     case normalPeerUnavailable
     case insufficientSamples
@@ -160,6 +193,7 @@ public struct ValidClockObservation: Equatable, Sendable {
     public let offsetInterval: ClockOffsetInterval
     public let validatedAt: MonotonicInstant
     public let validThrough: MonotonicInstant
+    public let eligiblePeerIDs: [String]
 }
 
 public enum ClockValidationState: Equatable, Sendable {
@@ -197,38 +231,138 @@ public enum ClockGateDecision: Equatable, Sendable {
     case blocked(ClockWriteBlockReason)
 }
 
-/// Peer 시계 검증 결과로 시간 경계 쓰기를 fail-closed하는 상태기계.
+/// 실기기에서 후보값이 승인되기 전의 출시 판정.
+///
+/// `candidateDecision`이 성공해도 공유 이력이 있는 Room은 별도의
+/// `blockedPendingRealDeviceApproval`로 남아 후보 판정과 출시 판정을 혼동하지
+/// 않는다.
+public enum ClockReleaseGateDecision: Equatable, Sendable {
+    case allowed
+    case blocked(ClockWriteBlockReason)
+    case blockedPendingRealDeviceApproval
+}
+
+/// Room이 outbound/remote event/StorageACK 중 하나라도 관찰한 이력.
+public enum RoomClockSharingHistory: String, Equatable, Sendable {
+    case localOnly
+    case everShared
+}
+
+/// 앱 재실행으로 해제해서는 안 되는 로컬 안전 상태.
+public enum DurableClockRecoveryState: String, Equatable, Sendable {
+    case clear
+    case recoveryRequired
+}
+
+public struct WallMonotonicClockBaseline: Equatable, Sendable {
+    public let wallTime: WallClockInstant
+    public let monotonicTime: MonotonicInstant
+
+    public init(wallTime: WallClockInstant, monotonicTime: MonotonicInstant) {
+        self.wallTime = wallTime
+        self.monotonicTime = monotonicTime
+    }
+}
+
+public enum ClockBaselineState: Equatable, Sendable {
+    case missing
+    case valid(WallMonotonicClockBaseline)
+    case recoveryRequired
+}
+
+/// macOS baseline과 Room별 Peer 대조를 분리해 시간 경계 쓰기를 fail-closed한다.
 public struct ClockSkewGate: Equatable, Sendable {
     public let candidate: UnconfirmedClockSafetyCandidate
+    public private(set) var sharingHistory: RoomClockSharingHistory
+    public private(set) var durableRecoveryState: DurableClockRecoveryState
+    public private(set) var baselineState: ClockBaselineState
     public private(set) var state: ClockValidationState
 
     public init(
-        candidate: UnconfirmedClockSafetyCandidate = .sp03RealDeviceUnconfirmed
+        candidate: UnconfirmedClockSafetyCandidate = .sp03RealDeviceUnconfirmed,
+        sharingHistory: RoomClockSharingHistory = .localOnly,
+        durableRecoveryState: DurableClockRecoveryState = .clear
     ) {
         self.candidate = candidate
+        self.sharingHistory = sharingHistory
+        self.durableRecoveryState = durableRecoveryState
+        baselineState = durableRecoveryState == .recoveryRequired
+            ? .recoveryRequired
+            : .missing
         state = .unverified
     }
 
-    /// 정상 응답 Peer와 얻은 표본을 검증한다.
+    /// 현재 process의 macOS wall/monotonic 기준점을 만든다.
     ///
-    /// 표본마다 전체 불확실성 구간이 허용 범위 안에 있어야 하고, 모든 표본의
-    /// 구간이 서로 겹쳐야 한다. 경계를 걸치는 표본은 허용으로 추측하지 않는다.
+    /// durable 복구 필요 상태는 단순 재실행이나 초기화로 지울 수 없다.
+    @discardableResult
+    public mutating func establishProcessBaseline(
+        wallTime: WallClockInstant,
+        monotonicTime: MonotonicInstant
+    ) -> Bool {
+        guard durableRecoveryState == .clear else { return false }
+        baselineState = .valid(
+            WallMonotonicClockBaseline(
+                wallTime: wallTime,
+                monotonicTime: monotonicTime
+            )
+        )
+        state = .unverified
+        return true
+    }
+
+    /// 최초 공유 관찰을 durable하게 기록하는 모델.
+    ///
+    /// `everShared`에서 `localOnly`로 되돌리는 API는 의도적으로 제공하지 않는다.
+    public mutating func recordRoomShared() {
+        guard sharingHistory == .localOnly else { return }
+        sharingHistory = .everShared
+        state = .unverified
+    }
+
+    /// eligible Room Peer별 표본을 검증한다.
+    ///
+    /// 각 Peer가 최소 표본 수를 따로 충족해야 한다. 응답한 모든 Peer의 모든
+    /// 표본 구간이 허용 범위 안에서 서로 겹쳐야 하며, 특정 Peer 선택·평균·
+    /// 다수결로 충돌을 성공 처리하지 않는다.
     @discardableResult
     public mutating func validate(
-        samples: [ClockFourTimestampSample],
-        normalPeerAvailable: Bool = true,
+        eligiblePeers: [EligibleRoomPeerClockSamples],
         at now: MonotonicInstant
     ) -> ClockValidationState {
-        guard normalPeerAvailable else {
+        // Peer 교환 probe는 baseline 생성과 별도로 후보 표본 자체를 평가할 수
+        // 있다. 다만 durable 복구 중에는 새 baseline보다 먼저 Peer 결과를
+        // 되살릴 수 없다. 실제 쓰기 판정은 아래 candidate/release gate가
+        // baseline 유효성을 별도로 요구한다.
+        guard durableRecoveryState == .clear else {
+            state = .blocked(.systemClockChanged)
+            return state
+        }
+        guard !eligiblePeers.isEmpty else {
             state = .blocked(.unverifiable(.normalPeerUnavailable))
             return state
         }
-        guard samples.count >= candidate.requiredConsistentSamples else {
+        let peerIDs = eligiblePeers.map(\.peerID)
+        guard peerIDs.allSatisfy({ !$0.isEmpty }),
+              Set(peerIDs).count == peerIDs.count
+        else {
+            state = .blocked(.unverifiable(.invalidSample))
+            return state
+        }
+        guard eligiblePeers.allSatisfy({
+            $0.samples.count >= candidate.requiredConsistentSamples
+        }) else {
             state = .blocked(.unverifiable(.insufficientSamples))
             return state
         }
 
-        let intervals = samples.compactMap(\.offsetInterval)
+        let samples = eligiblePeers.flatMap(\.samples)
+        let intervals = samples.compactMap {
+            $0.offsetInterval(
+                maximumUnexplainedWallClockDriftMilliseconds:
+                    candidate.maximumUnexplainedWallClockDriftMilliseconds
+            )
+        }
         guard intervals.count == samples.count else {
             state = .blocked(.unverifiable(.invalidSample))
             return state
@@ -265,25 +399,91 @@ public struct ClockSkewGate: Equatable, Sendable {
                 upperBoundMilliseconds: commonUpperBound
             ),
             validatedAt: now,
-            validThrough: now.advanced(by: candidate.freshnessMilliseconds)
+            validThrough: now.advanced(by: candidate.freshnessMilliseconds),
+            eligiblePeerIDs: peerIDs.sorted()
         )
         state = .valid(observation)
         return state
     }
 
-    /// macOS system-clock-change 신호는 기존 성공 검증을 즉시 무효화한다.
+    /// 기존 단일 Peer 호출부가 Peer별 검증 모델을 사용하도록 연결한다.
+    @discardableResult
+    public mutating func validate(
+        samples: [ClockFourTimestampSample],
+        normalPeerAvailable: Bool = true,
+        at now: MonotonicInstant
+    ) -> ClockValidationState {
+        validate(
+            eligiblePeers: normalPeerAvailable
+                ? [
+                    EligibleRoomPeerClockSamples(
+                        peerID: "eligible-room-peer",
+                        samples: samples
+                    )
+                ]
+                : [],
+            at: now
+        )
+    }
+
+    /// macOS system-clock-change 신호는 기준점과 Peer 검증을 모두 무효화한다.
     public mutating func recordSystemClockChange() {
+        invalidateForClockDiscontinuity()
+    }
+
+    /// wall clock과 monotonic 진행의 불연속도 같은 durable 복구를 요구한다.
+    public mutating func recordWallMonotonicDiscontinuity() {
+        invalidateForClockDiscontinuity()
+    }
+
+    /// 사용자 시각 점검과 수동 새로고침을 함께 완료해 새 기준점을 만든다.
+    ///
+    /// local-only Room은 이 단계로 복구되지만 공유 Room은 이후 fresh한 eligible
+    /// Room Peer 검증도 통과해야 후보 판정이 성공한다.
+    public mutating func recoverAfterUserClockCheckAndManualRefresh(
+        wallTime: WallClockInstant,
+        monotonicTime: MonotonicInstant
+    ) {
+        durableRecoveryState = .clear
+        baselineState = .valid(
+            WallMonotonicClockBaseline(
+                wallTime: wallTime,
+                monotonicTime: monotonicTime
+            )
+        )
+        state = .unverified
+    }
+
+    private mutating func invalidateForClockDiscontinuity() {
+        durableRecoveryState = .recoveryRequired
+        baselineState = .recoveryRequired
         state = .blocked(.systemClockChanged)
     }
 
-    /// 동작을 시도한 시점의 gate 판정.
+    /// 실기기 미승인 후보값으로만 계산한 판정.
+    ///
+    /// 공유 Room 출시 허용 근거로 사용해서는 안 되며, 실제 출시 판정에는
+    /// `releaseDecision`을 사용한다.
     @discardableResult
-    public mutating func decision(
+    public mutating func candidateDecision(
         for operation: ClockGatedOperation,
         at now: MonotonicInstant
     ) -> ClockGateDecision {
         expireValidationIfNeeded(at: now)
         guard operation.isClockSensitiveWrite else { return .allowed }
+
+        switch baselineState {
+        case .missing:
+            return .blocked(.notValidated)
+        case .recoveryRequired:
+            return .blocked(.systemClockChanged)
+        case .valid:
+            break
+        }
+
+        if sharingHistory == .localOnly {
+            return .allowed
+        }
 
         switch state {
         case .valid:
@@ -293,6 +493,43 @@ public struct ClockSkewGate: Equatable, Sendable {
         case let .blocked(reason):
             return .blocked(reason)
         }
+    }
+
+    /// 후보 판정과 분리된 출시 판정.
+    ///
+    /// 실기기 증거가 없는 현재 후보로 공유 Room의 시간 의존 쓰기를 허용했다고
+    /// 주장하지 않는다. local-only Room은 유효한 macOS 기준점만으로 허용한다.
+    @discardableResult
+    public mutating func releaseDecision(
+        for operation: ClockGatedOperation,
+        at now: MonotonicInstant
+    ) -> ClockReleaseGateDecision {
+        let candidateResult = candidateDecision(for: operation, at: now)
+        switch candidateResult {
+        case let .blocked(reason):
+            return .blocked(reason)
+        case .allowed:
+            guard operation.isClockSensitiveWrite,
+                  sharingHistory == .everShared
+            else {
+                return .allowed
+            }
+            return .blockedPendingRealDeviceApproval
+        }
+    }
+
+    /// 기존 probe 호출부를 위한 후보 판정 alias.
+    @available(
+        *,
+        deprecated,
+        message: "후보 판정은 candidateDecision, 출시 판정은 releaseDecision을 사용하세요."
+    )
+    @discardableResult
+    public mutating func decision(
+        for operation: ClockGatedOperation,
+        at now: MonotonicInstant
+    ) -> ClockGateDecision {
+        candidateDecision(for: operation, at: now)
     }
 
     private mutating func expireValidationIfNeeded(at now: MonotonicInstant) {

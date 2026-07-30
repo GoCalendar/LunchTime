@@ -30,8 +30,20 @@ struct ClockSafetyTests {
     private func validatedGate(
         at now: MonotonicInstant = MonotonicInstant(milliseconds: 0)
     ) -> ClockSkewGate {
-        var gate = ClockSkewGate()
+        var gate = baselineGate(sharingHistory: .everShared)
         gate.validate(samples: [sample(offset: 400), sample(offset: 400), sample(offset: 400)], at: now)
+        return gate
+    }
+
+    private func baselineGate(
+        sharingHistory: RoomClockSharingHistory = .localOnly
+    ) -> ClockSkewGate {
+        var gate = ClockSkewGate(sharingHistory: sharingHistory)
+        let established = gate.establishProcessBaseline(
+            wallTime: WallClockInstant(millisecondsSinceUnixEpoch: 1_000_000),
+            monotonicTime: MonotonicInstant(milliseconds: 0)
+        )
+        #expect(established)
         return gate
     }
 
@@ -41,6 +53,7 @@ struct ClockSafetyTests {
         #expect(candidate.maxAbsoluteOffsetMilliseconds == 1_000)
         #expect(candidate.freshnessMilliseconds == 30_000)
         #expect(candidate.requiredConsistentSamples == 3)
+        #expect(candidate.maximumUnexplainedWallClockDriftMilliseconds == 10)
         #expect(candidate.evidenceStatus == .requiresRealDeviceEvidence)
     }
 
@@ -109,7 +122,7 @@ struct ClockSafetyTests {
 
     @Test("일관된 3개 표본이 허용 구간 안이면 검증된다")
     func acceptsThreeConsistentSamples() {
-        var gate = ClockSkewGate()
+        var gate = baselineGate(sharingHistory: .everShared)
         let state = gate.validate(
             samples: [
                 sample(offset: 400, outbound: 40, inbound: 60),
@@ -132,7 +145,7 @@ struct ClockSafetyTests {
 
     @Test("offset과 uncertainty 합의 정확한 1000ms 경계는 포함한다")
     func toleranceBoundaryIsInclusive() {
-        var gate = ClockSkewGate()
+        var gate = baselineGate(sharingHistory: .everShared)
         let samples = [
             sample(offset: 1_000, outbound: 0, processing: 1, inbound: 0),
             sample(offset: 1_000, outbound: 0, processing: 1, inbound: 0),
@@ -141,7 +154,7 @@ struct ClockSafetyTests {
 
         gate.validate(samples: samples, at: MonotonicInstant(milliseconds: 0))
         #expect(
-            gate.decision(
+            gate.candidateDecision(
                 for: .participationAcceptance,
                 at: MonotonicInstant(milliseconds: 0)
             ) == .allowed
@@ -150,7 +163,7 @@ struct ClockSafetyTests {
 
     @Test("1000ms를 넘는 확정 offset은 차단한다")
     func blocksExceededOffset() {
-        var gate = ClockSkewGate()
+        var gate = baselineGate(sharingHistory: .everShared)
         let samples = Array(
             repeating: sample(offset: 1_001, outbound: 0, processing: 1, inbound: 0),
             count: 3
@@ -164,7 +177,7 @@ struct ClockSafetyTests {
 
     @Test("불확실성 구간이 1000ms 경계를 걸치면 허용으로 추측하지 않는다")
     func blocksUncertaintyCrossingTolerance() {
-        var gate = ClockSkewGate()
+        var gate = baselineGate(sharingHistory: .everShared)
         let samples = Array(
             repeating: sample(offset: 900, outbound: 200, inbound: 200),
             count: 3
@@ -178,7 +191,7 @@ struct ClockSafetyTests {
 
     @Test("표본 부족·잘못된 duration·불일치는 모두 검증 불가다")
     func rejectsUnverifiableSamples() {
-        var gate = ClockSkewGate()
+        var gate = baselineGate(sharingHistory: .everShared)
         #expect(
             gate.validate(
                 samples: [sample(offset: 0), sample(offset: 0)],
@@ -215,7 +228,7 @@ struct ClockSafetyTests {
 
     @Test("정상 응답 Peer가 없으면 검증 불가로 차단한다")
     func blocksWhenNormalPeerIsUnavailable() {
-        var gate = ClockSkewGate()
+        var gate = baselineGate(sharingHistory: .everShared)
         #expect(
             gate.validate(
                 samples: [],
@@ -229,39 +242,192 @@ struct ClockSafetyTests {
     func validationFreshnessBoundary() {
         var gate = validatedGate()
         #expect(
-            gate.decision(
+            gate.candidateDecision(
                 for: .orderDeadlineModification,
                 at: MonotonicInstant(milliseconds: 29_999)
             ) == .allowed
         )
         #expect(
-            gate.decision(
+            gate.candidateDecision(
                 for: .orderDeadlineModification,
                 at: MonotonicInstant(milliseconds: 30_000)
             ) == .blocked(.stale)
         )
     }
 
-    @Test("system clock change는 성공 검증을 즉시 무효화하고 재검증만 복구한다")
-    func systemClockChangeInvalidatesUntilRevalidation() {
-        var gate = validatedGate()
-        gate.recordSystemClockChange()
+    @Test("local-only Room은 유효한 macOS baseline이면 Peer 없이 허용된다")
+    func localOnlyRoomUsesValidProcessBaseline() {
+        var gate = baselineGate()
+
+        #expect(gate.sharingHistory == .localOnly)
         #expect(
-            gate.decision(
+            gate.releaseDecision(
+                for: .participationAcceptance,
+                at: MonotonicInstant(milliseconds: 1)
+            ) == .allowed
+        )
+    }
+
+    @Test("공유 이력은 되돌아가지 않고 eligible Room Peer 검증을 요구한다")
+    func sharedHistoryIsIrreversibleAndRequiresPeerValidation() {
+        var gate = baselineGate()
+        gate.recordRoomShared()
+        gate.recordRoomShared()
+
+        #expect(gate.sharingHistory == .everShared)
+        #expect(
+            gate.candidateDecision(
+                for: .orderDeadlineModification,
+                at: MonotonicInstant(milliseconds: 1)
+            ) == .blocked(.notValidated)
+        )
+
+        let relaunched = ClockSkewGate(sharingHistory: gate.sharingHistory)
+        #expect(relaunched.sharingHistory == .everShared)
+    }
+
+    @Test("각 eligible Peer가 최소 표본 수를 따로 충족해야 한다")
+    func everyEligiblePeerRequiresMinimumSamples() {
+        var gate = baselineGate(sharingHistory: .everShared)
+        let full = Array(repeating: sample(offset: 100), count: 3)
+        let short = Array(repeating: sample(offset: 100), count: 2)
+
+        #expect(
+            gate.validate(
+                eligiblePeers: [
+                    EligibleRoomPeerClockSamples(peerID: "peer-a", samples: full),
+                    EligibleRoomPeerClockSamples(peerID: "peer-b", samples: short)
+                ],
+                at: MonotonicInstant(milliseconds: 0)
+            ) == .blocked(.unverifiable(.insufficientSamples))
+        )
+    }
+
+    @Test("다중 eligible Peer의 모든 표본이 충돌 없이 허용 범위 안이어야 한다")
+    func allEligiblePeerSamplesMustAgree() {
+        var gate = baselineGate(sharingHistory: .everShared)
+
+        #expect(
+            gate.validate(
+                eligiblePeers: [
+                    EligibleRoomPeerClockSamples(
+                        peerID: "peer-a",
+                        samples: Array(
+                            repeating: sample(
+                                offset: 400,
+                                outbound: 10,
+                                inbound: 10
+                            ),
+                            count: 3
+                        )
+                    ),
+                    EligibleRoomPeerClockSamples(
+                        peerID: "peer-b",
+                        samples: Array(
+                            repeating: sample(
+                                offset: -400,
+                                outbound: 10,
+                                inbound: 10
+                            ),
+                            count: 3
+                        )
+                    )
+                ],
+                at: MonotonicInstant(milliseconds: 0)
+            ) == .blocked(.unverifiable(.inconsistentSamples))
+        )
+    }
+
+    @Test("공유 Room 후보 성공과 출시 gate는 명시적으로 분리된다")
+    func candidateSuccessDoesNotOpenSharedReleaseGate() {
+        var gate = validatedGate()
+
+        #expect(
+            gate.candidateDecision(
+                for: .orderStatusChange,
+                at: MonotonicInstant(milliseconds: 1)
+            ) == .allowed
+        )
+        #expect(
+            gate.releaseDecision(
+                for: .orderStatusChange,
+                at: MonotonicInstant(milliseconds: 1)
+            ) == .blockedPendingRealDeviceApproval
+        )
+    }
+
+    @Test("system clock change는 durable 복구 상태로 남고 local-only는 명시적 복구로 해제한다")
+    func localOnlyClockRecoverySurvivesRelaunch() {
+        var gate = baselineGate()
+        gate.recordSystemClockChange()
+
+        var relaunched = ClockSkewGate(
+            sharingHistory: gate.sharingHistory,
+            durableRecoveryState: gate.durableRecoveryState
+        )
+        #expect(relaunched.baselineState == .recoveryRequired)
+        let initialBaselineWasRejected = !relaunched.establishProcessBaseline(
+            wallTime: WallClockInstant(millisecondsSinceUnixEpoch: 2_000_000),
+            monotonicTime: MonotonicInstant(milliseconds: 0)
+        )
+        #expect(initialBaselineWasRejected)
+        #expect(
+            relaunched.releaseDecision(
                 for: .orderStatusChange,
                 at: MonotonicInstant(milliseconds: 1)
             ) == .blocked(.systemClockChanged)
         )
 
-        gate.validate(
-            samples: [sample(offset: 0), sample(offset: 0), sample(offset: 0)],
-            at: MonotonicInstant(milliseconds: 2)
+        relaunched.recoverAfterUserClockCheckAndManualRefresh(
+            wallTime: WallClockInstant(millisecondsSinceUnixEpoch: 2_000_000),
+            monotonicTime: MonotonicInstant(milliseconds: 2)
         )
+        #expect(relaunched.durableRecoveryState == .clear)
         #expect(
-            gate.decision(
+            relaunched.releaseDecision(
                 for: .orderStatusChange,
                 at: MonotonicInstant(milliseconds: 2)
             ) == .allowed
+        )
+    }
+
+    @Test("공유 Room은 새 baseline 뒤에도 fresh Peer 검증이 필요하다")
+    func sharedClockRecoveryRequiresFreshPeerValidation() {
+        var gate = validatedGate()
+        gate.recordWallMonotonicDiscontinuity()
+        #expect(
+            gate.candidateDecision(
+                for: .orderStatusChange,
+                at: MonotonicInstant(milliseconds: 1)
+            ) == .blocked(.systemClockChanged)
+        )
+
+        gate.recoverAfterUserClockCheckAndManualRefresh(
+            wallTime: WallClockInstant(millisecondsSinceUnixEpoch: 2_000_000),
+            monotonicTime: MonotonicInstant(milliseconds: 2)
+        )
+        #expect(
+            gate.candidateDecision(
+                for: .orderStatusChange,
+                at: MonotonicInstant(milliseconds: 2)
+            ) == .blocked(.notValidated)
+        )
+
+        gate.validate(
+            samples: [sample(offset: 0), sample(offset: 0), sample(offset: 0)],
+            at: MonotonicInstant(milliseconds: 3)
+        )
+        #expect(
+            gate.candidateDecision(
+                for: .orderStatusChange,
+                at: MonotonicInstant(milliseconds: 3)
+            ) == .allowed
+        )
+        #expect(
+            gate.releaseDecision(
+                for: .orderStatusChange,
+                at: MonotonicInstant(milliseconds: 3)
+            ) == .blockedPendingRealDeviceApproval
         )
     }
 
@@ -271,7 +437,7 @@ struct ClockSafetyTests {
         let now = MonotonicInstant(milliseconds: 0)
 
         for operation in ClockGatedOperation.allCases {
-            let decision = gate.decision(for: operation, at: now)
+            let decision = gate.candidateDecision(for: operation, at: now)
             if operation.isClockSensitiveWrite {
                 #expect(decision == .blocked(.notValidated), "\(operation)")
             } else {

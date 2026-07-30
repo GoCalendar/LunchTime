@@ -7,6 +7,23 @@ public enum DailyWritePhase: String, Equatable, Sendable {
     case closed
 }
 
+/// 한 KST 운영일의 terminal-close durable projection.
+///
+/// 제품 저장 형식을 정하는 타입은 아니다. 독립 스파이크에서 process 재생성
+/// 전후에도 같은 운영일의 close latch가 보존되어야 함을 명시한다.
+public struct DailyWriteBoundarySnapshot: Equatable, Sendable {
+    public let operatingDayStart: WallClockInstant
+    public let isTerminallyClosed: Bool
+
+    fileprivate init(
+        operatingDayStart: WallClockInstant,
+        isTerminallyClosed: Bool
+    ) {
+        self.operatingDayStart = operatingDayStart
+        self.isTerminallyClosed = isTerminallyClosed
+    }
+}
+
 /// 한 운영일의 `[11:00, 14:30)` 쓰기 경계를 계산한다.
 ///
 /// 인스턴스 하나는 생성 시 선택한 한국 날짜 하나만 담당한다. `closed`에 한 번
@@ -15,6 +32,7 @@ public enum DailyWritePhase: String, Equatable, Sendable {
 public struct DailyWriteBoundary: Equatable, Sendable {
     public static let koreaTimeZone = TimeZone(identifier: "Asia/Seoul")!
 
+    public let operatingDayStart: WallClockInstant
     public let sessionStart: WallClockInstant
     public let writeCutoff: WallClockInstant
     public private(set) var isTerminallyClosed: Bool
@@ -32,9 +50,24 @@ public struct DailyWriteBoundary: Equatable, Sendable {
             value: 14 * 60 + 30,
             to: startOfDay
         )!
+        operatingDayStart = Self.wallClockInstant(for: startOfDay)
         sessionStart = Self.wallClockInstant(for: sessionStartDate)
         writeCutoff = Self.wallClockInstant(for: writeCutoffDate)
         isTerminallyClosed = false
+    }
+
+    /// 저장된 같은 KST 운영일의 terminal close를 process 재생성 뒤 복원한다.
+    public init(restoring snapshot: DailyWriteBoundarySnapshot) {
+        self.init(operatingDayContaining: snapshot.operatingDayStart)
+        isTerminallyClosed = snapshot.isTerminallyClosed
+    }
+
+    /// 현재 운영일의 durable projection 후보.
+    public var snapshot: DailyWriteBoundarySnapshot {
+        DailyWriteBoundarySnapshot(
+            operatingDayStart: operatingDayStart,
+            isTerminallyClosed: isTerminallyClosed
+        )
     }
 
     /// 현재 벽시각을 반영한다.

@@ -11,7 +11,9 @@ public enum ScenarioCatalog {
         cadenceSuspendsWithoutPrerequisites,
         dailyCloseNeverReopens,
         finalizationStopsAtOuterLimit,
-        clockWithinCandidateAllowsSensitiveWrites,
+        localOnlyBaselineAllowsWithoutPeer,
+        sharedCandidatePassDoesNotOpenReleaseGate,
+        eligiblePeersMustAllAgree,
         clockExceededBlocksSensitiveWrites,
         clockUncertaintyBlocksSensitiveWrites,
         systemClockChangeInvalidatesValidation,
@@ -252,29 +254,95 @@ public enum ScenarioCatalog {
         ]
     }
 
-    private static let clockWithinCandidateAllowsSensitiveWrites = WakeTimeScenario(
-        name: "clock-skew-within-candidate",
-        question: "후보 허용 오차 안의 세 표본만 시간 경계 쓰기를 허용하는가?",
+    private static let localOnlyBaselineAllowsWithoutPeer = WakeTimeScenario(
+        name: "local-only-baseline-allows-without-peer",
+        question: "local-only Room은 유효한 macOS baseline이면 Peer 없이 허용되는가?",
         traceIDs: ["PRD-01-AC-09", "PRD-01-SP-03", "POL-02-R-08"],
         expectations: [
+            "releaseDecision": "allowed",
+            "sharingHistory": "localOnly"
+        ]
+    ) {
+        var gate = clockGate(sharingHistory: .localOnly)
+        return [
+            "releaseDecision": clockReleaseDecisionDescription(
+                gate.releaseDecision(
+                    for: .participationAcceptance,
+                    at: MonotonicInstant(milliseconds: 1)
+                )
+            ),
+            "sharingHistory": gate.sharingHistory.rawValue
+        ]
+    }
+
+    private static let sharedCandidatePassDoesNotOpenReleaseGate = WakeTimeScenario(
+        name: "shared-clock-candidate-does-not-open-release-gate",
+        question: "공유 Room의 후보 판정 성공과 출시 허용이 분리되는가?",
+        traceIDs: ["PRD-01-AC-09", "PRD-01-SP-03", "POL-02-R-08"],
+        expectations: [
+            "candidateDecision": "allowed",
             "evidenceStatus": "requiresRealDeviceEvidence",
-            "participationAcceptance": "allowed",
+            "releaseDecision": "blocked:pendingRealDeviceApproval",
             "state": "valid"
         ]
     ) {
-        var gate = ClockSkewGate()
+        var gate = clockGate(sharingHistory: .everShared)
         let state = gate.validate(
             samples: clockSamples(offsetMilliseconds: 400),
             at: MonotonicInstant(milliseconds: 0)
         )
-        let decision = gate.decision(
+        let candidateDecision = gate.candidateDecision(
             for: .participationAcceptance,
             at: MonotonicInstant(milliseconds: 1)
         )
         return [
+            "candidateDecision": clockDecisionDescription(candidateDecision),
             "evidenceStatus": gate.candidate.evidenceStatus.rawValue,
-            "participationAcceptance": clockDecisionDescription(decision),
+            "releaseDecision": clockReleaseDecisionDescription(
+                gate.releaseDecision(
+                    for: .participationAcceptance,
+                    at: MonotonicInstant(milliseconds: 1)
+                )
+            ),
             "state": clockStateDescription(state)
+        ]
+    }
+
+    private static let eligiblePeersMustAllAgree = WakeTimeScenario(
+        name: "eligible-room-peers-must-all-agree",
+        question: "각 eligible Room Peer의 최소 표본과 전체 충돌 검사가 fail-closed하는가?",
+        traceIDs: ["PRD-01-FR-10", "PRD-01-SP-03", "POL-02-R-08"],
+        expectations: [
+            "conflictingPeers": "blocked:inconsistentSamples",
+            "shortPeer": "blocked:insufficientSamples"
+        ]
+    ) {
+        let peerA = EligibleRoomPeerClockSamples(
+            peerID: "peer-a",
+            samples: clockSamples(offsetMilliseconds: 400)
+        )
+        let peerB = EligibleRoomPeerClockSamples(
+            peerID: "peer-b",
+            samples: clockSamples(offsetMilliseconds: -400)
+        )
+        let shortPeer = EligibleRoomPeerClockSamples(
+            peerID: "peer-b",
+            samples: Array(clockSamples(offsetMilliseconds: 400).prefix(2))
+        )
+
+        var conflictGate = clockGate(sharingHistory: .everShared)
+        let conflictingPeers = conflictGate.validate(
+            eligiblePeers: [peerA, peerB],
+            at: MonotonicInstant(milliseconds: 0)
+        )
+        var shortGate = clockGate(sharingHistory: .everShared)
+        let insufficient = shortGate.validate(
+            eligiblePeers: [peerA, shortPeer],
+            at: MonotonicInstant(milliseconds: 0)
+        )
+        return [
+            "conflictingPeers": clockStateDescription(conflictingPeers),
+            "shortPeer": clockStateDescription(insufficient)
         ]
     }
 
@@ -289,26 +357,32 @@ public enum ScenarioCatalog {
             "participationAcceptance": "blocked:offsetExceeded"
         ]
     ) {
-        var gate = ClockSkewGate()
+        var gate = clockGate(sharingHistory: .everShared)
         _ = gate.validate(
             samples: clockSamples(offsetMilliseconds: 1_500),
             at: MonotonicInstant(milliseconds: 0)
         )
         return [
             "manualRefresh": clockDecisionDescription(
-                gate.decision(for: .manualRefresh, at: MonotonicInstant(milliseconds: 1))
+                gate.candidateDecision(
+                    for: .manualRefresh,
+                    at: MonotonicInstant(milliseconds: 1)
+                )
             ),
             "orderDeadlineModification": clockDecisionDescription(
-                gate.decision(
+                gate.candidateDecision(
                     for: .orderDeadlineModification,
                     at: MonotonicInstant(milliseconds: 1)
                 )
             ),
             "orderStatusChange": clockDecisionDescription(
-                gate.decision(for: .orderStatusChange, at: MonotonicInstant(milliseconds: 1))
+                gate.candidateDecision(
+                    for: .orderStatusChange,
+                    at: MonotonicInstant(milliseconds: 1)
+                )
             ),
             "participationAcceptance": clockDecisionDescription(
-                gate.decision(
+                gate.candidateDecision(
                     for: .participationAcceptance,
                     at: MonotonicInstant(milliseconds: 1)
                 )
@@ -326,7 +400,7 @@ public enum ScenarioCatalog {
             "write": "blocked:unverifiable:uncertaintyCrossesTolerance"
         ]
     ) {
-        var gate = ClockSkewGate()
+        var gate = clockGate(sharingHistory: .everShared)
         let state = gate.validate(
             samples: clockSamples(
                 offsetMilliseconds: 950,
@@ -337,42 +411,81 @@ public enum ScenarioCatalog {
         )
         return [
             "read": clockDecisionDescription(
-                gate.decision(for: .read, at: MonotonicInstant(milliseconds: 1))
+                gate.candidateDecision(
+                    for: .read,
+                    at: MonotonicInstant(milliseconds: 1)
+                )
             ),
             "state": clockStateDescription(state),
             "write": clockDecisionDescription(
-                gate.decision(for: .orderStatusChange, at: MonotonicInstant(milliseconds: 1))
+                gate.candidateDecision(
+                    for: .orderStatusChange,
+                    at: MonotonicInstant(milliseconds: 1)
+                )
             )
         ]
     }
 
     private static let systemClockChangeInvalidatesValidation = WakeTimeScenario(
         name: "system-clock-change-invalidates-validation",
-        question: "macOS 시계 변경 신호가 성공 검증을 즉시 무효화하는가?",
+        question: "시계 변경 복구 상태가 durable하고 공유 Room은 fresh Peer 재검증을 요구하는가?",
         traceIDs: ["PRD-01-FR-10", "POL-02-R-08"],
         expectations: [
             "before": "allowed",
-            "manualRefresh": "allowed",
-            "sensitiveWriteAfter": "blocked:systemClockChanged"
+            "durableAfterRelaunch": "recoveryRequired",
+            "releaseAfterPeer": "blocked:pendingRealDeviceApproval",
+            "sensitiveWriteAfter": "blocked:systemClockChanged",
+            "sensitiveWriteAfterBaseline": "blocked:notValidated",
+            "sensitiveWriteAfterPeer": "allowed"
         ]
     ) {
-        var gate = ClockSkewGate()
+        var gate = clockGate(sharingHistory: .everShared)
         _ = gate.validate(
             samples: clockSamples(offsetMilliseconds: 100),
             at: MonotonicInstant(milliseconds: 0)
         )
-        let before = gate.decision(
+        let before = gate.candidateDecision(
             for: .orderStatusChange,
             at: MonotonicInstant(milliseconds: 1)
         )
         gate.recordSystemClockChange()
+        let after = gate.candidateDecision(
+            for: .orderStatusChange,
+            at: MonotonicInstant(milliseconds: 2)
+        )
+        var relaunched = ClockSkewGate(
+            sharingHistory: gate.sharingHistory,
+            durableRecoveryState: gate.durableRecoveryState
+        )
+        let durableAfterRelaunch = relaunched.durableRecoveryState.rawValue
+        relaunched.recoverAfterUserClockCheckAndManualRefresh(
+            wallTime: WallClockInstant(millisecondsSinceUnixEpoch: 2_000_000),
+            monotonicTime: MonotonicInstant(milliseconds: 3)
+        )
+        let afterBaseline = relaunched.candidateDecision(
+            for: .orderStatusChange,
+            at: MonotonicInstant(milliseconds: 3)
+        )
+        _ = relaunched.validate(
+            samples: clockSamples(offsetMilliseconds: 100),
+            at: MonotonicInstant(milliseconds: 4)
+        )
         return [
             "before": clockDecisionDescription(before),
-            "manualRefresh": clockDecisionDescription(
-                gate.decision(for: .manualRefresh, at: MonotonicInstant(milliseconds: 2))
+            "durableAfterRelaunch": durableAfterRelaunch,
+            "releaseAfterPeer": clockReleaseDecisionDescription(
+                relaunched.releaseDecision(
+                    for: .orderStatusChange,
+                    at: MonotonicInstant(milliseconds: 4)
+                )
             ),
-            "sensitiveWriteAfter": clockDecisionDescription(
-                gate.decision(for: .orderStatusChange, at: MonotonicInstant(milliseconds: 2))
+            "sensitiveWriteAfter": clockDecisionDescription(after),
+            "sensitiveWriteAfterBaseline": clockDecisionDescription(afterBaseline),
+            "sensitiveWriteAfterPeer": clockDecisionDescription(
+                relaunched.candidateDecision(
+                    for: .orderStatusChange,
+                    at: MonotonicInstant(milliseconds: 4)
+                )
             )
         ]
     }
@@ -466,6 +579,41 @@ public enum ScenarioCatalog {
                 "blocked:systemClockChanged"
             }
         }
+    }
+
+    private static func clockReleaseDecisionDescription(
+        _ decision: ClockReleaseGateDecision
+    ) -> String {
+        switch decision {
+        case .allowed:
+            "allowed"
+        case .blockedPendingRealDeviceApproval:
+            "blocked:pendingRealDeviceApproval"
+        case let .blocked(reason):
+            switch reason {
+            case let .unverifiable(unverifiable):
+                "blocked:unverifiable:\(unverifiable.rawValue)"
+            case .notValidated:
+                "blocked:notValidated"
+            case .offsetExceeded:
+                "blocked:offsetExceeded"
+            case .stale:
+                "blocked:stale"
+            case .systemClockChanged:
+                "blocked:systemClockChanged"
+            }
+        }
+    }
+
+    private static func clockGate(
+        sharingHistory: RoomClockSharingHistory
+    ) -> ClockSkewGate {
+        var gate = ClockSkewGate(sharingHistory: sharingHistory)
+        _ = gate.establishProcessBaseline(
+            wallTime: WallClockInstant(millisecondsSinceUnixEpoch: 1_000_000),
+            monotonicTime: MonotonicInstant(milliseconds: 0)
+        )
+        return gate
     }
 
     private static func koreaDate(
