@@ -7,7 +7,7 @@
 | 관련 PRD | [PRD-01-FR-01, FR-09, FR-10, AC-03, AC-05, AC-09, SP-03](../../prd/01_lunchtime_mvp.md) |
 | 관련 Policy | [POL-01-R-01, R-04](../../policies/01_daily_room_lifecycle.md), [POL-02-R-02, R-08](../../policies/02_replication_consistency_retention.md) |
 | 실험 도구 | `Experiments/SP03WakeAndTime` |
-| 마지막 검증 | 2026-07-30 |
+| 마지막 검증 | 2026-07-31 |
 
 ## 1. 결론
 
@@ -25,10 +25,11 @@
 - 시계 검증 불가·허용 오차 초과·오래된 검증·system clock 변경은 참여 수락, 주문 마감 수정과 주문 상태 변경만 fail-closed로 차단합니다. local-only는 새 로컬 기준점, 공유 Room은 새 기준점과 fresh Peer 대조를 모두 요구합니다.
 - 14:30 이전 생성 여부를 검증할 수 없는 늦은 이벤트는 열람용 스냅샷만 계산하고 성공·주문 완료·성공 히스토리를 자동 정정하지 않습니다.
 
-그러나 `PRD-01-SP-03`의 출시 gate는 아직 해제할 수 없습니다. 현재 환경에서
-실행한 live probe는 process launch만 관찰했습니다. 두 Mac의 시계 교환,
-실제 sleep·wake, foreground, network 전환, 14:30 finalization과 실제
-전력·네트워크 비용은 측정하지 않았습니다.
+그러나 `PRD-01-SP-03`의 출시 gate는 아직 해제할 수 없습니다. 현재 Mac의
+live probe에서는 process launch, CLI host foreground, network 전환과 실제
+system wake를 관찰했고, sleep·wake는 로컬 power log와 교차 확인했습니다.
+두 Mac의 시계 교환, 실제 Peer session·cadence, sleep/wake clock 의미,
+14:30 finalization과 실제 전력·네트워크 비용은 측정하지 않았습니다.
 
 `±1초`, freshness `30초`, 연속 표본 `3개`와 wall/monotonic 진행 불연속
 허용치는 **실기기 미확정 후보**입니다.
@@ -87,7 +88,7 @@ SwiftPM package입니다.
 | `ClockSkewGate` | local-only·공유 Room, macOS 기준점, Peer별 후보 판정과 출시 fail-closed |
 | `ClockExchangeProbe` | Bonjour A/B rendezvous, 양방향 3회 4-timestamp 교환과 익명 evidence |
 | `LateEventClockSafety` | 검증 불가 늦은 이벤트의 열람 전용 처리 |
-| `SystemEventSource` | AppKit, NSWorkspace, Foundation, Network event를 `SyncTrigger`로 정규화 |
+| `SystemEventSource` | 제품 app lifecycle과 CLI host app 복귀, NSWorkspace wake, Foundation clock, Network event를 `SyncTrigger`로 정규화 |
 | `ScenarioCatalog` | 기대값을 실행 전에 선언한 15개 결정적 시나리오 |
 | `sp03-probe` | 모델 JSON, live system-event timeline, 익명 typed evidence 집계 |
 
@@ -102,9 +103,17 @@ timeout과 cadence에는 절전 중에도 증가하는
 live adapter는 다음 macOS 14 호환 API를 사용합니다.
 
 - [NSApplication.didBecomeActiveNotification](https://developer.apple.com/documentation/appkit/nsapplication/didbecomeactivenotification)
+- [NSWorkspace.didActivateApplicationNotification](https://developer.apple.com/documentation/appkit/nsworkspace/didactivateapplicationnotification)
 - [NSWorkspace.didWakeNotification](https://developer.apple.com/documentation/appkit/nsworkspace/didwakenotification)
 - [NWPathMonitor](https://developer.apple.com/documentation/network/nwpathmonitor)
 - [NSSystemClockDidChange](https://developer.apple.com/documentation/foundation/nsnotification/name-swift.struct/nssystemclockdidchange)
+
+제품 app의 foreground는 process-local
+`NSApplication.didBecomeActiveNotification`을 사용합니다. unbundled CLI
+probe는 명령을 시작한 Terminal·iTerm과 별도 process이므로 시작 시점의
+frontmost host app PID를 메모리에만 보관하고, 같은 PID의 workspace
+activation만 익명 `foreground` trigger로 축약합니다. app 이름과 PID는
+결과에 넣지 않습니다.
 
 `NWPathMonitor`의 첫 callback은 현재 path의 baseline이므로 app launch와 별도
 network change로 세지 않습니다. adapter는 hostname, IP, SSID와 interface
@@ -118,10 +127,10 @@ network change로 세지 않습니다. adapter는 hostname, IP, SSID와 interfac
 swift test --package-path Experiments/SP03WakeAndTime
 ```
 
-2026-07-30 실행 결과:
+2026-07-31 실행 결과:
 
 ```text
-102 tests, 13 suites, 0 failures
+103 tests, 13 suites, 0 failures
 ```
 
 ### 4.2 결정적 시나리오
@@ -156,22 +165,51 @@ swift run --package-path Experiments/SP03WakeAndTime sp03-probe \
   --observe-seconds 900
 ```
 
-15분 관찰 시간 안에 다른 앱으로 전환했다가 복귀하고, 짧은 sleep·wake와
-network 전환을 직접 수행합니다. 이 결과는 adapter 관찰일 뿐 실제 Peer
-session·cadence·finalization 증거가 아닙니다. 실제 system clock 변경은 작업용
-Mac이 아닌 disposable VM 또는 별도 시험 기기에서만 수행합니다.
+15분 관찰 시간 안에 명령을 시작한 Terminal·iTerm에서 다른 앱으로 전환했다가
+같은 host app으로 복귀하고, 실제 system sleep·wake와 network 전환을 직접
+수행합니다. 화면 잠금이나 display off는 system sleep 증거가 아닙니다. 실제
+sleep은 관찰 종료보다 충분히 일찍 깨우고 로컬 `pmset -g log`의 Sleep/Wake
+행으로 교차 확인하되, 원문 power log는 결과나 Git에 넣지 않습니다. 이 결과는
+adapter 관찰일 뿐 실제 Peer session·cadence·finalization 증거가 아닙니다.
+실제 system clock 변경은 작업용 Mac이 아닌 disposable VM 또는 별도 시험
+기기에서만 수행합니다.
 
-현재 환경에서 1초 관찰한 결과:
+현재 환경의 관찰 결과:
 
-```text
-events: appLaunch 1개
-sessionsStarted: 1
-peakConcurrentSessions: 1
-verdict: partial-live-observation-only
-```
+| 실행 | 관찰 | 판정 |
+|---|---|---|
+| 1초 baseline | `appLaunch` 1개, session 1개, 동시 session 최대 1 | launch adapter 확인 |
+| 900초 run01 | `appLaunch`만 관찰 | foreground·wake·network 미충족 |
+| 900초 run02 | `networkChanged` 6개, foreground·wake 0개 | network 증거만 유효 |
+| 120초 run03 | `appLaunch`만 관찰 | source 준비와 행동 순서가 불명확해 증거 미채택 |
+| 300초 run04 | 즉시 반환했지만 요청 시간 300초를 보고 | run-loop 대기·경과 측정 결함 재현, 증거 무효 |
+| 30초 run05 | 실제 33.040초, `foreground` 1개 | CLI host foreground 증거 유효 |
+| 180초 run06 | 실제 191.377초, foreground 3개, network 8개, wake 1개 | 세 system-event 증거와 익명화 확인 |
 
-이 실행은 launch adapter의 실제 동작만 확인합니다. wake·foreground·network
-증거와 bounded Peer session 증거가 아닙니다.
+run02에서 foreground 0개는 CLI child process의
+`NSApplication.didBecomeActiveNotification`을 관찰하면서 사용자가 복귀한
+Terminal host app을 보지 못한 adapter 결함이었습니다. host app의
+`NSWorkspace.didActivateApplicationNotification`만 필터링하도록 수정했고
+run05와 run06의 실제 host activation으로 다시 확인했습니다.
+
+run03 뒤에는 event source를 준비 완료 안내 전에 먼저 arm하도록 순서를
+고쳤습니다. run04는 `NSApplication`을 제거한 CLI의 main run loop에 source가
+없으면 `RunLoop.main.run(until:)`이 즉시 반환하고, recorder가 요청 시간을
+실제 경과로 오인하는 결함을 드러냈습니다. 관찰 대기는 sleep 중에도 진행하는
+`ContinuousClock.sleep`으로 바꾸고, wake notification을 받을 1초 grace 뒤
+recorder의 실제 단조 경과를 기록하도록 수정했습니다.
+
+run02의 로컬 power log에는 실제 Sleep/Wake 없이 2초의 display off/on만 있어
+`wakeCount == 0`이 올바른 결과였습니다. 반면 run06은 관찰 중 Software Sleep
+진입과 약 53초 뒤 Deep Idle Wake가 power log에 함께 남았고 probe의
+`wake` trigger도 관찰 시작 후 82.272초에 기록됐습니다. 원문 power log와
+절대 시각은 Git에 넣지 않았습니다.
+
+run02·run05·run06의 익명 `evidenceBundle`을 합산하면
+`foregroundObserved`, `networkChangeObserved`, `wakeObserved`가 모두
+`true`입니다. 전체 `complete`와 process exit는 다른 live prerequisite가
+남아 있으므로 각각 `false`, nonzero이며, 개별 관찰 verdict
+`partial-live-observation-only`도 정상입니다.
 
 ### 4.4 두 Mac 시계 교환
 
@@ -374,10 +412,10 @@ jq -e -s '
 
 | 항목 | 필요한 증거 | 현재 결과 |
 |---|---|---|
-| cold launch | 실제 process launch event와 session 시작 | 일부 확인 — `appLaunch` 1회 |
-| foreground burst | 실제 activation과 동시 session 최대 1 | 미측정 |
-| sleep·wake | 실제 wake notification, 14:30 전·후 복귀 | 미측정 |
-| network 전환 | 실제 path change burst와 재개 | 미측정 |
+| cold launch | 실제 process launch event와 session 시작 | 현재 Mac에서 확인 |
+| foreground burst | 실제 host activation과 동시 session 최대 1 | run05 1회, run06 3회 관찰 |
+| sleep·wake | 실제 system wake notification, 14:30 전·후 복귀 | run06 실제 sleep·wake 확인 · 14:30 경계 미측정 |
+| network 전환 | 실제 path change burst와 재개 | run02 6회, run06 8회 관찰 |
 | 새 Peer | 실제 발견 event와 bounded 대조 | 미측정 |
 | 3회·30초 | 지연 Peer 상대의 실제 attempt·elapsed | 미측정 |
 | 30초 cadence | 활성 데이터·정상 Peer 조건의 실제 간격 | 미측정 |
@@ -424,7 +462,7 @@ freshness·표본 수 경계, wall/monotonic 연속성, sleep/wake clock 의미,
 
 - 실제 두 Mac 시계 교환 증거가 없습니다.
 - 같은 host 두 process 통신은 확인했지만 의도대로 후보 evidence에서 제외됩니다.
-- 실제 sleep·foreground·network burst 순서를 관찰하지 않았습니다.
+- 한 Mac에서 실제 foreground·network·sleep/wake 순서는 관찰했지만 실제 Peer session·clock 대조와 결합하지 않았습니다.
 - 실제 Peer 동기화 payload와 byte 비용을 모델링하지 않았습니다.
 - OS 수준 energy 측정을 하지 않았습니다.
 - local-only 새 기준점과 공유 Room의 새 기준점·fresh Peer 복구를 실기기에서 관찰하지 않았습니다.
@@ -445,9 +483,9 @@ freshness·표본 수 경계, wall/monotonic 연속성, sleep/wake clock 의미,
 
 ## 11. 다음 단계
 
-1. 현재 Mac에서 15분 live adapter 관찰을 수행하되 system clock은 변경하지 않습니다.
+1. 현재 Mac의 foreground·network·wake typed evidence는 adapter 변경이 없는 한 재측정하지 않고 나머지 행렬과 함께 집계합니다.
 2. 두 물리 Mac에서 6.2절 clock 행렬을 양방향으로 실행하고 익명 typed evidence로 집계합니다.
-3. 7절의 wake·foreground·network·Peer session·cadence·local-only·공유 Room 복구·비용 행렬을 채웁니다.
+3. 7절의 Peer session·cadence·local-only·공유 Room 복구·sleep/wake clock·비용 행렬을 채웁니다.
 4. 실제 KST 14:30에 한 기기는 awake, 다른 기기는 sleep 상태로 finalization과 terminal close를 관찰합니다.
 5. 별도 시험 기기에서만 system clock 변경·rollback과 복구 행렬을 수행합니다.
 6. 위 증거가 후보를 지지하면 제품 책임자가 허용 오차, freshness, 표본 수, wall/monotonic 연속성 기준과 sleep/wake clock 의미를 승인합니다.

@@ -149,6 +149,50 @@ struct SystemEventSourceTests {
         #expect(monitor.starts == 1)
     }
 
+    @Test("CLI host app과 같은 workspace activation만 foreground로 전달한다")
+    func mapsOnlyProbeHostWorkspaceActivation() {
+        let appCenter = NotificationCenter()
+        let workspaceCenter = NotificationCenter()
+        let recorder = TriggerRecorder()
+        let factory = FakeNetworkPathMonitorFactory()
+        let hostProcessIdentifier: pid_t = 42
+        let source = SystemEventSource(
+            notificationCenter: appCenter,
+            workspaceNotificationCenter: workspaceCenter,
+            makeNetworkPathMonitor: { factory.make() },
+            workspaceForegroundProcessIdentifier: hostProcessIdentifier,
+            workspaceApplicationProcessIdentifier: { notification in
+                notification.userInfo?["processIdentifier"] as? pid_t
+            },
+            handler: recorder.record
+        )
+
+        source.start()
+        appCenter.post(
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        workspaceCenter.post(
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            userInfo: ["processIdentifier": pid_t(41)]
+        )
+        workspaceCenter.post(
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            userInfo: ["processIdentifier": hostProcessIdentifier]
+        )
+
+        source.stop()
+        workspaceCenter.post(
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            userInfo: ["processIdentifier": hostProcessIdentifier]
+        )
+
+        #expect(recorder.triggers == [.appLaunch, .foreground])
+    }
+
     @Test("실행 중 start와 stop을 반복해도 observer·monitor가 중복되지 않는다")
     func repeatedStartAndStopAreIdempotent() {
         let appCenter = NotificationCenter()

@@ -20,8 +20,9 @@ func usageText() -> String {
 
         기본 실행은 결정적 모델 시나리오 전체를 JSON으로 출력한다.
         `--observe-seconds`는 AppKit·NSWorkspace·NWPathMonitor의 실제 사건을
-        지정 시간 동안 관찰한다. 실제 sleep, 앱 전환과 network 전환은
-        관찰 중 사용자가 수행해야 하며 synthetic 결과로 대체하지 않는다.
+        지정 시간 동안 관찰한다. 실제 system sleep, 명령을 시작한 Terminal·
+        iTerm에서 다른 앱으로 전환했다가 같은 host app으로 복귀, network
+        전환은 관찰 중 사용자가 수행해야 하며 synthetic 결과로 대체하지 않는다.
         clock mode는 두 Mac에서 A/B를 반대로 지정해 동시에 실행한다.
         확인 flag는 실제로 서로 다른 물리 Mac 두 대에서 실행할 때만 사용한다.
         live·clock 출력의 `evidenceBundle`은 절대 시각·hostname·IP·SSID를
@@ -261,16 +262,22 @@ final class LiveRecorder: @unchecked Sendable {
         )
     }
 
-    func snapshot(durationSeconds: Double) -> LiveObservationOutput {
+    func snapshot() -> LiveObservationOutput {
         lock.lock()
         defer { lock.unlock() }
 
+        let observationDurationMilliseconds = max(
+            1,
+            Self.milliseconds(
+                startedAt.duration(to: ContinuousClock.now)
+            )
+        )
+        let durationSeconds =
+            Double(observationDurationMilliseconds) / 1_000
         let observed = Set(records.map(\.trigger))
         let eventEvidence = SystemEventLiveEvidence(
-            observationDurationMilliseconds: max(
-                1,
-                Int64((durationSeconds * 1_000).rounded(.down))
-            ),
+            observationDurationMilliseconds:
+                observationDurationMilliseconds,
             wakeCount: records.count {
                 $0.trigger == SyncTrigger.wake.rawValue
             },
@@ -519,24 +526,51 @@ case let .clock(options):
     exit(output.candidateSampleSupported && output.anonymized ? 0 : 1)
 
 case let .live(seconds):
-    log("실기기 system event를 \(seconds)초 동안 관찰합니다.")
-    log("필요한 sleep·foreground·network 전환은 관찰 시간 안에 직접 수행하십시오.")
     let recorder = LiveRecorder()
-    let source = await MainActor.run {
-        let application = NSApplication.shared
-        application.setActivationPolicy(.accessory)
-        let source = SystemEventSource(handler: recorder.record)
+    let source = await MainActor.run { () -> SystemEventSource? in
+        guard let host = NSWorkspace.shared.frontmostApplication,
+              host.processIdentifier > 0
+        else {
+            return nil
+        }
+        let source = SystemEventSource(
+            workspaceForegroundProcessIdentifier: host.processIdentifier,
+            handler: recorder.record
+        )
         source.start()
-        application.activate()
         return source
     }
+    guard let source else {
+        log("명령을 시작한 foreground host app을 확인할 수 없습니다.")
+        exit(1)
+    }
+    log("실기기 system event를 \(seconds)초 동안 관찰합니다.")
+    log("관찰 준비 완료. 지금부터 다른 앱으로 전환했다가 이 Terminal·iTerm으로 복귀하십시오.")
+    log("화면 잠금이 아닌 실제 system sleep·wake와 network 전환을 관찰 시간 안에 수행하십시오.")
 
+    let requestedDurationMilliseconds = Int64(
+        (seconds * 1_000).rounded(.up)
+    )
+    do {
+        let clock = ContinuousClock()
+        try await clock.sleep(
+            for: .milliseconds(requestedDurationMilliseconds)
+        )
+        // Sleep가 요청한 관찰 deadline을 넘긴 경우에도 wake notification을
+        // main executor가 전달할 수 있도록 복귀 뒤 1초의 active grace를 둔다.
+        try await clock.sleep(for: .seconds(1))
+    } catch {
+        await MainActor.run {
+            source.stop()
+        }
+        log("system event 관찰이 취소됐습니다.")
+        exit(1)
+    }
     await MainActor.run {
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
         source.stop()
     }
 
-    let output = recorder.snapshot(durationSeconds: seconds)
+    let output = recorder.snapshot()
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
     guard let data = try? encoder.encode(output),

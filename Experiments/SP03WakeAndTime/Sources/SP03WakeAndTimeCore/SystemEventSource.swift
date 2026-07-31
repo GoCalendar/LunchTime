@@ -57,6 +57,9 @@ public final class SystemEventSource: @unchecked Sendable {
     private let notificationCenter: NotificationCenter
     private let workspaceNotificationCenter: NotificationCenter
     private let makeNetworkPathMonitor: @Sendable () -> any SystemNetworkPathMonitoring
+    private let workspaceForegroundProcessIdentifier: pid_t?
+    private let workspaceApplicationProcessIdentifier:
+        (@Sendable (Notification) -> pid_t?)?
     private let handler: Handler
     private let networkQueue = DispatchQueue(label: "sp03.system-event-source.network")
 
@@ -82,6 +85,36 @@ public final class SystemEventSource: @unchecked Sendable {
             notificationCenter: .default,
             workspaceNotificationCenter: NSWorkspace.shared.notificationCenter,
             makeNetworkPathMonitor: { LiveSystemNetworkPathMonitor() },
+            workspaceForegroundProcessIdentifier: nil,
+            workspaceApplicationProcessIdentifier: nil,
+            handler: handler
+        )
+    }
+
+    /// CLI probe를 시작한 host app의 재활성화를 foreground 사건으로 관찰한다.
+    ///
+    /// unbundled command-line process는 Terminal·iTerm 같은 host app과 별개의
+    /// `NSApplication`이므로 host로 돌아와도
+    /// `NSApplication.didBecomeActiveNotification`을 받지 않는다. Probe mode는
+    /// 시작 시점의 frontmost app PID만 메모리에 보관하고 workspace activation의
+    /// PID가 같을 때만 익명 `.foreground` 사건을 전달한다.
+    @MainActor
+    public convenience init(
+        workspaceForegroundProcessIdentifier: pid_t,
+        handler: @escaping Handler
+    ) {
+        self.init(
+            notificationCenter: .default,
+            workspaceNotificationCenter: NSWorkspace.shared.notificationCenter,
+            makeNetworkPathMonitor: { LiveSystemNetworkPathMonitor() },
+            workspaceForegroundProcessIdentifier:
+                workspaceForegroundProcessIdentifier,
+            workspaceApplicationProcessIdentifier: { notification in
+                let application = notification.userInfo?[
+                    NSWorkspace.applicationUserInfoKey
+                ] as? NSRunningApplication
+                return application?.processIdentifier
+            },
             handler: handler
         )
     }
@@ -91,11 +124,18 @@ public final class SystemEventSource: @unchecked Sendable {
         notificationCenter: NotificationCenter,
         workspaceNotificationCenter: NotificationCenter,
         makeNetworkPathMonitor: @escaping @Sendable () -> any SystemNetworkPathMonitoring,
+        workspaceForegroundProcessIdentifier: pid_t? = nil,
+        workspaceApplicationProcessIdentifier:
+            (@Sendable (Notification) -> pid_t?)? = nil,
         handler: @escaping Handler
     ) {
         self.notificationCenter = notificationCenter
         self.workspaceNotificationCenter = workspaceNotificationCenter
         self.makeNetworkPathMonitor = makeNetworkPathMonitor
+        self.workspaceForegroundProcessIdentifier =
+            workspaceForegroundProcessIdentifier
+        self.workspaceApplicationProcessIdentifier =
+            workspaceApplicationProcessIdentifier
         self.handler = handler
     }
 
@@ -120,14 +160,41 @@ public final class SystemEventSource: @unchecked Sendable {
         let currentGeneration = generation
         awaitingInitialNetworkPath = true
 
-        let foreground = notificationCenter.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: nil
-        ) { [weak self] _ in
-            self?.deliver(.foreground, generation: currentGeneration)
+        if let foregroundProcessIdentifier =
+            workspaceForegroundProcessIdentifier,
+           let applicationProcessIdentifier =
+            workspaceApplicationProcessIdentifier
+        {
+            let foreground = workspaceNotificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] notification in
+                guard applicationProcessIdentifier(notification)
+                    == foregroundProcessIdentifier
+                else {
+                    return
+                }
+                self?.deliver(.foreground, generation: currentGeneration)
+            }
+            observations.append(
+                Observation(
+                    center: workspaceNotificationCenter,
+                    token: foreground
+                )
+            )
+        } else {
+            let foreground = notificationCenter.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                self?.deliver(.foreground, generation: currentGeneration)
+            }
+            observations.append(
+                Observation(center: notificationCenter, token: foreground)
+            )
         }
-        observations.append(Observation(center: notificationCenter, token: foreground))
 
         let clockChanged = notificationCenter.addObserver(
             forName: .NSSystemClockDidChange,
